@@ -1,0 +1,53 @@
+[workspace]
+members = ["crates/*"]
+exclude = ["train"]
+resolver = "3"
+
+[workspace.package]
+version = "1.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+rust-version = "1.95.0"
+
+[workspace.dependencies]
+chess-common = { path = "crates/chess-common" }
+chess-core = { path = "crates/chess-core" }
+chess-engine = { path = "crates/chess-engine" }
+chess-nnue = { path = "crates/chess-nnue" }
+chess-tuner = { path = "crates/chess-tuner" }
+chess-datagen = { path = "crates/chess-datagen" }
+chess-uci = { path = "crates/chess-uci" }
+bulletformat = "1.8.0"
+log = "0.4.29"
+env_logger = "0.11.10"
+thiserror = "2.0.18"
+
+[package]
+name = "endspiel-bin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "endspiel"
+path = "src/main.rs"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true
+strip = false
+
+[dependencies]
+chess-common.workspace = true
+chess-core.workspace = true
+chess-engine.workspace = true
+chess-uci.workspace = true
+log.workspace = true
+env_logger.workspace = true

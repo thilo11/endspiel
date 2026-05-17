@@ -1,0 +1,35 @@
+[package]
+name = "endspiel-train"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95.0"
+
+[[bin]]
+name = "train"
+path = "main.rs"
+
+[[bin]]
+name = "convert"
+path = "convert.rs"
+
+[[bin]]
+name = "clean_data"
+path = "clean_data.rs"
+
+[[bin]]
+name = "quality_check"
+path = "quality_check.rs"
+
+[[bin]]
+name = "opening_diversity"
+path = "opening_diversity.rs"
+
+[[bin]]
+name = "extract_fens"
+path = "extract_fens.rs"
+
+[dependencies]
+bullet_lib       = { git = "https://github.com/jw1912/bullet", rev = "b1b5466de7107ef84b76b6a4973843b3e7427e8c", features = ["cuda"] }
+bullet-compiler  = { git = "https://github.com/jw1912/bullet", rev = "b1b5466de7107ef84b76b6a4973843b3e7427e8c" }
+bulletformat = "1.8.0"
+zstd = "0.13.3"

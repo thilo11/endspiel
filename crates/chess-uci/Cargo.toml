@@ -1,0 +1,13 @@
+[package]
+name = "chess-uci"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+chess-common.workspace = true
+chess-core.workspace = true
+chess-engine.workspace = true
+log.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,14 @@
+[package]
+name = "chess-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+chess-common.workspace = true
+chess-core.workspace = true
+chess-nnue.workspace = true
+log.workspace = true
+thiserror.workspace = true
+pyrrhic-rs = "0.2.0"

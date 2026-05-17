@@ -1,0 +1,30 @@
+[package]
+name = "chess-datagen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "chess-datagen"
+path = "src/main.rs"
+
+[[bin]]
+name = "eval-bench"
+path = "src/bin/eval-bench.rs"
+
+[[bin]]
+name = "wdl-fit"
+path = "src/bin/wdl-fit.rs"
+
+[[bin]]
+name = "fen-verify"
+path = "src/bin/fen-verify.rs"
+
+[dependencies]
+chess-common.workspace = true
+chess-core.workspace = true
+chess-engine.workspace = true
+chess-nnue.workspace = true
+bulletformat.workspace = true
+rand = "0.10.1"

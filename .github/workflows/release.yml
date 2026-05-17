@@ -1,0 +1,144 @@
+name: Release
+
+on:
+  # Manual-only — tag pushes do not auto-build releases. To cut a release:
+  # 1. Push a v* tag (done locally, no CI fires).
+  # 2. In the GitHub UI, Actions > Release > Run workflow, selecting the tag as the ref.
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: endspiel-linux-x64
+            rustflags: "-C target-cpu=x86-64-v3"
+            pgo: true
+          - name: linux-x64-avx512
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: endspiel-linux-x64-avx512
+            rustflags: "-C target-cpu=x86-64-v4"
+            pgo: false
+          - name: mac-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: endspiel-mac-arm64
+            rustflags: "-C target-cpu=apple-m1"
+            pgo: true
+          - name: win-x64
+            os: windows-2025-vs2026
+            target: x86_64-pc-windows-msvc
+            artifact: endspiel-win-x64.exe
+            rustflags: "-C target-cpu=x86-64-v3"
+            pgo: true
+          - name: win-x64-avx512
+            os: windows-2025-vs2026
+            target: x86_64-pc-windows-msvc
+            artifact: endspiel-win-x64-avx512.exe
+            rustflags: "-C target-cpu=x86-64-v4"
+            pgo: false
+          - name: win-arm64
+            os: windows-2025-vs2026
+            target: aarch64-pc-windows-msvc
+            artifact: endspiel-win-arm64.exe
+            rustflags: "-C target-cpu=generic"
+            pgo: false
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: ${{ matrix.target }}
+          components: ${{ matrix.pgo && 'llvm-tools-preview' || '' }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+
+      # --- Plain build path (no PGO) ----------------------------------------
+      - name: Build (no PGO)
+        if: ${{ !matrix.pgo }}
+        run: cargo build --release --target ${{ matrix.target }}
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+
+      # --- PGO build path ---------------------------------------------------
+      # Two-stage build: instrumented binary generates profile data via
+      # `endspiel bench`, then a final build consumes that profile.
+      - name: Build instrumented (PGO gen)
+        if: matrix.pgo
+        shell: bash
+        run: cargo build --release --target ${{ matrix.target }}
+        env:
+          RUSTFLAGS: "${{ matrix.rustflags }} -Cprofile-generate=${{ github.workspace }}/pgo-data"
+
+      - name: Run PGO training workload
+        if: matrix.pgo
+        shell: bash
+        run: |
+          BIN="./target/${{ matrix.target }}/release/endspiel"
+          if [[ "${{ runner.os }}" == "Windows" ]]; then BIN="${BIN}.exe"; fi
+          "$BIN" bench
+
+      - name: Merge PGO profile
+        if: matrix.pgo
+        shell: bash
+        run: |
+          SYSROOT="$(rustc --print sysroot)"
+          LLVM_PROFDATA="$(find "$SYSROOT" -type f \( -name 'llvm-profdata' -o -name 'llvm-profdata.exe' \) | head -1)"
+          if [[ -z "$LLVM_PROFDATA" ]]; then
+            echo "llvm-profdata not found under $SYSROOT" >&2
+            exit 1
+          fi
+          "$LLVM_PROFDATA" merge -o "${{ github.workspace }}/pgo-data/merged.profdata" "${{ github.workspace }}/pgo-data"
+
+      - name: Build optimized (PGO use)
+        if: matrix.pgo
+        shell: bash
+        run: cargo build --release --target ${{ matrix.target }}
+        env:
+          RUSTFLAGS: "${{ matrix.rustflags }} -Cprofile-use=${{ github.workspace }}/pgo-data/merged.profdata"
+
+      # --- Artifact rename + upload ----------------------------------------
+      - name: Rename binary (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: cp target/${{ matrix.target }}/release/endspiel ${{ matrix.artifact }}
+
+      - name: Rename binary (windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: cp target/${{ matrix.target }}/release/endspiel.exe ${{ matrix.artifact }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: artifacts/*

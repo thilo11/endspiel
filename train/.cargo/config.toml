@@ -1,0 +1,8 @@
+# Default CUDA toolkit location for bullet-gpu's build script.
+# `force = false` (default) means an explicit `export CUDA_PATH=...` in the
+# shell wins, so users with non-standard installs (e.g. /opt/cuda) aren't
+# overridden. If /usr/local/cuda doesn't exist on this machine, bullet-gpu
+# will panic with "Path /usr/local/cuda does not exist" — set CUDA_PATH in
+# your environment to the right location.
+[env]
+CUDA_PATH = "/usr/local/cuda"
