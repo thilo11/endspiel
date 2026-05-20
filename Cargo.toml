@@ -33,6 +33,9 @@ license.workspace = true
 name = "endspiel"
 path = "src/main.rs"
 
+[patch.crates-io]
+pyrrhic-rs = { git = "https://github.com/Algorhythm-sxv/pyrrhic-rs", rev = "961c059" }
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
