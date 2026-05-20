@@ -90,6 +90,22 @@ skipped for the AVX-512 variants (the runner CPU may not support AVX-512
 and the instrumented binary would crash with SIGILL) and for the
 cross-built `win-arm64` target (can't execute on the x64 runner).
 
+### Releasing a new version
+
+Follow the Rust/Cargo convention of a **post-release `-dev` bump**, so
+main always advertises a version that is unambiguously *not* a release.
+
+1. On main, set `workspace.package.version` in `Cargo.toml` to the
+   release version (drop the `-dev` suffix), e.g. `1.0.1-dev` → `1.0.1`.
+2. Commit (`chore: release 1.0.1`), tag (`git tag v1.0.1`), push tag —
+   CI builds the artifact matrix above.
+3. **Immediately** bump to the next patch with a `-dev` suffix
+   (`1.0.1` → `1.0.2-dev`) as a separate commit
+   (`chore: bump version to 1.0.2-dev`).
+
+Pick the next *minor* (`1.1.0-dev`) instead of the next patch only when
+the work already queued for the next cycle is known to be minor-worthy.
+
 ## Testing
 
 ```bash
