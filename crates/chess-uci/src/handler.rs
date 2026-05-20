@@ -534,20 +534,12 @@ impl UciHandler {
             "syzygypath" => {
                 if let Some(path) = value {
                     match self.engine.set_syzygy_path(path.trim()) {
-                        Ok(()) => {
-                            log::info!("SyzygyPath set to '{}'", path.trim());
-                            send_response(&UciResponse::Info(UciInfo {
-                                string: Some(format!("SyzygyPath loaded (max {} pieces)", self.engine.syzygy_tb().map_or(0, |tb| tb.max_pieces()))),
-                                ..UciInfo::default()
-                            }));
-                        }
-                        Err(e) => {
-                            log::error!("{e}");
-                            send_response(&UciResponse::Info(UciInfo {
-                                string: Some(format!("SyzygyPath ERROR: {e}")),
-                                ..UciInfo::default()
-                            }));
-                        }
+                        Ok(()) => log::info!(
+                            "SyzygyPath set to '{}' (max {} pieces)",
+                            path.trim(),
+                            self.engine.syzygy_tb().map_or(0, |tb| tb.max_pieces())
+                        ),
+                        Err(e) => log::error!("Failed to load SyzygyPath '{}': {e}", path.trim()),
                     }
                 }
             }
