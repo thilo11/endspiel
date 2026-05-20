@@ -82,6 +82,7 @@ CI (`.github/workflows/release.yml`) builds the following variants on tag push:
 | `endspiel-win-x64-avx512.exe` | `x86-64-v4` | no | AVX-512 Windows build |
 | `endspiel-win-arm64.exe` | `generic` | no | cross-built, no PGO |
 | `endspiel-mac-arm64` | `apple-m1` | yes | macOS Apple Silicon |
+| `endspiel-linux-arm64-pi5` | `cortex-a76` | yes | Raspberry Pi 5 (Pi OS Trixie or newer, glibc ≥ 2.39) |
 
 PGO is a two-stage build: an instrumented binary is built with
 `-Cprofile-generate`, then `endspiel bench` is run against it to produce

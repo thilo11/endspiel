@@ -43,6 +43,7 @@ Prebuilt binaries are on the [Releases](https://github.com/thilo11/endspiel/rele
 | Windows x86_64 (AVX-512) | `endspiel-win-x64-avx512.exe` | `x86-64-v4` — faster on CPUs with AVX-512 |
 | Windows ARM64 | `endspiel-win-arm64.exe` | generic ARM64 |
 | macOS Apple Silicon | `endspiel-mac-arm64` | `apple-m1`, PGO-optimised |
+| Raspberry Pi 5 | `endspiel-linux-arm64-pi5` | `cortex-a76`, PGO-optimised; requires Pi OS Trixie (glibc ≥ 2.39) |
 
 **Picking a build.** The recommended (`-v3`) builds run on essentially any
 CPU sold in the last decade and are profile-guided-optimised for ~5–15%
@@ -50,6 +51,21 @@ extra throughput. If your CPU has AVX-512 (AMD Zen 4/5, recent Intel
 Xeon, etc.), the `-avx512` build is typically 30–60% faster on NNUE
 evaluation but will refuse to run on older hardware (illegal-instruction
 crash). When in doubt, use the recommended build.
+
+**Raspberry Pi 5.** Any RAM tier runs the engine; hash size is the only
+thing that scales with it. Set `Hash` in your GUI rather than relying on
+the 256 MB default:
+
+| Pi 5 RAM | Recommended `Hash` | Notes |
+|----------|--------------------|-------|
+| 4 GB | 512–1024 MB | usable for blitz/rapid; leave ≥2 GB for the desktop/browser |
+| 8 GB | 2048–4096 MB | sweet spot — full Pi-5 strength at all time controls |
+| 16 GB | 4096–8192 MB | only worth it for deep analysis or running other workloads alongside |
+
+Expect NPS roughly 5–10× lower than a modern x86 desktop, so plan for a
+noticeable Elo drop at fixed time controls and compensate by giving the
+engine more thinking time. Active cooling is recommended: under
+sustained engine load the SoC will thermally throttle without a fan.
 
 ## Usage
 
