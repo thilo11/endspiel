@@ -2,6 +2,7 @@ use std::io::{self, BufRead};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 use chess_common::{Board, Move, Score};
 use chess_engine::{Engine, InfoCallback, SearchInfo, SearchParams};
@@ -67,6 +68,13 @@ pub struct UciHandler {
     show_wdl: bool,
     /// Number of best lines to search (MultiPV). 1 = normal.
     multi_pv: usize,
+    /// True while a `go ponder` search is running and `ponderhit` has not
+    /// yet arrived. While set, the search runs in `infinite` mode and the
+    /// resulting move is held back until `ponderhit`/`stop`.
+    ponder_active: bool,
+    /// Move-time budget (ms) to apply once `ponderhit` converts the ongoing
+    /// ponder search into our real search.
+    ponder_alloc_ms: u64,
 }
 
 impl Default for UciHandler {
@@ -87,6 +95,8 @@ impl UciHandler {
             hash_explicitly_set: false,
             show_wdl: false,
             multi_pv: 1,
+            ponder_active: false,
+            ponder_alloc_ms: 0,
         }
     }
 
@@ -140,7 +150,7 @@ impl UciHandler {
             UciCommand::SetOption { name, value } => self.handle_setoption(name, value),
             UciCommand::Debug(_) => { /* acknowledged, no action needed */ }
             UciCommand::Register => { /* no registration needed */ }
-            UciCommand::PonderHit => { /* pondering not implemented */ }
+            UciCommand::PonderHit => self.handle_ponderhit(),
             UciCommand::Quit => unreachable!(),
         }
     }
@@ -174,6 +184,10 @@ impl UciHandler {
                 min: 0,
                 max: 5000,
             },
+        }));
+        send_response(&UciResponse::Option(UciOptionDef {
+            name: "Ponder".to_string(),
+            opt_type: UciOptionType::Check { default: false },
         }));
         send_response(&UciResponse::Option(UciOptionDef {
             name: "Slow Mover".to_string(),
@@ -321,7 +335,7 @@ impl UciHandler {
         // Stop any existing search first
         self.handle_stop();
 
-        let search_params = SearchParams {
+        let mut search_params = SearchParams {
             max_depth: params.depth.unwrap_or(64),
             max_nodes: params.nodes,
             move_time_ms: params.movetime,
@@ -339,6 +353,22 @@ impl UciHandler {
             multi_pv: self.multi_pv,
             tune: self.engine.tune().clone(),
         };
+
+        // Pondering: the board is the predicted position (opponent's expected
+        // reply already applied). Compute the move-time budget we *would* spend
+        // on it, then run the search in `infinite` mode so it never returns on
+        // its own — the move is held back until `ponderhit` (which starts the
+        // clock, see handle_ponderhit) or `stop` (ponder-miss / quit).
+        let is_ponder = params.ponder;
+        if is_ponder {
+            self.ponder_alloc_ms =
+                chess_engine::search::allocated_move_time_ms(&search_params, &self.board)
+                    .unwrap_or(0);
+            search_params.infinite = true;
+            self.ponder_active = true;
+        } else {
+            self.ponder_active = false;
+        }
 
         // Clone what we need for the search thread
         let board = self.board.clone();
@@ -413,6 +443,17 @@ impl UciHandler {
                 }
             };
 
+            // Pondering: do not surrender the move until we are told to play
+            // it. `ponderhit` converts this into a timed search that trips
+            // `stop` after the allocated budget; a `stop` (ponder-miss or quit)
+            // trips it immediately. This guarantees we never emit a move
+            // mid-ponder, even if the search resolves the position early.
+            if is_ponder {
+                while !stop.load(Ordering::SeqCst) {
+                    thread::sleep(Duration::from_millis(2));
+                }
+            }
+
             let ponder_move = if result.pv.len() > 1 {
                 Some(result.pv[1])
             } else {
@@ -429,10 +470,35 @@ impl UciHandler {
     }
 
     fn handle_stop(&mut self) {
+        // A `stop` ends any pondering (ponder-miss or quit): the held-back
+        // move is released as soon as the stop flag is observed.
+        self.ponder_active = false;
         // Signal the search to stop
         self.stop_handle.store(true, Ordering::SeqCst);
         // Wait for the search thread to finish
         self.wait_for_search();
+    }
+
+    /// `ponderhit`: the opponent played the move we were pondering on, so the
+    /// ongoing (infinite) ponder search becomes our real search. Start the
+    /// move clock now by tripping `stop` after the allocated budget; the
+    /// search thread then releases its best move. With no budget known
+    /// (e.g. `go ponder infinite`), play the pondered result immediately.
+    fn handle_ponderhit(&mut self) {
+        if !self.ponder_active {
+            return;
+        }
+        self.ponder_active = false;
+        let stop = Arc::clone(&self.stop_handle);
+        let alloc = self.ponder_alloc_ms;
+        if alloc == 0 {
+            stop.store(true, Ordering::SeqCst);
+            return;
+        }
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(alloc));
+            stop.store(true, Ordering::SeqCst);
+        });
     }
 
     fn wait_for_search(&mut self) {
@@ -462,6 +528,11 @@ impl UciHandler {
                     self.engine.set_threads(t);
                     log::info!("Threads set to {}", self.engine.num_threads());
                 }
+            }
+            "ponder" => {
+                // Capability flag only. Pondering is driven by the
+                // `go ponder` / `ponderhit` commands, so there is no
+                // engine state to set here.
             }
             "move overhead" => {
                 if let Some(v) = value

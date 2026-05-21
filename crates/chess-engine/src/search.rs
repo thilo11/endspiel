@@ -542,6 +542,13 @@ fn compute_time_limit(params: &SearchParams, board: &Board) -> (Option<u64>, boo
     }
 }
 
+/// Move-time budget (ms) the engine would allocate for `params` at `board`,
+/// or `None` for an infinite/untimed search. Used by the UCI layer to convert
+/// a pondering (infinite) search into a timed one when `ponderhit` arrives.
+pub fn allocated_move_time_ms(params: &SearchParams, board: &Board) -> Option<u64> {
+    compute_time_limit(params, board).0
+}
+
 // ---------------------------------------------------------------------------
 // Move ordering helpers
 // ---------------------------------------------------------------------------

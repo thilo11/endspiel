@@ -458,6 +458,28 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_go_ponder() {
+        // `go ponder` carries the clock like a normal search but flags pondering.
+        let cmd = UciCommand::parse("go ponder wtime 30000 btime 30000 winc 1000 binc 1000");
+        assert_eq!(
+            cmd,
+            Some(UciCommand::Go(GoParams {
+                ponder: true,
+                wtime: Some(30000),
+                btime: Some(30000),
+                winc: Some(1000),
+                binc: Some(1000),
+                ..GoParams::default()
+            }))
+        );
+    }
+
+    #[test]
+    fn test_parse_ponderhit() {
+        assert_eq!(UciCommand::parse("ponderhit"), Some(UciCommand::PonderHit));
+    }
+
+    #[test]
     fn test_parse_go_time_controls() {
         let cmd = UciCommand::parse("go wtime 300000 btime 300000 winc 2000 binc 2000");
         assert_eq!(
