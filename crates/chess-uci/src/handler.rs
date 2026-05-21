@@ -454,11 +454,12 @@ impl UciHandler {
                 }
             }
 
-            let ponder_move = if result.pv.len() > 1 {
-                Some(result.pv[1])
-            } else {
-                None
-            };
+            // Advertise the expected reply (PV[1]) as the ponder move, but only
+            // if it is actually legal after best_move. PV reconstruction can
+            // yield an illegal continuation (e.g. a TT hash collision); sending
+            // an illegal `ponder` move makes a GUI reject it ("invalid ponder
+            // move") and can desync/hang its ponder state machine.
+            let ponder_move = validated_ponder_move(&board, result.best_move, &result.pv);
 
             send_response(&UciResponse::BestMove {
                 best: result.best_move,
@@ -681,6 +682,25 @@ impl UciHandler {
 /// We generate all legal moves and find the one matching the from/to squares
 /// and promotion piece. This ensures the move flag (capture, en passant,
 /// castling, etc.) is set correctly.
+/// Derive the ponder move (the expected opponent reply) to advertise alongside
+/// `best`, returning it only when it is genuinely playable.
+///
+/// The ponder move is the second PV element. PV reconstruction can produce an
+/// illegal continuation (e.g. a transposition-table hash collision), and an
+/// illegal `ponder` move corrupts a GUI's ponder state machine — lichess-bot
+/// logs "Engine sent invalid ponder move" and can desync/hang pondering,
+/// occasionally losing on time. Returns `None` unless `best` is real, the PV
+/// starts with `best`, and `pv[1]` is legal in the position after `best`.
+fn validated_ponder_move(board: &Board, best: Move, pv: &[Move]) -> Option<Move> {
+    if best == Move::NULL || pv.len() < 2 || pv[0] != best {
+        return None;
+    }
+    let reply = pv[1];
+    let mut after = board.clone();
+    after.make_move(best);
+    chess_core::is_legal_move(&after, reply).then_some(reply)
+}
+
 fn find_legal_move(board: &Board, uci_str: &str) -> Option<Move> {
     let parsed = Move::from_uci(uci_str)?;
     let legal_moves = chess_core::generate_legal_moves(board);
@@ -708,9 +728,55 @@ fn send_response(response: &UciResponse) {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_display_score;
-    use chess_common::Score;
+    use super::{normalize_display_score, validated_ponder_move};
+    use chess_common::{Board, Move, Score};
     use chess_engine::syzygy::{TB_LOSS_SCORE, TB_WIN_SCORE};
+
+    fn mv(uci: &str) -> Move {
+        Move::from_uci(uci).unwrap()
+    }
+
+    #[test]
+    fn ponder_move_returned_when_pv_is_consistent() {
+        // 1. e4 e5 — PV starts with best_move and the reply is legal.
+        let board = Board::starting_position();
+        let best = mv("e2e4");
+        let reply = mv("e7e5");
+        assert_eq!(
+            validated_ponder_move(&board, best, &[best, reply]),
+            Some(reply)
+        );
+    }
+
+    #[test]
+    fn ponder_move_dropped_when_reply_is_illegal() {
+        // After 1. e4, "e2e4" again is illegal (e2 is empty) — a corrupt PV
+        // continuation must not be advertised as a ponder move.
+        let board = Board::starting_position();
+        let best = mv("e2e4");
+        assert_eq!(validated_ponder_move(&board, best, &[best, mv("e2e4")]), None);
+    }
+
+    #[test]
+    fn ponder_move_dropped_when_pv_head_differs_from_best() {
+        let board = Board::starting_position();
+        assert_eq!(
+            validated_ponder_move(&board, mv("e2e4"), &[mv("d2d4"), mv("e7e5")]),
+            None
+        );
+    }
+
+    #[test]
+    fn ponder_move_dropped_when_pv_too_short_or_best_null() {
+        let board = Board::starting_position();
+        let best = mv("e2e4");
+        assert_eq!(validated_ponder_move(&board, best, &[best]), None);
+        assert_eq!(validated_ponder_move(&board, best, &[]), None);
+        assert_eq!(
+            validated_ponder_move(&board, Move::NULL, &[Move::NULL, mv("e7e5")]),
+            None
+        );
+    }
 
     #[test]
     fn normal_scores_are_normalized_for_display() {
