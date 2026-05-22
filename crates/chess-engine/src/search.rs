@@ -350,6 +350,24 @@ impl SearchState {
 // Time management
 // ---------------------------------------------------------------------------
 
+/// Per-move time cap (ms) for sudden-death (no-increment) time controls.
+///
+/// With no increment the clock must last the whole game with no refund, yet the
+/// piece-count `moves_left` estimate in `compute_time_limit` spends *faster* as
+/// pieces come off — so a long endgame conversion can flag even from a winning
+/// position (observed: a 180+0 game flagged ~move 90 while mating). Bound the
+/// slice to `time/N` (large `N`) so enough clock stays in reserve for a long
+/// game. Only pure sudden death is affected: any increment refunds the clock
+/// and is left to the standard tuning, so increment controls — including the
+/// `10+0.1` bench/SF-test path — are unchanged.
+fn sudden_death_time_cap(target_ms: u64, inc_ms: u64, time_ms: u64) -> u64 {
+    if inc_ms != 0 {
+        return target_ms;
+    }
+    let n: u64 = if time_ms > 300_000 { 38 } else { 34 };
+    target_ms.min(time_ms / n)
+}
+
 /// Returns (time_limit_ms, use_soft_limit, inc_ms, time_remaining_ms).
 /// `use_soft_limit` is true for clock-based time controls (wtime/btime)
 /// where we must save time for future moves, false for fixed movetime.
@@ -499,6 +517,10 @@ fn compute_time_limit(params: &SearchParams, board: &Board) -> (Option<u64>, boo
 
         // Apply slow mover scaling factor
         let target = target * params.slow_mover / 100;
+
+        // Sudden-death (no-increment) safety: keep enough clock in reserve for
+        // a long game (incl. long endgame conversions). See fn docs.
+        let target = sudden_death_time_cap(target, inc, time);
 
         // Hard maximum with stronger low-time safety to reduce flags.
         let mut max = if time <= 30_000 {
@@ -2788,6 +2810,42 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::path::PathBuf;
     use crate::tt::SharedTT;
+
+    #[test]
+    fn sudden_death_cap_bounds_blitz_and_rapid_no_increment() {
+        // 180+0: an over-large target is capped to time/34.
+        assert_eq!(sudden_death_time_cap(15_000, 0, 180_000), 180_000 / 34);
+        // 10+0 rapid uses the gentler time/38 divisor.
+        assert_eq!(sudden_death_time_cap(40_000, 0, 600_000), 600_000 / 38);
+    }
+
+    #[test]
+    fn sudden_death_cap_noop_when_small_target_or_any_increment() {
+        // Target already under the cap is returned unchanged.
+        assert_eq!(sudden_death_time_cap(1_000, 0, 180_000), 1_000);
+        // ANY increment disables the cap (only pure sudden death is at risk),
+        // so the 10+0.1 (inc=100) bench/SF-test path is left unchanged.
+        assert_eq!(sudden_death_time_cap(15_000, 100, 180_000), 15_000);
+        assert_eq!(sudden_death_time_cap(15_000, 2_000, 180_000), 15_000);
+    }
+
+    #[test]
+    fn allocated_time_reserves_clock_in_no_increment_blitz() {
+        // 180+0 opening: the sudden-death cap keeps the per-move slice well
+        // below the old piece-count allocation (~time/24 + bank ≈ 9.4s),
+        // leaving enough clock for a long game.
+        let board = Board::starting_position();
+        let params = SearchParams {
+            white_time_ms: Some(180_000),
+            black_time_ms: Some(180_000),
+            white_inc_ms: Some(0),
+            black_inc_ms: Some(0),
+            ..Default::default()
+        };
+        let alloc = allocated_move_time_ms(&params, &board).expect("timed search");
+        assert!(alloc > 0);
+        assert!(alloc <= 180_000 / 30, "allocated {alloc} too high for 180+0");
+    }
 
     /// Helper: run a fixed-depth search and return the result.
     ///
