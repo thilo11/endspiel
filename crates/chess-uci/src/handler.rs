@@ -2,7 +2,7 @@ use std::io::{self, BufRead};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chess_common::{Board, Move, Score};
 use chess_engine::{Engine, InfoCallback, SearchInfo, SearchParams};
@@ -75,6 +75,10 @@ pub struct UciHandler {
     /// Move-time budget (ms) to apply once `ponderhit` converts the ongoing
     /// ponder search into our real search.
     ponder_alloc_ms: u64,
+    /// When the current `go ponder` search started. On `ponderhit` the time
+    /// already spent pondering is credited against `ponder_alloc_ms` so a
+    /// well-pondered move plays promptly instead of burning a fresh budget.
+    ponder_start: Option<Instant>,
 }
 
 impl Default for UciHandler {
@@ -97,6 +101,7 @@ impl UciHandler {
             multi_pv: 1,
             ponder_active: false,
             ponder_alloc_ms: 0,
+            ponder_start: None,
         }
     }
 
@@ -366,8 +371,10 @@ impl UciHandler {
                     .unwrap_or(0);
             search_params.infinite = true;
             self.ponder_active = true;
+            self.ponder_start = Some(Instant::now());
         } else {
             self.ponder_active = false;
+            self.ponder_start = None;
         }
 
         // Clone what we need for the search thread
@@ -481,10 +488,13 @@ impl UciHandler {
     }
 
     /// `ponderhit`: the opponent played the move we were pondering on, so the
-    /// ongoing (infinite) ponder search becomes our real search. Start the
-    /// move clock now by tripping `stop` after the allocated budget; the
-    /// search thread then releases its best move. With no budget known
-    /// (e.g. `go ponder infinite`), play the pondered result immediately.
+    /// ongoing (infinite) ponder search becomes our real search. The search has
+    /// already been running since `go ponder` (on the opponent's clock), so we
+    /// credit that elapsed time against the move budget and trip `stop` after
+    /// only the *remaining* time — a well-pondered (e.g. obvious) move plays
+    /// almost at once and banks the saved clock for harder positions. With no
+    /// budget known (e.g. `go ponder infinite`), play the pondered result
+    /// immediately.
     fn handle_ponderhit(&mut self) {
         if !self.ponder_active {
             return;
@@ -496,8 +506,13 @@ impl UciHandler {
             stop.store(true, Ordering::SeqCst);
             return;
         }
+        let elapsed = self
+            .ponder_start
+            .map(|t| t.elapsed().as_millis() as u64)
+            .unwrap_or(0);
+        let wait = ponderhit_think_ms(alloc, elapsed);
         thread::spawn(move || {
-            thread::sleep(Duration::from_millis(alloc));
+            thread::sleep(Duration::from_millis(wait));
             stop.store(true, Ordering::SeqCst);
         });
     }
@@ -701,6 +716,19 @@ fn validated_ponder_move(board: &Board, best: Move, pv: &[Move]) -> Option<Move>
     chess_core::is_legal_move(&after, reply).then_some(reply)
 }
 
+/// Minimum think time (ms) after a `ponderhit`, so a fully-pondered move still
+/// lets the in-flight search iteration settle rather than firing the instant
+/// the hit arrives.
+const MIN_PONDERHIT_THINK_MS: u64 = 20;
+
+/// Remaining think budget (ms) after a `ponderhit`: the move budget `alloc_ms`
+/// minus the `elapsed_ms` already spent pondering (the search has been running
+/// since `go ponder`), floored at `MIN_PONDERHIT_THINK_MS`. When pondering has
+/// already consumed the whole budget the move plays almost immediately.
+fn ponderhit_think_ms(alloc_ms: u64, elapsed_ms: u64) -> u64 {
+    alloc_ms.saturating_sub(elapsed_ms).max(MIN_PONDERHIT_THINK_MS)
+}
+
 fn find_legal_move(board: &Board, uci_str: &str) -> Option<Move> {
     let parsed = Move::from_uci(uci_str)?;
     let legal_moves = chess_core::generate_legal_moves(board);
@@ -728,12 +756,25 @@ fn send_response(response: &UciResponse) {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_display_score, validated_ponder_move};
+    use super::{normalize_display_score, ponderhit_think_ms, validated_ponder_move, MIN_PONDERHIT_THINK_MS};
     use chess_common::{Board, Move, Score};
     use chess_engine::syzygy::{TB_LOSS_SCORE, TB_WIN_SCORE};
 
     fn mv(uci: &str) -> Move {
         Move::from_uci(uci).unwrap()
+    }
+
+    #[test]
+    fn ponderhit_credits_elapsed_ponder_time() {
+        // Budget 1000 ms, already pondered 300 ms -> 700 ms remaining.
+        assert_eq!(ponderhit_think_ms(1000, 300), 700);
+    }
+
+    #[test]
+    fn ponderhit_plays_promptly_when_budget_already_spent() {
+        // Pondered past the whole budget -> floor, not zero, and never negative.
+        assert_eq!(ponderhit_think_ms(1000, 1000), MIN_PONDERHIT_THINK_MS);
+        assert_eq!(ponderhit_think_ms(1000, 5000), MIN_PONDERHIT_THINK_MS);
     }
 
     #[test]
