@@ -1,39 +1,48 @@
-resources
-.claude/
+# ── Rust / Cargo build artifacts ──
 target/
-# All assets are local-only (books, tablebases, etc.)
-assets/
-**/*.rs.bk
 Cargo.lock
+**/*.rs.bk
+.cargo/config.toml
+
+# ── Editors, IDEs, OS cruft ──
 *.swp
 *.swo
 *~
 .vscode/
-.cargo/config.toml
 .idea/
-__pycache__/
-*.pyc
-*.pgn
 .DS_Store
 .envrc
-*.csv
+
+# ── Python ──
+__pycache__/
+*.pyc
 .venv/
+
+# ── Local-only data, assets & nets (books, tablebases, training data) ──
+assets/
+resources
+/data/
+train/checkpoints/
+*.bin
+*.txt
+*.csv
+*.pgn
+
+# ── Build / run outputs & release artifacts ──
+/dist
+/games
+endspiel-*
+puzzle_results/
+
+# ── Local-only tooling & scratch (incl. lichess-bot analysis) ──
+.claude/
+/lichess
 debug_*.py
 debug_*.sh
 test_*.sh
-/games
-/dist
+
+# ── Local config & tuning output ──
 config.json
 tuned_params.json
-data.txt
-data.bin
-/data/
-*.bin
-*.txt
-train/checkpoints/
-endspiel-*
-BLOG.md
-benchmark_0-8-4.md
 spsa_checkpoint*.json
 spsa_result.json
-puzzle_results/
