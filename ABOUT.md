@@ -53,6 +53,17 @@ prefixes and from Lichess opening positions). Every round of training
 goes back to scratch on the full accumulated archive — there is no
 fine-tune step in the active pipeline.
 
+Crucially, the network learns from **no external evaluation data**. Unlike
+most NNUE engines, it uses no Stockfish or Leela Chess Zero labels: every
+training target is the engine's own search score on its own games. The
+only outside ingredient is a set of raw opening positions (random prefixes
+and Lichess opening FENs) used purely as self-play *starting points* —
+they seed the games, never the training targets. The trainer itself is the
+open-source [Bullet](https://github.com/jw1912/bullet) framework and
+Syzygy probing uses `pyrrhic-rs`; everything else — bitboards and move
+generation, search, NNUE inference, the datagen and data-cleaning
+pipeline, and the UCI layer — is hand-written from scratch.
+
 ## Where the strength comes from now
 
 The foundations are in place — move generation, modern search, NNUE

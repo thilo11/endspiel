@@ -2,12 +2,25 @@
 
 > **Endspiel** /ˈɛnt.ʃpiːl/ *n.* (German) &nbsp; **1.** the final, decisive game. &nbsp; **2.** the final phase of a chess game.
 
-A UCI chess engine written in Rust, with an NNUE evaluation trained from scratch on its own self-play data.
+A UCI chess engine written in Rust — bitboards and move generation, the
+alpha-beta search, the NNUE evaluation and its inference, the self-play
+data generator, and the UCI front end are all hand-written from scratch,
+with no external chess libraries. The network is trained **entirely on the
+engine's own self-play** games scored by its own search; there is **no
+external evaluation data** — no Stockfish or Leela labels. The only outside
+ingredient is a set of raw opening positions used as self-play starting
+points, never as training targets.
 
 See [ABOUT.md](ABOUT.md) for project rationale, playing strength, and training details.
 
 ## Features
 
+- **Built from scratch** — move generation, search, NNUE inference, the
+  datagen tool and the UCI layer are all hand-rolled in Rust with no
+  external chess libraries; the net is trained only on the engine's own
+  self-play, with no external evaluation data (net training runs through
+  the [Bullet](https://github.com/jw1912/bullet) trainer and Syzygy
+  probing uses `pyrrhic-rs` — the only third-party pieces in the pipeline)
 - **Full UCI compliance** — works in any UCI GUI (Arena, CuteChess, Fritz, Banksia, Scid, …)
 - **NNUE evaluation** (default) — HalfKP 704×32→768×2→1 SCReLU, trained
   from scratch on ~2.6 billion self-play positions; the net is embedded
@@ -15,9 +28,15 @@ See [ABOUT.md](ABOUT.md) for project rationale, playing strength, and training d
 - **HCE fallback** — tapered hand-crafted evaluation (`UseNNUE=false`) with
   pawn hash, mobility, king safety, pawn structure, threats, space, and
   endgame scaling
-- **Modern search** — alpha-beta + PVS with iterative deepening, null move,
-  reverse futility, futility, razoring, ProbCut, SEE pruning, LMR, IIR,
-  singular and passed-pawn extensions, 1- and 2-ply continuation history
+- **Modern search** — alpha-beta + PVS with iterative deepening and
+  aspiration windows, null move, reverse futility, futility, razoring,
+  ProbCut, SEE pruning, LMR, LMP, IIR, singular and passed-pawn extensions,
+  1- and 2-ply continuation history, capture history, and multi-facet
+  correction history (pawn, non-pawn, minor/major, and continuation keys).
+  History and correction tables persist across moves within a game
+  (reset on `ucinewgame`)
+- **Pondering** — thinks on the opponent's time (`go ponder` / `ponderhit`);
+  enable via the `Ponder` UCI option in your GUI
 - **Multi-threading** — Lazy SMP with depth diversity (`Threads` UCI option)
 - **MultiPV** — up to 256 principal variations for analysis (`MultiPV` UCI option)
 - **Syzygy tablebases** — WDL probing for 3–5 man endgames via `pyrrhic-rs`
@@ -102,6 +121,7 @@ check that the binary runs end-to-end:
 | `Threads` | min(available, 16) | Search threads |
 | `Move Overhead` | 20 | Time safety margin in ms |
 | `Slow Mover` | 100 | Time usage scaling (%) — >100 thinks longer, <100 plays faster |
+| `Ponder` | false | Think on the opponent's time; the GUI toggles this and drives `go ponder` / `ponderhit` |
 | `Contempt` | 20 | Draw avoidance in centipawns |
 | `SingularExt` | 1 | Singular extension: 0 = off, 1 = conservative, 2 = aggressive |
 | `UseNNUE` | true | Use NNUE evaluation; false falls back to HCE |
