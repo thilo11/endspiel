@@ -90,6 +90,72 @@ fn new_capture_history() -> CaptureHistory {
     Box::new([[[0i32; 6]; 64]; 6])
 }
 
+/// Correction history: learns the systematic error of the static eval, keyed
+/// by various facets of the position (pawn structure, non-pawn placement,
+/// minor/major placement, and the previous move). Each facet has its own
+/// table indexed by [stm][key]; per-facet values are stored in fixed-point
+/// with scale `CORRHIST_GRAIN` and clamped to `CORRHIST_LIMIT` (±32cp). The
+/// applied correction sums the facets and is capped at `CORR_TOTAL_CAP`.
+const CORRHIST_SIZE: usize = 16384; // power of two
+const CORR_MASK: usize = CORRHIST_SIZE - 1;
+const CORRHIST_GRAIN: i32 = 256; // fixed-point scale
+const CORRHIST_LIMIT: i32 = CORRHIST_GRAIN * 32; // per-facet cap: ±32cp
+const CORR_TOTAL_CAP: i32 = 64; // cap on the summed correction (cp)
+
+/// A hash-keyed correction table, indexed by [stm][key & CORR_MASK].
+type CorrTable = Box<[[i32; CORRHIST_SIZE]; 2]>;
+fn new_corr_table() -> CorrTable {
+    Box::new([[0i32; CORRHIST_SIZE]; 2])
+}
+
+/// Continuation correction table, keyed by [stm][prev_piece_kind][prev_to].
+type ContCorrTable = Box<[[[i32; 64]; 6]; 2]>;
+fn new_cont_corr_table() -> ContCorrTable {
+    Box::new([[[0i32; 64]; 6]; 2])
+}
+
+/// Game-level learning tables that persist across moves (cleared on
+/// `ucinewgame`). They are swapped into the per-search [`SearchState`] for the
+/// duration of a search so history and corrections accumulate over the whole
+/// game instead of resetting every move. Ply-local scratch (killers,
+/// `ply_context`, `static_evals`, accumulators) stays per-search and is *not*
+/// carried here.
+pub struct PersistentHistory {
+    history: [[i32; 64]; 64],
+    capture_history: CaptureHistory,
+    counter_moves: [[Move; 64]; 64],
+    cont_history: ContHistory,
+    pawn_corrhist: CorrTable,
+    white_corrhist: CorrTable,
+    black_corrhist: CorrTable,
+    minor_corrhist: CorrTable,
+    major_corrhist: CorrTable,
+    cont_corrhist: ContCorrTable,
+}
+
+impl PersistentHistory {
+    pub fn new() -> Self {
+        Self {
+            history: [[0; 64]; 64],
+            capture_history: new_capture_history(),
+            counter_moves: [[Move::NULL; 64]; 64],
+            cont_history: new_cont_history(),
+            pawn_corrhist: new_corr_table(),
+            white_corrhist: new_corr_table(),
+            black_corrhist: new_corr_table(),
+            minor_corrhist: new_corr_table(),
+            major_corrhist: new_corr_table(),
+            cont_corrhist: new_cont_corr_table(),
+        }
+    }
+}
+
+impl Default for PersistentHistory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 struct SearchState {
     tt: Arc<SharedTT>,
     killers: [[Move; MAX_KILLERS]; MAX_PLY],
@@ -97,6 +163,12 @@ struct SearchState {
     capture_history: CaptureHistory,
     counter_moves: [[Move; 64]; 64],
     cont_history: ContHistory,
+    pawn_corrhist: CorrTable,
+    white_corrhist: CorrTable,
+    black_corrhist: CorrTable,
+    minor_corrhist: CorrTable,
+    major_corrhist: CorrTable,
+    cont_corrhist: ContCorrTable,
     ply_context: [PlyContext; MAX_PLY],
     static_evals: [i32; MAX_PLY],
     accumulators: Box<[Accumulator; MAX_PLY]>,
@@ -139,6 +211,12 @@ impl SearchState {
             capture_history: new_capture_history(),
             counter_moves: [[Move::NULL; 64]; 64],
             cont_history: new_cont_history(),
+            pawn_corrhist: new_corr_table(),
+            white_corrhist: new_corr_table(),
+            black_corrhist: new_corr_table(),
+            minor_corrhist: new_corr_table(),
+            major_corrhist: new_corr_table(),
+            cont_corrhist: new_cont_corr_table(),
             ply_context: [NULL_PLY_CONTEXT; MAX_PLY],
             static_evals: [0; MAX_PLY],
             accumulators,
@@ -252,6 +330,63 @@ impl SearchState {
                 *entry = (*entry).clamp(-max_val, max_val);
             }
         }
+    }
+
+    /// Learned static-eval correction for the current position, in centipawns
+    /// (side-to-move perspective). Sums all corrhist facets, caps the total,
+    /// then scales by the tunable `corrhist_mult` (×100).
+    fn correction(&self, board: &Board, ply: u8) -> i32 {
+        let stm = if board.side_to_move == Color::White { 0 } else { 1 };
+        let k = crate::eval::corr_keys(board);
+        let mut sum = self.pawn_corrhist[stm][k.pawn as usize & CORR_MASK]
+            + self.white_corrhist[stm][k.white as usize & CORR_MASK]
+            + self.black_corrhist[stm][k.black as usize & CORR_MASK]
+            + self.minor_corrhist[stm][k.minor as usize & CORR_MASK]
+            + self.major_corrhist[stm][k.major as usize & CORR_MASK];
+        if ply >= 1 && (ply as usize - 1) < MAX_PLY {
+            let ctx = self.ply_context[ply as usize - 1];
+            sum += self.cont_corrhist[stm][ctx.piece_kind][ctx.to_sq];
+        }
+        let cp = (sum / CORRHIST_GRAIN).clamp(-CORR_TOTAL_CAP, CORR_TOTAL_CAP);
+        cp * self.tune.corrhist_mult / 100
+    }
+
+    /// Update every corrhist facet from the residual `diff = search_score -
+    /// static_eval`. Deeper searches are trusted more (larger weight).
+    fn update_corrhist(&mut self, board: &Board, depth: u8, diff: i32, ply: u8) {
+        let stm = if board.side_to_move == Color::White { 0 } else { 1 };
+        let k = crate::eval::corr_keys(board);
+        let scaled = (diff * CORRHIST_GRAIN).clamp(-CORRHIST_LIMIT, CORRHIST_LIMIT);
+        let weight = (depth as i32 + 1).min(16);
+        let blend = |e: &mut i32| {
+            *e = (*e * (256 - weight) + scaled * weight) / 256;
+            *e = (*e).clamp(-CORRHIST_LIMIT, CORRHIST_LIMIT);
+        };
+        blend(&mut self.pawn_corrhist[stm][k.pawn as usize & CORR_MASK]);
+        blend(&mut self.white_corrhist[stm][k.white as usize & CORR_MASK]);
+        blend(&mut self.black_corrhist[stm][k.black as usize & CORR_MASK]);
+        blend(&mut self.minor_corrhist[stm][k.minor as usize & CORR_MASK]);
+        blend(&mut self.major_corrhist[stm][k.major as usize & CORR_MASK]);
+        if ply >= 1 && (ply as usize - 1) < MAX_PLY {
+            let ctx = self.ply_context[ply as usize - 1];
+            blend(&mut self.cont_corrhist[stm][ctx.piece_kind][ctx.to_sq]);
+        }
+    }
+
+    /// Swap the game-level learning tables between this search state and a
+    /// persistent holder. Called once before and once after a search so the
+    /// tables accumulate across moves within a game.
+    fn swap_history(&mut self, h: &mut PersistentHistory) {
+        std::mem::swap(&mut self.history, &mut h.history);
+        std::mem::swap(&mut self.capture_history, &mut h.capture_history);
+        std::mem::swap(&mut self.counter_moves, &mut h.counter_moves);
+        std::mem::swap(&mut self.cont_history, &mut h.cont_history);
+        std::mem::swap(&mut self.pawn_corrhist, &mut h.pawn_corrhist);
+        std::mem::swap(&mut self.white_corrhist, &mut h.white_corrhist);
+        std::mem::swap(&mut self.black_corrhist, &mut h.black_corrhist);
+        std::mem::swap(&mut self.minor_corrhist, &mut h.minor_corrhist);
+        std::mem::swap(&mut self.major_corrhist, &mut h.major_corrhist);
+        std::mem::swap(&mut self.cont_corrhist, &mut h.cont_corrhist);
     }
 
     fn store_counter_move(&mut self, prev_move: Move, counter: Move) {
@@ -903,6 +1038,7 @@ pub fn iterative_deepening(
     syzygy_tb: Option<SyzygyTB>,
     root_tb_solution: Option<(Score, Vec<Move>)>,
     external_book: Option<Arc<OpeningBook>>,
+    mut persistent: Option<&mut PersistentHistory>,
 ) -> SearchResult {
     // Try opening book first (only in the opening — limit to 30 half-moves
     // to avoid polyglot hash collisions returning garbage moves in endgames)
@@ -1026,6 +1162,12 @@ pub fn iterative_deepening(
             nodes: quick_state.nodes,
             pv: clean_pv,
         };
+    }
+
+    // Swap in the game-level learning tables so history/corrhist accumulate
+    // across moves. Swapped back out before returning.
+    if let Some(h) = persistent.as_deref_mut() {
+        state.swap_history(h);
     }
 
     let max_depth = params.max_depth.min(MAX_PLY as u8);
@@ -1494,6 +1636,11 @@ pub fn iterative_deepening(
         best_score = tb_score;
         best_pv = tb_pv;
         best_depth = best_depth.max(best_pv.len().min(u8::MAX as usize) as u8);
+    }
+
+    // Swap the (now-updated) learning tables back into the persistent holder.
+    if let Some(h) = persistent {
+        state.swap_history(h);
     }
 
     SearchResult {
@@ -2351,6 +2498,23 @@ fn alpha_beta(
     }
 
     if excluded_move.is_null() {
+        // Update pawn corrhist from the residual between the search result and
+        // the static eval — but only from trustworthy nodes: not in check, a
+        // quiet best move, non-mate score, and a bound that agrees with the sign
+        // of the residual.
+        if !in_check
+            && !best_move.is_null()
+            && !best_move.is_capture()
+            && best_score < MATE_THRESHOLD
+            && best_score > -MATE_THRESHOLD
+            && match tt_store_flag {
+                TTFlag::Exact => true,
+                TTFlag::LowerBound => best_score >= static_eval,
+                TTFlag::UpperBound => best_score <= static_eval,
+            }
+        {
+            state.update_corrhist(board, depth, best_score - static_eval, ply);
+        }
         state.tt.store(board.hash, effective_depth, score_to_tt(best_score, ply), tt_store_flag, best_move);
     }
 
@@ -2679,7 +2843,7 @@ fn capture_value(board: &Board, m: Move) -> i32 {
 // ---------------------------------------------------------------------------
 
 fn evaluate_for_side(board: &Board, state: &mut SearchState, ply: u8) -> i32 {
-    if state.use_nnue && (ply as usize) < MAX_PLY {
+    let eval = if state.use_nnue && (ply as usize) < MAX_PLY {
         // Lazy refresh: king moves defer the accumulator recompute until here.
         // The board is at position P_ply so refresh is always valid at this call site.
         if state.accumulators[ply as usize].needs_refresh {
@@ -2692,12 +2856,14 @@ fn evaluate_for_side(board: &Board, state: &mut SearchState, ply: u8) -> i32 {
         let sign = if board.side_to_move == Color::White { 1 } else { -1 };
         crate::eval::scale_for_endgame(board, raw * sign) * sign
     } else {
-        let eval = evaluate(board).0;
+        let e = evaluate(board).0;
         match board.side_to_move {
-            Color::White => eval,
-            Color::Black => -eval,
+            Color::White => e,
+            Color::Black => -e,
         }
-    }
+    };
+    // Nudge the static eval by the learned correction for this position.
+    eval + state.correction(board, ply)
 }
 
 /// Incrementally update the accumulator from `src_ply` to `dst_ply` for a move.
@@ -2867,7 +3033,7 @@ mod tests {
                     use_nnue: false, // use HCE for tests (zeroed net is useless)
                     ..Default::default()
                 };
-                iterative_deepening(&board, &params, &stop, &tt, None, 0, &NnueNetwork::embedded(), None, None, None, None)
+                iterative_deepening(&board, &params, &stop, &tt, None, 0, &NnueNetwork::embedded(), None, None, None, None, None)
             })
             .expect("failed to spawn search thread")
             .join()
@@ -2889,7 +3055,7 @@ mod tests {
                     contempt,
                     ..Default::default()
                 };
-                iterative_deepening(&board, &params, &stop, &tt, None, 0, &NnueNetwork::embedded(), None, None, None, None)
+                iterative_deepening(&board, &params, &stop, &tt, None, 0, &NnueNetwork::embedded(), None, None, None, None, None)
             })
             .expect("failed to spawn search thread")
             .join()
@@ -2914,7 +3080,7 @@ mod tests {
                     ..Default::default()
                 };
                 let root_tb_solution = syzygy_tb.as_ref().and_then(|tb| crate::syzygy::solve_root_position(tb, &board, 128));
-                iterative_deepening(&board, &params, &stop, &tt, None, 0, &NnueNetwork::embedded(), None, syzygy_tb, root_tb_solution, None)
+                iterative_deepening(&board, &params, &stop, &tt, None, 0, &NnueNetwork::embedded(), None, syzygy_tb, root_tb_solution, None, None)
             })
             .expect("failed to spawn search thread")
             .join()

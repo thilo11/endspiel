@@ -1,10 +1,11 @@
 use std::io::{self, BufRead};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use chess_common::{Board, Move, Score};
+use chess_engine::search::PersistentHistory;
 use chess_engine::{Engine, InfoCallback, SearchInfo, SearchParams};
 
 use crate::protocol::{GoParams, UciCommand, UciInfo, UciOptionDef, UciOptionType, UciResponse};
@@ -79,6 +80,9 @@ pub struct UciHandler {
     /// already spent pondering is credited against `ponder_alloc_ms` so a
     /// well-pondered move plays promptly instead of burning a fresh budget.
     ponder_start: Option<Instant>,
+    /// Game-level history/correction tables, persisted across moves and shared
+    /// into the per-`go` search thread. Reset on `ucinewgame`.
+    history: Arc<Mutex<PersistentHistory>>,
 }
 
 impl Default for UciHandler {
@@ -102,6 +106,7 @@ impl UciHandler {
             ponder_active: false,
             ponder_alloc_ms: 0,
             ponder_start: None,
+            history: Arc::new(Mutex::new(PersistentHistory::new())),
         }
     }
 
@@ -265,6 +270,7 @@ impl UciHandler {
             ("FutMarginImp",   t.fut_margin_imp,    10,  300),
             ("FutMarginNoImp", t.fut_margin_noimp,  10,  300),
             ("SeeQuietMargin", t.see_quiet_margin,  10,  200),
+            ("CorrHistMult",   t.corrhist_mult,     0,   300),
         ] {
             send_response(&UciResponse::Option(UciOptionDef {
                 name: name.to_string(),
@@ -305,6 +311,9 @@ impl UciHandler {
         self.handle_stop();
         self.board = Board::starting_position();
         self.engine.clear_tt();
+        // Fresh game: drop accumulated history/corrections. handle_stop() above
+        // has joined any search thread, so the lock is free.
+        *self.history.lock().unwrap_or_else(|p| p.into_inner()) = PersistentHistory::new();
     }
 
     fn handle_position(&mut self, fen: Option<String>, moves: Vec<String>) {
@@ -399,6 +408,7 @@ impl UciHandler {
         let multi_pv = self.multi_pv;
         let stop = Arc::new(AtomicBool::new(false));
         self.stop_handle = Arc::clone(&stop);
+        let history = Arc::clone(&self.history);
 
         let handle = thread::Builder::new()
             .stack_size(4 * 1024 * 1024) // 4 MB – match helper thread stack size
@@ -433,7 +443,13 @@ impl UciHandler {
                 });
 
                 let pool = chess_engine::threads::ThreadPool::new(num_threads);
-                pool.search(&board, &search_params, &stop, &tt, Some(info_cb), &net, syzygy_tb, root_tb_solution, book)
+                // Hold the game-level history across this search so corrections
+                // accumulate over the game. Recover from a poisoned lock (a prior
+                // search panic) rather than propagating the panic — the tables are
+                // just stats, never unsafe. The guard is released here, before the
+                // ponder-wait below.
+                let mut guard = history.lock().unwrap_or_else(|p| p.into_inner());
+                pool.search(&board, &search_params, &stop, &tt, Some(info_cb), &net, syzygy_tb, root_tb_solution, book, Some(&mut guard))
             }));
 
             let result = match search_result {
@@ -660,7 +676,7 @@ impl UciHandler {
                     self.engine.set_tune_param("hist_lmr_div", n);
                 }
             }
-            "rfpmargimp" => {
+            "rfpmarginimp" => {
                 if let Some(v) = value && let Ok(n) = v.trim().parse::<i32>() {
                     self.engine.set_tune_param("rfp_margin_imp", n);
                 }
@@ -670,7 +686,7 @@ impl UciHandler {
                     self.engine.set_tune_param("rfp_margin_noimp", n);
                 }
             }
-            "futmargimp" => {
+            "futmarginimp" => {
                 if let Some(v) = value && let Ok(n) = v.trim().parse::<i32>() {
                     self.engine.set_tune_param("fut_margin_imp", n);
                 }
@@ -683,6 +699,11 @@ impl UciHandler {
             "seequietmargin" => {
                 if let Some(v) = value && let Ok(n) = v.trim().parse::<i32>() {
                     self.engine.set_tune_param("see_quiet_margin", n);
+                }
+            }
+            "corrhistmult" => {
+                if let Some(v) = value && let Ok(n) = v.trim().parse::<i32>() {
+                    self.engine.set_tune_param("corrhist_mult", n);
                 }
             }
             _ => {
