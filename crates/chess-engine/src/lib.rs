@@ -78,6 +78,8 @@ pub struct TuneParams {
     pub fut_margin_noimp: i32,
     /// SEE quiet-move pruning margin per depth (default 50)
     pub see_quiet_margin: i32,
+    /// Pawn-corrhist correction multiplier ×100 (default 100 → 1.00; 0 disables)
+    pub corrhist_mult: i32,
 }
 
 impl Default for TuneParams {
@@ -91,6 +93,7 @@ impl Default for TuneParams {
             fut_margin_imp: 41,
             fut_margin_noimp: 57,
             see_quiet_margin: 14,
+            corrhist_mult: 100,
         }
     }
 }
@@ -383,6 +386,7 @@ impl Engine {
             "fut_margin_imp"    => { self.tune.fut_margin_imp     = value; true }
             "fut_margin_noimp"  => { self.tune.fut_margin_noimp   = value; true }
             "see_quiet_margin"  => { self.tune.see_quiet_margin   = value; true }
+            "corrhist_mult"     => { self.tune.corrhist_mult      = value; true }
             _ => false,
         }
     }
@@ -398,7 +402,7 @@ impl Engine {
         let mut p = params.clone();
         p.tune = self.tune.clone();
         self.stop.store(false, Ordering::SeqCst);
-        self.thread_pool.search(board, &p, &self.stop, &self.tt, info_callback, &self.nnue_net, self.syzygy_tb.clone(), None, self.book.clone())
+        self.thread_pool.search(board, &p, &self.stop, &self.tt, info_callback, &self.nnue_net, self.syzygy_tb.clone(), None, self.book.clone(), None)
     }
 
     /// Signal the engine to stop searching.

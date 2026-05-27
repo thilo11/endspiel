@@ -74,11 +74,59 @@ impl PawnHashTable {
 }
 
 /// Compute a hash for just the pawn configuration.
-fn pawn_hash(board: &Board) -> u64 {
+pub(crate) fn pawn_hash(board: &Board) -> u64 {
     let wp = board.pieces[Color::White.index()][PieceKind::Pawn.index()].0;
     let bp = board.pieces[Color::Black.index()][PieceKind::Pawn.index()].0;
     // Use distinct multipliers to avoid collisions between colors
     wp.wrapping_mul(0xD4E8E29E56E8AAB6) ^ bp.wrapping_mul(0x6A1E2D3C4B5F8097)
+}
+
+/// Distinct odd multipliers per [color][piece-kind], used to hash piece
+/// placements into correction-history keys.
+const PIECE_MIX: [[u64; 6]; 2] = [
+    // White: P, N, B, R, Q, K
+    [
+        0xD4E8E29E56E8AAB6, 0x9E3779B97F4A7C15, 0xBF58476D1CE4E5B9,
+        0x94D049BB133111EB, 0x2545F4914F6CDD1D, 0xC2B2AE3D27D4EB4F,
+    ],
+    // Black
+    [
+        0x6A1E2D3C4B5F8097, 0xA0761D6478BD642F, 0xE7037ED1A0B428DB,
+        0x8EBC6AF09C88C6E3, 0x589965CC75374CC3, 0x1D8E4E27C47D124F,
+    ],
+];
+
+/// Hash keys for the various correction-history facets of a position.
+pub(crate) struct CorrKeys {
+    pub pawn: u64,
+    pub white: u64, // White's non-pawn placement
+    pub black: u64, // Black's non-pawn placement
+    pub minor: u64, // knights, bishops, kings (both colors)
+    pub major: u64, // rooks, queens, kings (both colors)
+}
+
+pub(crate) fn corr_keys(board: &Board) -> CorrKeys {
+    let bb = |c: Color, k: PieceKind| board.pieces[c.index()][k.index()].0;
+    let mix = |c: Color, k: PieceKind| bb(c, k).wrapping_mul(PIECE_MIX[c.index()][k.index()]);
+
+    let mut white = 0u64;
+    let mut black = 0u64;
+    for k in [PieceKind::Knight, PieceKind::Bishop, PieceKind::Rook, PieceKind::Queen, PieceKind::King] {
+        white ^= mix(Color::White, k);
+        black ^= mix(Color::Black, k);
+    }
+
+    let mut minor = 0u64;
+    for k in [PieceKind::Knight, PieceKind::Bishop, PieceKind::King] {
+        minor ^= mix(Color::White, k) ^ mix(Color::Black, k);
+    }
+
+    let mut major = 0u64;
+    for k in [PieceKind::Rook, PieceKind::Queen, PieceKind::King] {
+        major ^= mix(Color::White, k) ^ mix(Color::Black, k);
+    }
+
+    CorrKeys { pawn: pawn_hash(board), white, black, minor, major }
 }
 
 // Thread-local pawn hash table for zero-contention access

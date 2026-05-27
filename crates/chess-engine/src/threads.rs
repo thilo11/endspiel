@@ -79,12 +79,13 @@ impl ThreadPool {
         syzygy_tb: Option<SyzygyTB>,
         root_tb_solution: Option<(Score, Vec<Move>)>,
         book: Option<Arc<OpeningBook>>,
+        persistent: Option<&mut search::PersistentHistory>,
     ) -> SearchResult {
         tt.new_search();
 
         if self.num_threads <= 1 {
             // Single-thread fast path: avoid SMP setup and root prechecks.
-            return search::iterative_deepening(board, params, stop, tt, info_callback, 0, net, None, syzygy_tb, root_tb_solution, book);
+            return search::iterative_deepening(board, params, stop, tt, info_callback, 0, net, None, syzygy_tb, root_tb_solution, book, persistent);
         }
 
         let root_moves = chess_core::generate_legal_moves(board);
@@ -92,7 +93,7 @@ impl ThreadPool {
 
         if active_threads <= 1 {
             // Single-thread fast path: no spawning overhead
-            return search::iterative_deepening(board, params, stop, tt, info_callback, 0, net, None, syzygy_tb, root_tb_solution, book);
+            return search::iterative_deepening(board, params, stop, tt, info_callback, 0, net, None, syzygy_tb, root_tb_solution, book, persistent);
         }
 
         let counters: Arc<Vec<PaddedCounter>> = Arc::new(
@@ -120,7 +121,7 @@ impl ThreadPool {
                 // in a helper doesn't poison the process.
                 let search_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     search::iterative_deepening(
-                        &board, &params, &stop, &tt, None, thread_id, &net, Some(&counters[thread_id].value), tb, None, book,
+                        &board, &params, &stop, &tt, None, thread_id, &net, Some(&counters[thread_id].value), tb, None, book, None,
                     )
                 }));
                 if let Ok(result) = search_result {
@@ -165,7 +166,7 @@ impl ThreadPool {
         let fallback_move = root_moves.iter().next().copied().unwrap_or(Move::NULL);
 
         let search_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            search::iterative_deepening(board, params, stop, tt, wrapped_cb, 0, net, Some(&counters[0].value), syzygy_tb, root_tb_solution, book)
+            search::iterative_deepening(board, params, stop, tt, wrapped_cb, 0, net, Some(&counters[0].value), syzygy_tb, root_tb_solution, book, persistent)
         }));
 
         let result = match search_result {
