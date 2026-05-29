@@ -35,17 +35,23 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Parameter definitions: (name, UCI_option_name, initial, min, max, step)
 # step = initial perturbation size (roughly 5-10% of expected range)
+#
+# IMPORTANT: the `init` column must stay in sync with TuneParams::default()
+# in crates/chess-engine/src/lib.rs — SPSA starts from these values, so a
+# stale init silently re-tunes a param away from its current best. After
+# applying spsa_result.json back into lib.rs, update these inits too.
 # ---------------------------------------------------------------------------
 PARAMS = [
     # name              UCI name           init   min    max   step
-    ("lmr_base",        "LmrBase",          10,    10,   200,   8),
-    ("lmr_div",         "LmrDiv",          100,   100,   400,  20),
-    ("hist_lmr_div",    "HistLmrDiv",     1000,   500, 20000, 500),
-    ("rfp_margin_imp",  "RfpMarginImp",     15,    10,   300,  10),
-    ("rfp_margin_noimp","RfpMarginNoImp",   15,    10,   300,  10),
-    ("fut_margin_imp",  "FutMarginImp",     15,    10,   300,  10),
-    ("fut_margin_noimp","FutMarginNoImp",   15,    10,   300,  10),
-    ("see_quiet_margin","SeeQuietMargin",   10,    10,   200,   8),
+    ("lmr_base",        "LmrBase",          24,    10,   200,   8),
+    ("lmr_div",         "LmrDiv",          156,   100,   400,  20),
+    ("hist_lmr_div",    "HistLmrDiv",     1055,   500, 20000, 500),
+    ("rfp_margin_imp",  "RfpMarginImp",     70,    10,   300,  10),
+    ("rfp_margin_noimp","RfpMarginNoImp",   98,    10,   300,  10),
+    ("fut_margin_imp",  "FutMarginImp",     41,    10,   300,  10),
+    ("fut_margin_noimp","FutMarginNoImp",   67,    10,   300,  10),
+    ("see_quiet_margin","SeeQuietMargin",   13,    10,   200,   8),
+    ("corrhist_mult",   "CorrHistMult",     82,     0,   300,  20),
 ]
 
 

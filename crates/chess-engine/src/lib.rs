@@ -86,14 +86,14 @@ impl Default for TuneParams {
     fn default() -> Self {
         Self {
             lmr_base: 24,
-            lmr_div: 163,
-            hist_lmr_div: 979,
-            rfp_margin_imp: 41,
-            rfp_margin_noimp: 84,
+            lmr_div: 156,
+            hist_lmr_div: 1055,
+            rfp_margin_imp: 70,
+            rfp_margin_noimp: 98,
             fut_margin_imp: 41,
-            fut_margin_noimp: 57,
-            see_quiet_margin: 14,
-            corrhist_mult: 100,
+            fut_margin_noimp: 67,
+            see_quiet_margin: 13,
+            corrhist_mult: 82,
         }
     }
 }
