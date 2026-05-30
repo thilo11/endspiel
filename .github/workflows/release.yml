@@ -3,8 +3,14 @@ name: Release
 on:
   # Manual-only — tag pushes do not auto-build releases. To cut a release:
   # 1. Push a v* tag (done locally, no CI fires).
-  # 2. In the GitHub UI, Actions > Release > Run workflow, selecting the tag as the ref.
+  # 2. In the GitHub UI, Actions > Release > Run workflow, then enter the tag
+  #    (e.g. v1.1.0) in the "tag" input. Both the build and the release are
+  #    pinned to that tag regardless of which branch/ref the run is dispatched on.
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and publish (e.g. v1.1.0)"
+        required: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -64,6 +70,8 @@ jobs:
             pgo: false
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag }}
 
       - uses: dtolnay/rust-toolchain@1.95.0
         with:
@@ -146,6 +154,11 @@ jobs:
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
+        env:
+          # Opt into Node.js 24; silences the Node 20 deprecation warning until
+          # the action ships a Node 24 release.
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
         with:
+          tag_name: ${{ inputs.tag }}
           generate_release_notes: true
           files: artifacts/*
