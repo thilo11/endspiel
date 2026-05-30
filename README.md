@@ -62,7 +62,7 @@ Prebuilt binaries are on the [Releases](https://github.com/thilo11/endspiel/rele
 | Windows x86_64 (AVX-512) | `endspiel-win-x64-avx512.exe` | `x86-64-v4` — faster on CPUs with AVX-512 |
 | Windows ARM64 | `endspiel-win-arm64.exe` | generic ARM64 |
 | macOS Apple Silicon | `endspiel-mac-arm64` | `apple-m1`, PGO-optimised |
-| Raspberry Pi 5 | `endspiel-linux-arm64-pi5` | `cortex-a76`, PGO-optimised; requires Pi OS Trixie (glibc ≥ 2.39) |
+| Raspberry Pi 5 | `endspiel-linux-arm64-pi5` | `cortex-a76`, PGO-optimised; needs Raspberry Pi OS (Trixie / Debian 13) or newer — glibc ≥ 2.39 |
 
 **Picking a build.** The recommended (`-v3`) builds run on essentially any
 CPU sold in the last decade and are profile-guided-optimised for ~5–15%
