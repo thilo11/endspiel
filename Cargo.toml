@@ -7,7 +7,7 @@ resolver = "3"
 version = "1.1.1-dev"
 edition = "2024"
 license = "GPL-3.0-or-later"
-rust-version = "1.95.0"
+rust-version = "1.96.0"
 
 [workspace.dependencies]
 chess-common = { path = "crates/chess-common" }
