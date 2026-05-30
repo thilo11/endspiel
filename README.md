@@ -1,5 +1,12 @@
 # Endspiel
 
+[![CI](https://github.com/thilo11/endspiel/actions/workflows/ci.yml/badge.svg)](https://github.com/thilo11/endspiel/actions/workflows/ci.yml)
+[![Release](https://github.com/thilo11/endspiel/actions/workflows/release.yml/badge.svg)](https://github.com/thilo11/endspiel/actions/workflows/release.yml)
+[![GitHub release](https://img.shields.io/github/v/release/thilo11/endspiel)](https://github.com/thilo11/endspiel/releases)
+[![License](https://img.shields.io/github/license/thilo11/endspiel)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-stable-orange?logo=rust)](https://www.rust-lang.org)
+[![Downloads](https://img.shields.io/github/downloads/thilo11/endspiel/total)](https://github.com/thilo11/endspiel/releases)
+
 > **Endspiel** /ˈɛnt.ʃpiːl/ *n.* (German) &nbsp; **1.** the final, decisive game. &nbsp; **2.** the final phase of a chess game.
 
 A UCI chess engine written in Rust — bitboards and move generation, the
