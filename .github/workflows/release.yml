@@ -73,7 +73,7 @@ jobs:
         with:
           ref: ${{ inputs.tag }}
 
-      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: dtolnay/rust-toolchain@1.96.0
         with:
           targets: ${{ matrix.target }}
           components: ${{ matrix.pgo && 'llvm-tools-preview' || '' }}
