@@ -5,7 +5,7 @@
 [![GitHub release](https://img.shields.io/github/v/release/thilo11/endspiel)](https://github.com/thilo11/endspiel/releases)
 [![License](https://img.shields.io/github/license/thilo11/endspiel)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-stable-orange?logo=rust)](https://www.rust-lang.org)
-[![Downloads](https://img.shields.io/github/downloads/thilo11/endspiel/total)](https://github.com/thilo11/endspiel/releases)
+[![Lichess](https://img.shields.io/badge/lichess-play%20endspiel--engine-green?logo=lichess)](https://lichess.org/@/endspiel-engine)
 
 > **Endspiel** /ˈɛnt.ʃpiːl/ *n.* (German) &nbsp; **1.** the final, decisive game. &nbsp; **2.** the final phase of a chess game.
 
