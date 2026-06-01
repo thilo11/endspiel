@@ -182,3 +182,8 @@ available RAM (floor 16 MB). Both remain overridable via UCI `setoption`.
 ## License
 
 GPL-3.0-or-later — see [LICENSE](LICENSE).
+
+## Credits
+
+Third-party software, tablebase/training tooling, and technique inspirations are
+documented in [CREDITS.md](CREDITS.md).
