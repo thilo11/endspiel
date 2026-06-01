@@ -63,7 +63,8 @@ pub struct UciHandler {
     /// Join handle for the currently running search thread, if any.
     search_thread: Option<thread::JoinHandle<()>>,
     /// Whether the GUI has explicitly set the Hash size via setoption.
-    /// If false, `handle_isready` will apply the default 4096 MB.
+    /// If false, `handle_isready` will apply the device-adaptive default
+    /// (see `chess_common::platform::default_hash_mb`).
     hash_explicitly_set: bool,
     /// Whether to emit `wdl <win> <draw> <loss>` on each info line.
     show_wdl: bool,
@@ -174,7 +175,8 @@ impl UciHandler {
         send_response(&UciResponse::Option(UciOptionDef {
             name: "Hash".to_string(),
             opt_type: UciOptionType::Spin {
-                default: 256,
+                default: chess_common::platform::default_hash_mb(self.engine.num_threads())
+                    as i64,
                 min: 1,
                 max: 131072,
             },
@@ -298,11 +300,15 @@ impl UciHandler {
         self.wait_for_search();
         // Allocate the TT at the configured size now that all setoptions
         // have been processed.  If the GUI never sent setoption Hash, apply
-        // the default 4096 MB here (deferred from Engine::new to avoid
-        // allocating 4 GB × concurrency at startup).
+        // the device-adaptive default here (deferred from Engine::new to avoid
+        // allocating it × concurrency at startup).
         if !self.hash_explicitly_set {
-            self.engine.set_hash_mb(256);
-            log::info!("Hash defaulting to 256 MB (no setoption received)");
+            let mb = chess_common::platform::default_hash_mb(self.engine.num_threads());
+            self.engine.set_hash_mb(mb);
+            log::info!(
+                "Hash defaulting to {mb} MB for {} threads (no setoption received)",
+                self.engine.num_threads()
+            );
         }
         send_response(&UciResponse::ReadyOk);
     }

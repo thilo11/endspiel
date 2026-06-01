@@ -2,6 +2,7 @@ pub mod board;
 pub mod moves;
 pub mod fen;
 pub mod pgn;
+pub mod platform;
 pub mod types;
 
 pub use board::Board;

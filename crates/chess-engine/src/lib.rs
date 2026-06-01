@@ -183,11 +183,10 @@ impl Engine {
     /// default 4 GB transposition table.
     pub fn with_hash(hash_mb: usize) -> Self {
         let hash_mb = hash_mb.clamp(1, 131072);
-        // Default to min(available_parallelism, 16).
+        // Device-adaptive default: performance-core count on Android,
+        // min(available_parallelism, 16) elsewhere.
         // Can be overridden via UCI "setoption name Threads value N".
-        let num_threads = std::thread::available_parallelism()
-            .map(|n| n.get().min(16))
-            .unwrap_or(1);
+        let num_threads = chess_common::platform::default_threads();
         Self {
             stop: Arc::new(AtomicBool::new(false)),
             tt: Arc::new(SharedTT::new(hash_mb)),

@@ -20,6 +20,7 @@ chess-uci = { path = "crates/chess-uci" }
 bulletformat = "1.8.0"
 log = "0.4.29"
 env_logger = "0.11.10"
+sysinfo = { version = "0.39.3", default-features = false, features = ["system"] }
 thiserror = "2.0.18"
 
 [package]

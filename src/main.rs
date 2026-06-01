@@ -17,6 +17,7 @@ fn real_main() {
         .init();
 
     log::info!("Endspiel engine starting");
+    chess_common::platform::log_summary();
 
     let args: Vec<String> = env::args().collect();
 

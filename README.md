@@ -124,8 +124,8 @@ check that the binary runs end-to-end:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `Hash` | 256 | Transposition table size in MB |
-| `Threads` | min(available, 16) | Search threads |
+| `Hash` | auto (RAM + threads) | Transposition table size in MB |
+| `Threads` | auto (cores) | Search threads |
 | `Move Overhead` | 20 | Time safety margin in ms |
 | `Slow Mover` | 100 | Time usage scaling (%) — >100 thinks longer, <100 plays faster |
 | `Ponder` | false | Think on the opponent's time; the GUI toggles this and drives `go ponder` / `ponderhit` |
@@ -142,8 +142,8 @@ Set `BookFile` or `SyzygyPath` to a valid path to enable; clear to disable. No s
 
 ### Notes
 
-- **`Hash`** — increase for long time controls or analysis; watch `hashfull` in engine output (permille, so 950 = 95%).
-- **`Threads`** — Lazy SMP; scaling is sub-linear. Stick to physical core count.
+- **`Hash`** — increase for long time controls or analysis; watch `hashfull` in engine output (permille, so 950 = 95%). The default adapts to the machine: ~128 MB per search thread (more threads fill the table faster), capped at ~1/16 of available RAM, floor 16 MB. So it grows with both core count and RAM, and tracks an explicit `Threads` setting.
+- **`Threads`** — Lazy SMP; scaling is sub-linear. Stick to physical core count. On Linux/Android the default is the performance-core count (the top CPU-frequency tier), which avoids the slow LITTLE cores and the thermal throttling they invite; elsewhere it's `min(available, 16)`.
 - **`EvalFile`** — load an alternate net at runtime without rebuilding. Clear to revert to the embedded net.
 - **`SyzygyPath`** — WDL probing for 3–5 man endgames. Multiple directories: `:` on Linux/macOS, `;` on Windows.
 
@@ -160,6 +160,24 @@ Requires Rust 1.95.0+.
 cargo build --release
 # binary: target/release/endspiel
 ```
+
+### Android (arm64)
+
+Cross-compile a standalone CLI binary for 64-bit Android. It speaks UCI over
+stdin/stdout like the desktop build and runs under Termux or via `adb shell`.
+
+```bash
+rustup target add aarch64-linux-android
+cargo install cargo-ndk
+export ANDROID_NDK_HOME=/path/to/android-ndk   # r23+
+
+scripts/build-android.sh
+# binary: target/aarch64-linux-android/release/endspiel
+```
+
+On-device the engine auto-tunes its defaults: `Threads` is the performance-core
+count of the SoC, and `Hash` is ~128 MB per such core, capped at ~1/16 of
+available RAM (floor 16 MB). Both remain overridable via UCI `setoption`.
 
 ## License
 
