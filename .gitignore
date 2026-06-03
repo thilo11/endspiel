@@ -13,26 +13,18 @@ Cargo.lock
 .DS_Store
 .envrc
 
-# ── Python ──
+# ── Python (lichess-bot analysis scripts) ──
 __pycache__/
 *.pyc
 .venv/
 
-# ── Local-only data, assets & nets (books, tablebases, training data) ──
+# ── Local-only assets & nets (books, tablebases) ──
 assets/
 resources
-/data/
-train/checkpoints/
-*.bin
-*.txt
-*.csv
-*.pgn
 
 # ── Build / run outputs & release artifacts ──
 /dist
-/games
 endspiel-*
-puzzle_results/
 
 # ── Local-only tooling & scratch (incl. lichess-bot analysis) ──
 .claude/
@@ -41,8 +33,6 @@ debug_*.py
 debug_*.sh
 test_*.sh
 
-# ── Local config & tuning output ──
+# ── Local config & tuning output (chess-tuner) ──
 config.json
 tuned_params.json
-spsa_checkpoint*.json
-spsa_result.json

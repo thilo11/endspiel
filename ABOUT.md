@@ -79,5 +79,4 @@ same pipeline and the embedded net is swapped in via a single rebuild.
 ## Further reading
 
 - [README.md](README.md) — install, run, UCI options
-- [TRAINING.md](TRAINING.md) — data generation and NNUE training pipeline
 - [DEVELOPMENT.md](DEVELOPMENT.md) — architecture, build, contributing

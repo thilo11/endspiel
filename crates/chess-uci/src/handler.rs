@@ -11,8 +11,8 @@ use chess_engine::{Engine, InfoCallback, SearchInfo, SearchParams};
 use crate::protocol::{GoParams, UciCommand, UciInfo, UciOptionDef, UciOptionType, UciResponse};
 
 /// WDL normalization parameters for P(win | score) = sigmoid((score − a) / b).
-/// Re-run `wdl-fit --input data/archive/archive_shuf.bin` after each net promotion
-/// and update these two constants with the printed values.
+/// Re-fit against training data after each net promotion and update these two
+/// constants with the printed values.
 const WDL_A: f64 = 9.6;
 const WDL_B: f64 = 262.0;
 

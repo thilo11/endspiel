@@ -11,11 +11,8 @@
 │   ├── chess-engine/             # Search, HCE evaluation, Syzygy WDL probing
 │   ├── chess-nnue/               # NNUE inference + embedded net (build.rs)
 │   ├── chess-uci/                # UCI protocol handler
-│   ├── chess-tuner/              # HCE parameter tuner
-│   └── chess-datagen/            # Self-play data generation
-│       └── src/bin/eval-bench.rs # Standalone eval benchmark
-├── train/                        # Bullet-based NNUE trainer (excluded from workspace)
-├── scripts/                      # Pipeline, fastchess helpers, Syzygy download
+│   └── chess-tuner/              # HCE parameter tuner
+├── scripts/                      # build & setup helpers (Android build, Syzygy download)
 └── assets/                       # Gitignored — local resources (book, tablebases)
 ```
 
@@ -179,10 +176,9 @@ Include the new node count in the PR description as
 
 ### Promoting a New NNUE Net
 
-See [TRAINING.md](TRAINING.md) for how to generate data, train a candidate,
-and run matches. A PR that replaces `crates/chess-nnue/nets/default.nnue`
-must demonstrate that the candidate is stronger than the current embedded
-net. Suggested minimum evidence (adjust upward if the change is high-risk):
+A change that replaces `crates/chess-nnue/nets/default.nnue` must demonstrate
+that the candidate is stronger than the current embedded net. Suggested minimum
+evidence (adjust upward if the change is high-risk):
 
 1. **Self-play gate** — fastchess match against the current `default.nnue`:
    - At least **500 games** at `tc=10+0.1`, `Hash=64`, `Threads=1`
@@ -201,11 +197,9 @@ net. Suggested minimum evidence (adjust upward if the change is high-risk):
    note it in the PR (the size is also checked by `crates/chess-nnue/build.rs`).
 
 4. **WDL refit** — if the new net shifts the win-rate ↔ centipawn mapping,
-   re-run `wdl-fit` and include the updated `WDL_A` / `WDL_B` values in the
-   PR (see TRAINING.md → *Swapping the Embedded Net*).
+   re-fit and include the updated `WDL_A` / `WDL_B` values in the PR.
 
-The PR description, not this guide and not TRAINING.md, is where the
-judgement call to ship lives.
+The PR description, not this guide, is where the judgement call to ship lives.
 
 ## Syzygy Tablebases
 
