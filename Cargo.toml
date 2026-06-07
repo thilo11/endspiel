@@ -16,7 +16,7 @@ chess-nnue = { path = "crates/chess-nnue" }
 chess-tuner = { path = "crates/chess-tuner" }
 chess-uci = { path = "crates/chess-uci" }
 bulletformat = "1.8.0"
-log = "0.4.29"
+log = "0.4.32"
 env_logger = "0.11.10"
 sysinfo = { version = "0.39.3", default-features = false, features = ["system"] }
 thiserror = "2.0.18"
