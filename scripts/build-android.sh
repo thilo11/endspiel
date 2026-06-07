@@ -41,13 +41,13 @@ fi
 rustup target add "$TARGET" >/dev/null 2>&1 || true
 
 echo "Building endspiel for $ABI ($TARGET), minSdk $API, target-cpu=$CPU ..."
-RUSTFLAGS="-C target-cpu=$CPU" \
+RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=$CPU" \
   cargo ndk --target "$ABI" --platform "$API" \
   build --release --bin endspiel
 
 OUT="target/${TARGET}/release/endspiel"
 echo
-echo "Built: $OUT"
+echo "Built: $OUT  ($(du -h "$OUT" 2>/dev/null | cut -f1 || echo '?'))"
 file "$OUT" 2>/dev/null || true
 echo
 echo "Run on a device, e.g.:"

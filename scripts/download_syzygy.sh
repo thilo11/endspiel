@@ -34,7 +34,9 @@ while [[ $# -gt 0 ]]; do
         --dir)      DEST_DIR="$2" ; shift 2 ;;
         --pieces)   PIECES="$2" ; shift 2 ;;
         -h|--help)
-            grep '^#' "$0" | sed 's/^# \?//'
+            # Print the leading header block only (skip the shebang, stop at
+            # the first non-comment line).
+            awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$0"
             exit 0 ;;
         *) echo "Unknown argument: $1" >&2 ; exit 1 ;;
     esac
@@ -110,26 +112,20 @@ if ! command -v rsync &>/dev/null; then
 fi
 
 # ---------------------------------------------------------------------------
-# Download – only 3/4/5-man files (filter by piece-count prefix pattern)
+# Download
 # ---------------------------------------------------------------------------
-# Syzygy file names encode piece counts as K*K* where * is any piece letter.
-# 3-man: KXK   (3 chars between K…K pattern, e.g. KQK, KRK, KBK, KNK, KPK)
-# 4-man: KXXK or KXKX
-# 5-man: KXXXK or KXXKX or KXKXX
-#
-# We use rsync's --filter rules to include only files whose base name has at
-# most 7 characters before .rtb{w,z} (the longest 5-man name is 7 chars,
-# e.g. KQPKQP would be 6-man; 5-man max is KQQPKP = 6 chars).
-# Practically: include all and let TB_LARGEST do the right thing at runtime.
-# The extra 6-7 man files are large (many GB) and Sesse only hosts them on
-# separate paths, so the filter below is sufficient.
+# Piece count is selected by source directory (3-4-5 / 6-WDL / 6-DTZ, chosen
+# from --pieces above); within each source we keep only the requested file
+# types via the .rtbw / .rtbz include filter built earlier.
 
 echo "Starting rsync download (this may take several minutes to many hours)..."
 echo ""
 
 for src in "${RSYNC_SOURCES[@]}"; do
     echo ">>> Fetching from $src"
-    rsync -avz --no-compress --progress \
+    # No -z: Syzygy tables are already compressed, so on-the-wire compression
+    # only costs CPU with no transfer gain.
+    rsync -av --progress \
           "${FILTER_ARGS[@]}" \
           "$src" \
           "$DEST_DIR/" \
