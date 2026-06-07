@@ -1,38 +1,37 @@
 # ── Rust / Cargo build artifacts ──
+# Cargo.lock IS tracked (shipped binary → reproducible builds)
 target/
-Cargo.lock
 **/*.rs.bk
 .cargo/config.toml
 
 # ── Editors, IDEs, OS cruft ──
-*.swp
-*.swo
 *~
-.vscode/
-.idea/
+*.swo
+*.swp
 .DS_Store
-.envrc
+.idea/
+.vscode/
 
 # ── Python (lichess-bot analysis scripts) ──
 __pycache__/
 *.pyc
 .venv/
 
-# ── Local-only assets & nets (books, tablebases) ──
+# ── Local environment & config (incl. chess-tuner output) ──
+.envrc
+config.json
+tuned_params.json
+
+# ── Local-only assets & nets (books, tablebases, openings) ──
 assets/
-resources
 
-# ── Build / run outputs & release artifacts ──
-/dist
-endspiel-*
-
-# ── Local-only tooling & scratch (incl. lichess-bot analysis) ──
+# ── Local-only tooling, analysis & scratch ──
 .claude/
-/lichess
+/lichess/
 debug_*.py
 debug_*.sh
 test_*.sh
 
-# ── Local config & tuning output (chess-tuner) ──
-config.json
-tuned_params.json
+# ── Build / run outputs & release artifacts ──
+/dist/
+endspiel-*
