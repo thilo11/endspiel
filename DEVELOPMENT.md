@@ -177,26 +177,19 @@ Include the new node count in the PR description as
 ### Promoting a New NNUE Net
 
 A change that replaces `crates/chess-nnue/nets/default.nnue` must demonstrate
-that the candidate is stronger than the current embedded net. Suggested minimum
-evidence (adjust upward if the change is high-risk):
+that the candidate is stronger than the current embedded net. The promotion
+decision is made **head-to-head against the current embedded net**, by LOS:
 
-1. **Self-play gate** — fastchess match against the current `default.nnue`:
+1. **Promotion gate — self-play vs the embedded net** — fastchess match,
+   candidate vs the current `default.nnue`:
    - At least **500 games** at `tc=10+0.1`, `Hash=64`, `Threads=1`
-   - Candidate wins with **LOS ≥ 95%** (preferably ≥ 99%)
-   - Paste the final `Games / Wins / Losses / Draws / Elo` line in the PR
+   - Promote only if the candidate wins with **LOS ≥ 99%**
+   - Paste the final `Games / Wins / Losses / Draws / Elo / LOS` line in the PR
 
-2. **Absolute test vs Stockfish** — confirms the gain is not just
-   parent-exploitation:
-   - At least **200 games** vs Stockfish at a fixed `UCI_Elo` (the project
-     baseline uses `UCI_Elo=3190`), same TC and options as above
-   - Candidate's Elo must be **no worse than the current baseline within
-     1 standard deviation** — ideally a clear improvement
-   - Paste the result line in the PR
-
-3. **Architecture / size changes** — if the net file size or layout changed,
+2. **Architecture / size changes** — if the net file size or layout changed,
    note it in the PR (the size is also checked by `crates/chess-nnue/build.rs`).
 
-4. **WDL refit** — if the new net shifts the win-rate ↔ centipawn mapping,
+3. **WDL refit** — if the new net shifts the win-rate ↔ centipawn mapping,
    re-fit and include the updated `WDL_A` / `WDL_B` values in the PR.
 
 The PR description, not this guide, is where the judgement call to ship lives.
