@@ -1,7 +1,7 @@
 # About Endspiel
 
-Endspiel is first and foremost a **learning and craft project**, with two
-goals running in parallel:
+Endspiel is a **ground-up chess engine and a live experiment in
+AI-assisted development**, with two goals running in parallel:
 
 1. **Build a competitive chess engine end-to-end from scratch in Rust** —
    bitboards and move generation, alpha-beta search with modern pruning
@@ -26,16 +26,22 @@ The engine plays a strong game. It is well above the level of any human
 player — including masters — and is comfortably useful as a sparring
 partner and for position analysis.
 
-As a rough indication (not a controlled benchmark), a recent match
-against Stockfish limited to `UCI_Elo=3000`, played at `tc=10+0.1`,
-1 thread, 64 MB hash:
+As a rough indication, a 400-game match against **Stockfish 17.1**
+(Ubuntu package `17-1build1`) at a fixed `Skill Level 18`, played at
+`tc=10+0.1`, 1 thread, 64 MB hash, openings from `openings.epd`:
 
 ```
-Elo: +76.79 ± 28.05    nElo: +96.53 ± 34.05
-LOS: 100.00 %          DrawRatio: 36.50 %     PairsRatio: 2.26
-Games: 400  W 194  L 107  D 99   Points 243.5 (60.88 %)
-Ptnml(0-2): [7, 32, 73, 43, 45]  WL/DD: 5.08
+Elo: -54.29 ± 24.39    nElo: -77.17 ± 34.05
+LOS: 0.00 %            DrawRatio: 39.50 %     PairsRatio: 0.46
+Games: 400  W 97  L 159  D 144   Points 169.0 (42.25 %)
+Ptnml(0-2): [24, 59, 79, 31, 7]  WL/DD: 1.93
 ```
+
+The engine trails a near-full-strength Stockfish but is still far above
+human play. Strength is anchored to a fixed Stockfish `Skill Level`
+against a pinned Stockfish version, rather than `UCI_Elo` /
+`UCI_LimitStrength`, whose scale is RNG-calibrated and drifts between
+Stockfish releases (so its numbers aren't comparable over time).
 
 If you want the top of the Rust-engine charts, look at
 [Reckless](https://github.com/codedeliveryservice/Reckless) or a
