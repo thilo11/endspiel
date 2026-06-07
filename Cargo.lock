@@ -87,7 +87,7 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "chess-common"
-version = "1.2.0"
+version = "1.2.1-dev"
 dependencies = [
  "log",
  "sysinfo",
@@ -96,7 +96,7 @@ dependencies = [
 
 [[package]]
 name = "chess-core"
-version = "1.2.0"
+version = "1.2.1-dev"
 dependencies = [
  "chess-common",
  "log",
@@ -105,7 +105,7 @@ dependencies = [
 
 [[package]]
 name = "chess-engine"
-version = "1.2.0"
+version = "1.2.1-dev"
 dependencies = [
  "chess-common",
  "chess-core",
@@ -117,14 +117,14 @@ dependencies = [
 
 [[package]]
 name = "chess-nnue"
-version = "1.2.0"
+version = "1.2.1-dev"
 dependencies = [
  "chess-common",
 ]
 
 [[package]]
 name = "chess-tuner"
-version = "1.2.0"
+version = "1.2.1-dev"
 dependencies = [
  "chess-common",
  "chess-core",
@@ -137,7 +137,7 @@ dependencies = [
 
 [[package]]
 name = "chess-uci"
-version = "1.2.0"
+version = "1.2.1-dev"
 dependencies = [
  "chess-common",
  "chess-core",
@@ -185,7 +185,7 @@ checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
 
 [[package]]
 name = "endspiel-bin"
-version = "1.2.0"
+version = "1.2.1-dev"
 dependencies = [
  "chess-common",
  "chess-core",
