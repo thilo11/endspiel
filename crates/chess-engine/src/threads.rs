@@ -96,6 +96,15 @@ impl ThreadPool {
             return search::iterative_deepening(board, params, stop, tt, info_callback, 0, net, None, syzygy_tb, root_tb_solution, book, persistent);
         }
 
+        // `max_nodes` is a GLOBAL budget, but each SMP thread enforces only its
+        // own local node count. Split the budget across threads so the aggregate
+        // respects the requested limit; previously every thread searched the full
+        // budget, making the real total ≈ active_threads × max_nodes.
+        let node_budget: Option<Vec<u64>> = params.max_nodes.map(|n| {
+            let t = active_threads as u64;
+            (0..t).map(|i| n / t + u64::from(i < n % t)).collect()
+        });
+
         let counters: Arc<Vec<PaddedCounter>> = Arc::new(
             (0..active_threads).map(|_| PaddedCounter::new()).collect(),
         );
@@ -105,7 +114,10 @@ impl ThreadPool {
 
         for thread_id in 1..active_threads {
             let board = board.clone();
-            let params = params.clone();
+            let mut params = params.clone();
+            if let Some(b) = &node_budget {
+                params.max_nodes = Some(b[thread_id]);
+            }
             let stop = Arc::clone(stop);
             let tt = Arc::clone(tt);
             let counters = Arc::clone(&counters);
@@ -165,8 +177,13 @@ impl ThreadPool {
         // legal root move.
         let fallback_move = root_moves.iter().next().copied().unwrap_or(Move::NULL);
 
+        let mut main_params = params.clone();
+        if let Some(b) = &node_budget {
+            main_params.max_nodes = Some(b[0]);
+        }
+
         let search_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            search::iterative_deepening(board, params, stop, tt, wrapped_cb, 0, net, Some(&counters[0].value), syzygy_tb, root_tb_solution, book, persistent)
+            search::iterative_deepening(board, &main_params, stop, tt, wrapped_cb, 0, net, Some(&counters[0].value), syzygy_tb, root_tb_solution, book, persistent)
         }));
 
         let result = match search_result {
@@ -225,5 +242,57 @@ mod tests {
     fn wider_roots_keep_requested_threads() {
         assert_eq!(active_thread_count(8, 5), 8);
         assert_eq!(active_thread_count(4, 20), 4);
+    }
+
+    use super::ThreadPool;
+    use crate::tt::SharedTT;
+    use crate::SearchParams;
+    use chess_common::Board;
+    use chess_nnue::NnueNetwork;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
+    fn run_search(threads: usize, params: SearchParams) -> super::SearchResult {
+        let board = Board::starting_position();
+        let net = NnueNetwork::embedded();
+        let pool = ThreadPool::new(threads);
+        let tt = Arc::new(SharedTT::new(16));
+        let stop = Arc::new(AtomicBool::new(false));
+        pool.search(&board, &params, &stop, &tt, None, &net, None, None, None, None)
+    }
+
+    /// `max_nodes` is a GLOBAL budget: adding threads must not multiply the node
+    /// count. Before the per-thread fix, every SMP thread searched the full limit
+    /// so the aggregate was ≈ threads × limit (≈2.4M at 8 threads here).
+    #[test]
+    fn node_budget_is_global_across_threads() {
+        let limit = 300_000u64;
+        let mk = || SearchParams {
+            max_nodes: Some(limit),
+            ..SearchParams::default()
+        };
+
+        let n1 = run_search(1, mk()).nodes;
+        assert!(n1 <= limit * 2, "single-thread nodes {n1} exceeded 2x budget {limit}");
+
+        let n8 = run_search(8, mk()).nodes;
+        assert!(
+            n8 <= limit * 2,
+            "8-thread nodes {n8} exceeded 2x budget {limit} (per-thread node-limit regression)"
+        );
+    }
+
+    /// `max_depth` must bound the search under SMP — without a node/time limit the
+    /// iterative-deepening loop must stop at the requested depth, not run to MAX_PLY.
+    #[test]
+    fn depth_limit_respected_across_threads() {
+        let res = run_search(
+            8,
+            SearchParams {
+                max_depth: 8,
+                ..SearchParams::default()
+            },
+        );
+        assert_eq!(res.depth, 8, "search did not stop at max_depth 8 (got {})", res.depth);
     }
 }
