@@ -26,18 +26,28 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: linux-x64
+          - name: linux-x64-v3
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact: endspiel-linux-x64
+            artifact: endspiel-linux-x64-v3
             rustflags: "-C target-cpu=x86-64-v3"
             pgo: true
-          - name: linux-x64-avx512
+          - name: linux-x64-v4
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact: endspiel-linux-x64-avx512
+            artifact: endspiel-linux-x64-v4
             rustflags: "-C target-cpu=x86-64-v4"
             pgo: false
+          # Lower tier for x86-64 CPUs without AVX2 (the default is v3/AVX2).
+          # v2 = SSE4.2 + POPCNT — covers pre-2013 mainstream and recent low-end
+          # Intel (Gemini/Jasper Lake). PGO works: the CI runner can run a
+          # lower-feature binary to generate the profile.
+          - name: linux-x64-v2
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: endspiel-linux-x64-v2
+            rustflags: "-C target-cpu=x86-64-v2"
+            pgo: true
           - name: mac-arm64
             os: macos-latest
             target: aarch64-apple-darwin
@@ -50,18 +60,24 @@ jobs:
             artifact: endspiel-linux-arm64-pi5
             rustflags: "-C target-cpu=cortex-a76"
             pgo: true
-          - name: win-x64
+          - name: win-x64-v3
             os: windows-2025-vs2026
             target: x86_64-pc-windows-msvc
-            artifact: endspiel-win-x64.exe
+            artifact: endspiel-win-x64-v3.exe
             rustflags: "-C target-cpu=x86-64-v3"
             pgo: true
-          - name: win-x64-avx512
+          - name: win-x64-v4
             os: windows-2025-vs2026
             target: x86_64-pc-windows-msvc
-            artifact: endspiel-win-x64-avx512.exe
+            artifact: endspiel-win-x64-v4.exe
             rustflags: "-C target-cpu=x86-64-v4"
             pgo: false
+          - name: win-x64-v2
+            os: windows-2025-vs2026
+            target: x86_64-pc-windows-msvc
+            artifact: endspiel-win-x64-v2.exe
+            rustflags: "-C target-cpu=x86-64-v2"
+            pgo: true
           - name: win-arm64
             os: windows-2025-vs2026
             target: aarch64-pc-windows-msvc

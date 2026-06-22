@@ -59,24 +59,34 @@ See [ABOUT.md](ABOUT.md) for project rationale, playing strength, and training d
 
 ## Download
 
-Prebuilt binaries are on the [Releases](https://github.com/thilo11/endspiel/releases) page:
+Prebuilt binaries are on the [Releases](https://github.com/thilo11/endspiel/releases) page.
 
-| Platform | Binary | ISA / notes |
-|----------|--------|-------------|
-| Linux x86_64 (recommended) | `endspiel-linux-x64` | AVX2 / `x86-64-v3`, PGO-optimised |
-| Linux x86_64 (AVX-512) | `endspiel-linux-x64-avx512` | `x86-64-v4` — faster on Zen 4/5, Sapphire Rapids, etc. |
-| Windows x86_64 (recommended) | `endspiel-win-x64.exe` | AVX2 / `x86-64-v3`, PGO-optimised |
-| Windows x86_64 (AVX-512) | `endspiel-win-x64-avx512.exe` | `x86-64-v4` — faster on CPUs with AVX-512 |
-| Windows ARM64 | `endspiel-win-arm64.exe` | generic ARM64 |
+**x86-64** ships in four micro-architecture tiers (each faster than the one
+below, all but `-v4` profile-guided-optimised). Pick the **highest your CPU
+supports**:
+
+| Tier | Linux | Windows | CPU requirement |
+|------|-------|---------|-----------------|
+| `v4` | `endspiel-linux-x64-v4` | `endspiel-win-x64-v4.exe` | **AVX-512** — AMD Zen 4/5, Intel Skylake-X / Ice Lake+ (typically 30–60% faster NNUE eval) |
+| `v3` *(default)* | `endspiel-linux-x64-v3` | `endspiel-win-x64-v3.exe` | **AVX2** — Intel Haswell (2013)+, AMD Zen / Excavator+ |
+| `v2` | `endspiel-linux-x64-v2` | `endspiel-win-x64-v2.exe` | **SSE4.2 + POPCNT** — pre-2013 mainstream + recent low-end Intel (Gemini/Jasper Lake) without AVX2 |
+
+**Other platforms:**
+
+| Platform | Binary | Notes |
+|----------|--------|-------|
 | macOS Apple Silicon | `endspiel-mac-arm64` | `apple-m1`, PGO-optimised |
+| Windows ARM64 | `endspiel-win-arm64.exe` | generic ARM64 |
 | Raspberry Pi 5 | `endspiel-linux-arm64-pi5` | `cortex-a76`, PGO-optimised; needs Raspberry Pi OS (Trixie / Debian 13) or newer — glibc ≥ 2.39 |
+| Android arm64 | `endspiel-android-arm64` | `arm64-v8a`, minSdk 24 (Termux / `adb shell`) |
 
-**Picking a build.** The recommended (`-v3`) builds run on essentially any
-CPU sold in the last decade and are profile-guided-optimised for ~5–15%
-extra throughput. If your CPU has AVX-512 (AMD Zen 4/5, recent Intel
-Xeon, etc.), the `-avx512` build is typically 30–60% faster on NNUE
-evaluation but will refuse to run on older hardware (illegal-instruction
-crash). When in doubt, use the recommended build.
+**Picking an x86-64 build.** `-v3` (AVX2) is the safe default — it runs on
+essentially any CPU sold since ~2013. Go up to `-v4` if your CPU has AVX-512
+(AMD Zen 4/5, recent Intel) for a sizeable NNUE-eval speedup; drop to `-v2`
+only for older or low-end (no-AVX2) hardware. If a build aborts immediately with an **illegal-
+instruction** crash, your CPU lacks that tier's instructions — step down one
+tier. On Linux you can check support with
+`lscpu | grep -oE 'avx512f|avx2|sse4_2'` (highest match wins).
 
 **Raspberry Pi 5.** Any RAM tier runs the engine; hash size is the only
 thing that scales with it. Set `Hash` in your GUI rather than relying on

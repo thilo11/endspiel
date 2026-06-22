@@ -17,9 +17,13 @@ Build targets and flags:
 
 | Target                   | Binary                    | RUSTFLAGS               |
 |--------------------------|---------------------------|-------------------------|
-| x86_64-unknown-linux-gnu | endspiel-linux-x64        | -C target-cpu=x86-64-v3 |
+| x86_64-unknown-linux-gnu | endspiel-linux-x64-v4     | -C target-cpu=x86-64-v4 |
+| x86_64-unknown-linux-gnu | endspiel-linux-x64-v3     | -C target-cpu=x86-64-v3 |
+| x86_64-unknown-linux-gnu | endspiel-linux-x64-v2     | -C target-cpu=x86-64-v2 |
 | aarch64-apple-darwin     | endspiel-mac-arm64        | -C target-cpu=apple-m1  |
-| x86_64-pc-windows-msvc   | endspiel-win-x64.exe      | -C target-cpu=x86-64-v3 |
+| x86_64-pc-windows-msvc   | endspiel-win-x64-v4.exe   | -C target-cpu=x86-64-v4 |
+| x86_64-pc-windows-msvc   | endspiel-win-x64-v3.exe   | -C target-cpu=x86-64-v3 |
+| x86_64-pc-windows-msvc   | endspiel-win-x64-v2.exe   | -C target-cpu=x86-64-v2 |
 | aarch64-pc-windows-msvc  | endspiel-win-arm64.exe    | (none)                  |
 
 ### Local workflow (default)

@@ -69,17 +69,21 @@ rustflags = ["-C", "target-cpu=native"]
 
 ### Release build matrix
 
-CI (`.github/workflows/release.yml`) builds the following variants on tag push:
+CI (`.github/workflows/release.yml`, manual `workflow_dispatch` on a tag) builds
+the following variants. x86-64 ships three micro-architecture tiers (v2–v4):
 
 | Artifact | `target-cpu` | PGO | Notes |
 |----------|--------------|-----|-------|
-| `endspiel-linux-x64` | `x86-64-v3` | yes | recommended Linux build (AVX2/FMA/BMI2) |
-| `endspiel-linux-x64-avx512` | `x86-64-v4` | no | AVX-512 (Zen 4/5, recent Xeon) |
-| `endspiel-win-x64.exe` | `x86-64-v3` | yes | recommended Windows build |
-| `endspiel-win-x64-avx512.exe` | `x86-64-v4` | no | AVX-512 Windows build |
+| `endspiel-linux-x64-v4` | `x86-64-v4` | no | AVX-512 (Zen 4/5, recent Xeon/Core) |
+| `endspiel-linux-x64-v3` | `x86-64-v3` | yes | default Linux build (AVX2, ~2013+) |
+| `endspiel-linux-x64-v2` | `x86-64-v2` | yes | SSE4.2 + POPCNT (no-AVX2 CPUs) |
+| `endspiel-win-x64-v4.exe` | `x86-64-v4` | no | AVX-512 Windows build |
+| `endspiel-win-x64-v3.exe` | `x86-64-v3` | yes | default Windows build |
+| `endspiel-win-x64-v2.exe` | `x86-64-v2` | yes | SSE4.2 + POPCNT Windows build |
 | `endspiel-win-arm64.exe` | `generic` | no | cross-built, no PGO |
 | `endspiel-mac-arm64` | `apple-m1` | yes | macOS Apple Silicon |
 | `endspiel-linux-arm64-pi5` | `cortex-a76` | yes | Raspberry Pi 5 (Raspberry Pi OS Trixie / Debian 13 or newer, glibc ≥ 2.39) |
+| `endspiel-android-arm64` | `generic` | no | Android arm64-v8a, minSdk 24 |
 
 PGO is a two-stage build: an instrumented binary is built with
 `-Cprofile-generate`, then `endspiel bench` is run against it to produce
