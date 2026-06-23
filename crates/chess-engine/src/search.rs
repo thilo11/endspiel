@@ -1036,7 +1036,7 @@ pub fn iterative_deepening(
     net: &Arc<NnueNetwork>,
     node_counter: Option<&AtomicU64>,
     syzygy_tb: Option<SyzygyTB>,
-    root_tb_solution: Option<(Score, Vec<Move>)>,
+    root_tb_ranking: Option<syzygy::RootTbRanking>,
     external_book: Option<Arc<OpeningBook>>,
     mut persistent: Option<&mut PersistentHistory>,
 ) -> SearchResult {
@@ -1099,7 +1099,6 @@ pub fn iterative_deepening(
     let mut best_score = Score(0);
     let mut best_pv = Vec::new();
     let mut best_depth = 0u8;
-    let root_tb_solution = root_tb_solution.map(|(score, pv)| (score, sanitize_pv(board, &pv)));
 
     let root_moves = chess_core::generate_legal_moves(board);
     if root_moves.is_empty() {
@@ -1185,6 +1184,31 @@ pub fn iterative_deepening(
             && pos > 0
         {
             root_move_scores.swap(0, pos);
+        }
+    }
+
+    // Tablebase root restriction. In a TB-won position, confine the search to
+    // the win-preserving moves, ordered by the tablebase ranking (fastest DTZ
+    // conversion first). This is the one thing the search cannot do on its own:
+    // every winning move comes back with the same flat `TB_WIN_SCORE` from leaf
+    // probing, so search has no way to prefer a converting move over an aimless
+    // shuffle, and could drift toward the 50-move draw. The stable sort below
+    // preserves this DTZ order among equal-scored moves, so the progress move
+    // stays first and is chosen — unless the search finds a genuine (higher)
+    // mate, which correctly outranks the TB-win band. Single-PV play only;
+    // multi-PV analysis keeps the full move list.
+    if params.multi_pv.max(1) == 1
+        && let Some(ranking) = root_tb_ranking.as_ref()
+        && !ranking.winning_moves.is_empty()
+    {
+        let restricted: Vec<(Move, i32)> = ranking
+            .winning_moves
+            .iter()
+            .filter(|m| root_move_scores.iter().any(|(rm, _)| rm == *m))
+            .map(|&m| (m, 0i32))
+            .collect();
+        if !restricted.is_empty() {
+            root_move_scores = restricted;
         }
     }
 
@@ -1345,12 +1369,12 @@ pub fn iterative_deepening(
             break;
         }
 
-        if let Some((tb_score, tb_pv)) = root_tb_solution.as_ref()
-            && !tb_pv.is_empty()
-        {
-            let seldepth = line_results[0].2.max(tb_pv.len().min(u8::MAX as usize) as u8);
-            line_results[0] = (tb_score.0, tb_pv.clone(), seldepth);
-        }
+        // The searched root line stands as-is. Tablebase guidance is applied by
+        // restricting/ordering the root moves up front (see rank_root_moves and
+        // the root-restriction block above), never by overwriting the searched
+        // PV with a DTZ "mate in N" line — that line assumes optimal defence and
+        // breaks into a repetition the moment the defender deviates (lichess
+        // R2KlN7mg perpetual trap, see the regression test).
 
         let score = line_results[0].0;
         let score_drop = if base_depth > 1 { (prev_score - score).max(0) } else { 0 };
@@ -1628,14 +1652,17 @@ pub fn iterative_deepening(
         best_move = root_move_scores[0].0;
     }
 
+    // Fallback: if the search produced no PV at all (e.g. stopped before any
+    // root move was scored), fall back to the tablebase's best winning move with
+    // a TB-win-band score — never a fabricated mate line.
     if best_pv.is_empty()
-        && let Some((tb_score, tb_pv)) = root_tb_solution
-        && !tb_pv.is_empty()
+        && let Some(ranking) = root_tb_ranking.as_ref()
+        && let Some(&first) = ranking.winning_moves.first()
     {
-        best_move = tb_pv[0];
-        best_score = tb_score;
-        best_pv = tb_pv;
-        best_depth = best_depth.max(best_pv.len().min(u8::MAX as usize) as u8);
+        best_move = first;
+        best_score = ranking.score;
+        best_pv = vec![first];
+        best_depth = best_depth.max(1);
     }
 
     // Swap the (now-updated) learning tables back into the persistent holder.
@@ -3079,8 +3106,8 @@ mod tests {
                     use_nnue: false,
                     ..Default::default()
                 };
-                let root_tb_solution = syzygy_tb.as_ref().and_then(|tb| crate::syzygy::solve_root_position(tb, &board, 128));
-                iterative_deepening(&board, &params, &stop, &tt, None, 0, &NnueNetwork::embedded(), None, syzygy_tb, root_tb_solution, None, None)
+                let root_tb_ranking = syzygy_tb.as_ref().and_then(|tb| crate::syzygy::rank_root_moves(tb, &board));
+                iterative_deepening(&board, &params, &stop, &tt, None, 0, &NnueNetwork::embedded(), None, syzygy_tb, root_tb_ranking, None, None)
             })
             .expect("failed to spawn search thread")
             .join()
@@ -3117,6 +3144,31 @@ mod tests {
         // With MDP, the search should have broken early (iterative deepening
         // exits on finding mate). Depth should be low (≤ 3).
         assert!(result.depth <= 3, "should break early on mate, searched to depth {}", result.depth);
+    }
+
+    #[test]
+    fn avoids_perpetual_trap_from_lichess_r2kln7mg() {
+        // lichess.org/R2KlN7mg: Q+K vs K+a4 after 68...Ke5 — must not play Qe7+
+        // into a threefold repetition while believing it is mating.
+        let _guard = crate::syzygy::syzygy_test_lock().lock().expect("lock syzygy test mutex");
+        let path = syzygy_path();
+        if !path.exists() {
+            return;
+        }
+        let tb = SyzygyTB::new(path.to_string_lossy().as_ref()).expect("load syzygy tables");
+        let fen = "8/8/8/4k3/p6Q/K7/8/8 w - - 3 69";
+        let result = search_position_with_syzygy(fen, 16, Some(tb));
+        assert_ne!(
+            result.best_move.to_uci(),
+            "h4e7",
+            "must not play Qe7+ into the perpetual, score={}",
+            result.score
+        );
+        assert!(
+            result.score.is_mate() && result.score.0 > 0 || result.score.0 > 200,
+            "should find a winning continuation, got {}",
+            result.score
+        );
     }
 
     #[test]

@@ -314,107 +314,89 @@ fn decode_root_move(board: &Board, from_square: u8, to_square: u8, promotion: Pi
         })
 }
 
-/// Follow the DTZ-recommended tablebase line until terminal mate or draw.
+/// Ranked root-move guidance derived from a single DTZ root probe.
 ///
-/// Returns a root-relative mate/draw score and the corresponding PV when the
-/// tablebase line reaches a terminal result within `max_plies`.
-fn solve_root_position_direct(tb: &SyzygyTB, board: &Board, max_plies: usize) -> Option<(Score, Vec<Move>)> {
-    let mut board = board.clone();
-    let root_side = board.side_to_move;
-    let mut pv = Vec::new();
-
-    for ply in 0..=max_plies {
-        // DTZ does not account for the current game's position history. A move
-        // the tablebase calls "optimal" may complete a threefold repetition or
-        // trip the 50-move rule given what has already been played, in which
-        // case the game is drawn regardless of what DTZ claims. Detect that
-        // here and truncate the PV, so TB-backed lines don't over-claim mates
-        // that the losing side could simply draw.
-        if ply > 0 && (board.halfmove_clock >= 100 || board.is_repetition()) {
-            return Some((Score::DRAW, pv));
-        }
-
-        let result = probe_root(tb, &board)?;
-        match result.root {
-            DtzProbeValue::Checkmate => {
-                let score = if board.side_to_move == root_side {
-                    Score(-Score::MATE.0 + ply as i32)
-                } else {
-                    Score(Score::MATE.0 - ply as i32)
-                };
-                return Some((score, pv));
-            }
-            DtzProbeValue::Stalemate => return Some((Score::DRAW, pv)),
-            DtzProbeValue::Failed => return None,
-            DtzProbeValue::DtzResult(root) => {
-                let next_move = decode_root_move(&board, root.from_square, root.to_square, root.promotion)?;
-                pv.push(next_move);
-                board.make_move(next_move);
-            }
-        }
-    }
-
-    None
+/// DTZ measures distance-to-zeroing (the next pawn move or capture), not distance
+/// to mate, and it assumes optimal defence throughout. Converting a DTZ line into
+/// a "mate in N" score is therefore unsound: one suboptimal-for-the-defender reply
+/// invalidates the line, and an engine that believes it is mating can chase checks
+/// straight into a threefold repetition (the lichess R2KlN7mg perpetual trap).
+///
+/// So instead of minting a mate score and PV, we expose the tablebase as a *root
+/// ranking*: a root-relative score in the TB band (never a mate score) plus, when
+/// the side to move is winning, the win-preserving legal moves ordered best-first
+/// by DTZ. The search restricts its root to these moves and picks among them,
+/// producing the PV and the reported score itself. This keeps DTZ's one real
+/// strength — guaranteeing zeroing *progress*, which a search whose leaf probes
+/// return a flat `TB_WIN_SCORE` cannot see — while letting the search handle the
+/// things DTZ is blind to: tactics, game-history repetitions, and the actual line.
+#[derive(Clone, Debug)]
+pub struct RootTbRanking {
+    /// Root-relative value in the TB band (`TB_WIN_SCORE` / draw / `TB_LOSS_SCORE`),
+    /// graded by DTZ so faster conversions rank higher. Never a mate score.
+    pub score: Score,
+    /// WDL of the root position from the side-to-move's perspective.
+    pub best_wdl: WdlProbeResult,
+    /// When the root is a win, the win-preserving legal moves ordered best-first
+    /// (the tablebase-recommended move, then ascending DTZ). Empty otherwise.
+    pub winning_moves: Vec<Move>,
 }
 
-/// Solve a root tablebase position to mate/draw when possible.
+/// Rank the legal root moves using a single DTZ root probe.
 ///
-/// Some winning roots are not converted to a terminal line directly by DTZ, but
-/// a winning root move can lead to a child position that is. In that case we
-/// still want to expose the concrete mate score and PV at the root.
-pub fn solve_root_position(tb: &SyzygyTB, board: &Board, max_plies: usize) -> Option<(Score, Vec<Move>)> {
-    // Require the root itself to be TB-probable. Without this gate, the
-    // legal-move exploration below manufactures (Score::DRAW, [rep_move])
-    // results from any move that happens to complete a threefold via game
-    // history — even when the position is outside TB coverage entirely. That
-    // bogus "TB solution" then overrides the real search eval at the root.
-    probe_root(tb, board)?;
+/// Returns `None` when the root is outside tablebase range, is itself terminal
+/// (mate/stalemate), or the probe otherwise fails — the search handles those
+/// positions directly. See [`RootTbRanking`] for the contract.
+pub fn rank_root_moves(tb: &SyzygyTB, board: &Board) -> Option<RootTbRanking> {
+    let probe = probe_root(tb, board)?;
 
-    let direct = solve_root_position_direct(tb, board, max_plies);
+    // The recommended root move and the root WDL come from `probe.root`. A
+    // terminal root (mate/stalemate) or a failed probe carries no ranking.
+    let root = match probe.root {
+        DtzProbeValue::DtzResult(r) => r,
+        _ => return None,
+    };
+    let best_wdl = root.wdl;
+    let recommended = decode_root_move(board, root.from_square, root.to_square, root.promotion);
 
-    if max_plies == 0 {
-        return direct;
-    }
+    // Score in the TB band, graded by the best-play DTZ. `probe_root` already
+    // folds the halfmove clock into the WDL, so a value of `Win` here is a win
+    // that survives the 50-move rule; a cursed/blessed result is the 50-move
+    // draw and scores accordingly.
+    let score = match best_wdl {
+        WdlProbeResult::Win => Score(TB_WIN_SCORE - root.dtz as i32),
+        WdlProbeResult::CursedWin => Score(2),
+        WdlProbeResult::Draw => Score::DRAW,
+        WdlProbeResult::BlessedLoss => Score(-2),
+        WdlProbeResult::Loss => Score(TB_LOSS_SCORE + root.dtz as i32),
+    };
 
-    // Always explore legal root moves, not just as a fallback. DTZ picks the
-    // distance-minimizing move ignoring game history, so:
-    //   - if the root side is losing per TB, any legal move that completes a
-    //     threefold or trips the 50-move rule is a draw claim they will take;
-    //   - if the root side is winning per TB but the direct line hits a
-    //     history repetition, a non-DTZ alternative may still win.
-    let legal_moves = chess_core::generate_legal_moves(board);
-    let mut best_solution: Option<(Score, Vec<Move>)> = direct;
-
-    for mv in legal_moves.iter().copied() {
-        let mut child = board.clone();
-        child.make_move(mv);
-
-        let (child_score, child_pv) = if child.halfmove_clock >= 100 || child.is_repetition() {
-            (Score::DRAW, Vec::new())
-        } else {
-            match solve_root_position_direct(tb, &child, max_plies - 1) {
-                Some((s, p)) => (s, p),
-                None => continue,
+    // Win-preserving move list — only meaningful when the root itself is a win.
+    let mut winning_moves: Vec<Move> = Vec::new();
+    if matches!(best_wdl, WdlProbeResult::Win) {
+        let mut scored: Vec<(Move, u16)> = Vec::new();
+        for value in probe.moves.iter().copied().take(probe.num_moves) {
+            if let DtzProbeValue::DtzResult(r) = value
+                && matches!(r.wdl, WdlProbeResult::Win)
+                && let Some(mv) = decode_root_move(board, r.from_square, r.to_square, r.promotion)
+            {
+                scored.push((mv, r.dtz));
             }
-        };
-
-        let mut pv = Vec::with_capacity(child_pv.len() + 1);
-        pv.push(mv);
-        pv.extend(child_pv);
-        let score = Score(-child_score.0);
-
-        if best_solution.as_ref().is_none_or(|(best_score, _)| score > *best_score) {
-            best_solution = Some((score, pv));
         }
+        // Fastest conversion first (ascending DTZ), but keep the tablebase's own
+        // recommended move at the very front so ties match the probe's choice.
+        scored.sort_by_key(|&(mv, dtz)| (Some(mv) != recommended, dtz));
+        winning_moves = scored.into_iter().map(|(mv, _)| mv).collect();
     }
 
-    best_solution
+    Some(RootTbRanking { score, best_wdl, winning_moves })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{solve_root_position, syzygy_test_lock, SyzygyTB};
+    use super::{rank_root_moves, syzygy_test_lock, SyzygyTB, TB_WIN_SCORE};
     use chess_common::Board;
+    use pyrrhic_rs::WdlProbeResult;
     use std::path::PathBuf;
 
     fn syzygy_path() -> PathBuf {
@@ -422,7 +404,10 @@ mod tests {
     }
 
     #[test]
-    fn solve_root_position_reports_mate_for_reported_fen() {
+    fn rank_root_moves_reports_loss_without_minting_a_mate() {
+        // A losing root: DTZ used to mint a (negative) mate score here. The
+        // ranker must classify it as a loss in the TB band — never a mate — and
+        // offer no winning moves; defence is left to the search.
         let _guard = syzygy_test_lock().lock().expect("lock syzygy test mutex");
         let path = syzygy_path();
         if !path.exists() {
@@ -431,15 +416,18 @@ mod tests {
 
         let tb = SyzygyTB::new(path.to_string_lossy().as_ref()).expect("load syzygy tables");
         let board = Board::from_fen("8/8/P1b5/6p1/3K1k2/8/8/8 w - - 0 54").expect("valid FEN");
-        let (score, pv) = solve_root_position(&tb, &board, 128).expect("root TB solution");
+        let ranking = rank_root_moves(&tb, &board).expect("root TB ranking");
 
-        assert!(score.is_mate(), "expected mate score, got {}", score.0);
-        assert!(score.0 < 0, "expected losing mate score, got {}", score.0);
-        assert_eq!(pv.first().map(|m| m.to_uci()), Some("d4c5".to_string()));
+        assert!(matches!(ranking.best_wdl, WdlProbeResult::Loss), "expected Loss, got {:?}", ranking.best_wdl);
+        assert!(ranking.score.0 < 0, "expected negative score, got {}", ranking.score.0);
+        assert!(!ranking.score.is_mate(), "DTZ must not mint a mate score, got {}", ranking.score);
+        assert!(ranking.winning_moves.is_empty(), "a losing root has no winning moves");
     }
 
     #[test]
-    fn solve_root_position_promotes_precapture_tb_root_to_mate() {
+    fn rank_root_moves_ranks_precapture_tb_win() {
+        // A winning root whose best move is the pawn-capturing a8c6. The ranker
+        // must report a TB-win-band score (not a mate) and list a8c6 first.
         let _guard = syzygy_test_lock().lock().expect("lock syzygy test mutex");
         let path = syzygy_path();
         if !path.exists() {
@@ -448,20 +436,19 @@ mod tests {
 
         let tb = SyzygyTB::new(path.to_string_lossy().as_ref()).expect("load syzygy tables");
         let board = Board::from_fen("b7/8/P1P5/6p1/3K1k2/8/8/8 b - - 0 53").expect("valid FEN");
-        let (score, pv) = solve_root_position(&tb, &board, 128).expect("root TB solution");
+        let ranking = rank_root_moves(&tb, &board).expect("root TB ranking");
 
-        assert!(score.is_mate(), "expected mate score, got {}", score.0);
-        assert!(score.0 > 0, "expected winning mate score, got {}", score.0);
-        assert_eq!(pv.first().map(|m| m.to_uci()), Some("a8c6".to_string()));
+        assert!(matches!(ranking.best_wdl, WdlProbeResult::Win), "expected Win, got {:?}", ranking.best_wdl);
+        assert!(!ranking.score.is_mate(), "DTZ must not mint a mate score, got {}", ranking.score);
+        assert!(ranking.score.0 > TB_WIN_SCORE - 1_000 && ranking.score.0 <= TB_WIN_SCORE,
+            "expected TB-win-band score, got {}", ranking.score.0);
+        assert_eq!(ranking.winning_moves.first().map(|m| m.to_uci()), Some("a8c6".to_string()));
     }
 
     #[test]
-    fn solve_root_position_returns_none_when_root_is_out_of_tb_range() {
-        // A 32-piece root is outside any loaded Syzygy table. Before the
-        // probe_root gate in solve_root_position, a legal move whose resulting
-        // position was threefold-repeated via game history would be reported
-        // as a TB-authoritative DRAW, silently overriding the real search eval
-        // at the root.
+    fn rank_root_moves_returns_none_when_root_is_out_of_tb_range() {
+        // The 32-piece start position is outside any loaded Syzygy table; the
+        // ranker must report no guidance rather than fabricate one.
         let _guard = syzygy_test_lock().lock().expect("lock syzygy test mutex");
         let path = syzygy_path();
         if !path.exists() {
@@ -469,33 +456,12 @@ mod tests {
         }
 
         let tb = SyzygyTB::new(path.to_string_lossy().as_ref()).expect("load syzygy tables");
-
-        let mut board = Board::default();
-        // Knight-shuffle so a subsequent legal move returns to a position
-        // that already appears twice in position_history (→ is_repetition).
-        for uci in ["b1c3", "b8c6", "c3b1", "c6b8", "b1c3", "b8c6", "c3b1"] {
-            let mv = chess_core::generate_legal_moves(&board)
-                .iter()
-                .find(|m| m.to_uci() == uci)
-                .copied()
-                .expect("legal knight-shuffle move");
-            board.make_move(mv);
-        }
-        // Sanity: Black's c6b8 would complete the threefold against history.
-        let trigger = chess_core::generate_legal_moves(&board)
-            .iter()
-            .find(|m| m.to_uci() == "c6b8")
-            .copied()
-            .expect("c6b8 is legal");
-        let mut after = board.clone();
-        after.make_move(trigger);
-        assert!(after.is_repetition(), "c6b8 must create threefold for this test");
-
-        let result = solve_root_position(&tb, &board, 128);
+        let board = Board::default();
+        let result = rank_root_moves(&tb, &board);
         assert!(
             result.is_none(),
-            "32-piece root must not yield a TB-backed result, got {:?}",
-            result.as_ref().map(|(s, pv)| (s.0, pv.iter().map(|m| m.to_uci()).collect::<Vec<_>>()))
+            "32-piece root must not yield a TB-backed ranking, got {:?}",
+            result.as_ref().map(|r| (r.score.0, r.winning_moves.iter().map(|m| m.to_uci()).collect::<Vec<_>>()))
         );
     }
 }

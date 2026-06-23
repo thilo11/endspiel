@@ -404,10 +404,10 @@ impl UciHandler {
         let tt = self.engine.shared_tt();
         let num_threads = self.engine.num_threads();
         let net = Arc::clone(self.engine.nnue_net());
-        let root_tb_solution = if let Some(tb) = self.engine.take_syzygy_tb() {
-            let solution = chess_engine::syzygy::solve_root_position(&tb, &board, 128);
+        let root_tb_ranking = if let Some(tb) = self.engine.take_syzygy_tb() {
+            let ranking = chess_engine::syzygy::rank_root_moves(&tb, &board);
             self.engine.set_syzygy_tb(Some(tb));
-            solution
+            ranking
         } else {
             None
         };
@@ -458,7 +458,7 @@ impl UciHandler {
                 // just stats, never unsafe. The guard is released here, before the
                 // ponder-wait below.
                 let mut guard = history.lock().unwrap_or_else(|p| p.into_inner());
-                pool.search(&board, &search_params, &stop, &tt, Some(info_cb), &net, syzygy_tb, root_tb_solution, book, Some(&mut guard))
+                pool.search(&board, &search_params, &stop, &tt, Some(info_cb), &net, syzygy_tb, root_tb_ranking, book, Some(&mut guard))
             }));
 
             let result = match search_result {

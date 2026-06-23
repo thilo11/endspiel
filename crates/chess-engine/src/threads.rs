@@ -13,7 +13,7 @@ use chess_nnue::NnueNetwork;
 
 use crate::polyglot::OpeningBook;
 use crate::search;
-use crate::syzygy::SyzygyTB;
+use crate::syzygy::{RootTbRanking, SyzygyTB};
 use crate::tt::SharedTT;
 use crate::{InfoCallback, SearchInfo, SearchParams, SearchResult};
 
@@ -77,7 +77,7 @@ impl ThreadPool {
         info_callback: Option<InfoCallback>,
         net: &Arc<NnueNetwork>,
         syzygy_tb: Option<SyzygyTB>,
-        root_tb_solution: Option<(Score, Vec<Move>)>,
+        root_tb_ranking: Option<RootTbRanking>,
         book: Option<Arc<OpeningBook>>,
         persistent: Option<&mut search::PersistentHistory>,
     ) -> SearchResult {
@@ -85,7 +85,7 @@ impl ThreadPool {
 
         if self.num_threads <= 1 {
             // Single-thread fast path: avoid SMP setup and root prechecks.
-            return search::iterative_deepening(board, params, stop, tt, info_callback, 0, net, None, syzygy_tb, root_tb_solution, book, persistent);
+            return search::iterative_deepening(board, params, stop, tt, info_callback, 0, net, None, syzygy_tb, root_tb_ranking, book, persistent);
         }
 
         let root_moves = chess_core::generate_legal_moves(board);
@@ -93,7 +93,7 @@ impl ThreadPool {
 
         if active_threads <= 1 {
             // Single-thread fast path: no spawning overhead
-            return search::iterative_deepening(board, params, stop, tt, info_callback, 0, net, None, syzygy_tb, root_tb_solution, book, persistent);
+            return search::iterative_deepening(board, params, stop, tt, info_callback, 0, net, None, syzygy_tb, root_tb_ranking, book, persistent);
         }
 
         // `max_nodes` is a GLOBAL budget, but each SMP thread enforces only its
@@ -183,7 +183,7 @@ impl ThreadPool {
         }
 
         let search_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            search::iterative_deepening(board, &main_params, stop, tt, wrapped_cb, 0, net, Some(&counters[0].value), syzygy_tb, root_tb_solution, book, persistent)
+            search::iterative_deepening(board, &main_params, stop, tt, wrapped_cb, 0, net, Some(&counters[0].value), syzygy_tb, root_tb_ranking, book, persistent)
         }));
 
         let result = match search_result {
