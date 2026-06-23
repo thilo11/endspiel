@@ -164,9 +164,19 @@ mod tests {
     use crate::network::NnueNetwork;
     use chess_common::Board;
 
+    /// Net under test: point `NNUE_TEST_NET=<path>` at a candidate .nnue to run
+    /// the i8-path guards (eval sanity + SIMD==scalar) against it before promotion;
+    /// otherwise the embedded default net. Mirrors the deeper engine's DEEPER_TEST_NET.
+    fn test_net() -> std::sync::Arc<NnueNetwork> {
+        match std::env::var("NNUE_TEST_NET") {
+            Ok(p) if !p.is_empty() => NnueNetwork::from_path(&p).expect("load NNUE_TEST_NET"),
+            _ => NnueNetwork::embedded(),
+        }
+    }
+
     #[test]
     fn starting_position_eval_is_reasonable() {
-        let net = NnueNetwork::embedded();
+        let net = test_net();
         if !net.is_trained() {
             return; // zero-padded placeholder — skip until a real net is trained
         }
@@ -188,7 +198,7 @@ mod tests {
     /// SIMD and scalar paths must produce identical results.
     #[test]
     fn avx2_matches_scalar() {
-        let net = NnueNetwork::embedded();
+        let net = test_net();
         let board = Board::starting_position();
 
         let mut acc = Accumulator::new();
