@@ -115,8 +115,11 @@ impl UciHandler {
     /// `--syzygy <path>` is passed on the command line).
     pub fn set_syzygy(&mut self, path: &str) {
         match self.engine.set_syzygy_path(path) {
-            Ok(()) => log::info!("Syzygy tablebases loaded from '{path}'"),
-            Err(e) => log::error!("Failed to load Syzygy tablebases from '{path}': {e}"),
+            Ok(()) => log::info!(
+                "Syzygy tablebases loaded from '{path}' (max {} pieces)",
+                self.engine.syzygy_tb().map_or(0, |tb| tb.max_pieces())
+            ),
+            Err(e) => log::error!("{e}"),
         }
     }
 
@@ -642,13 +645,29 @@ impl UciHandler {
             }
             "syzygypath" => {
                 if let Some(path) = value {
-                    match self.engine.set_syzygy_path(path.trim()) {
-                        Ok(()) => log::info!(
-                            "SyzygyPath set to '{}' (max {} pieces)",
-                            path.trim(),
-                            self.engine.syzygy_tb().map_or(0, |tb| tb.max_pieces())
-                        ),
-                        Err(e) => log::error!("Failed to load SyzygyPath '{}': {e}", path.trim()),
+                    let path = path.trim();
+                    // Always emit a UCI `info string` for the load result: it is visible
+                    // in the GUI / bot log regardless of RUST_LOG, and a silent failure
+                    // here (no tablebases) leaves the engine playing endgames on eval
+                    // alone — exactly the failure that drew a won KQP-vs-KP game.
+                    match self.engine.set_syzygy_path(path) {
+                        Ok(()) => {
+                            let max_pieces = self.engine.syzygy_tb().map_or(0, |tb| tb.max_pieces());
+                            log::info!("SyzygyPath set to '{path}' (max {max_pieces} pieces)");
+                            send_response(&UciResponse::Info(UciInfo {
+                                string: Some(format!(
+                                    "Syzygy tablebases loaded from '{path}' (max {max_pieces} pieces)"
+                                )),
+                                ..UciInfo::default()
+                            }));
+                        }
+                        Err(e) => {
+                            log::error!("Failed to load SyzygyPath '{path}': {e}");
+                            send_response(&UciResponse::Info(UciInfo {
+                                string: Some(format!("SyzygyPath ERROR: {e}")),
+                                ..UciInfo::default()
+                            }));
+                        }
                     }
                 }
             }

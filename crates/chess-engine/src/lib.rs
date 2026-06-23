@@ -355,6 +355,21 @@ impl Engine {
 
         match SyzygyTB::new(path) {
             Ok(tb) => {
+                // A "successful" init can still expose zero usable tables when the
+                // directory is empty or unreadable: pyrrhic returns Ok and
+                // `max_pieces()` stays pinned at the compiled cap, so it cannot tell
+                // a real load from a useless one. The only reliable check is a
+                // functional probe of a canonical position the tables must cover.
+                const TB_SANITY_FEN: &str = "4k3/8/8/8/8/8/8/Q3K3 w - - 0 1"; // KQ vs K (legal, no check)
+                let usable = chess_common::Board::from_fen(TB_SANITY_FEN)
+                    .ok()
+                    .and_then(|b| crate::syzygy::probe_wdl(&tb, &b))
+                    .is_some();
+                if !usable {
+                    return Err(format!(
+                        "Syzygy path '{path}' loaded no usable tablebases (empty or unreadable directory?)"
+                    ));
+                }
                 let max = tb.max_pieces();
                 log::info!("Syzygy tablebases loaded from '{}' (max {} pieces)", path, max);
                 self.syzygy_tb = Some(tb);
