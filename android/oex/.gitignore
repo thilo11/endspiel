@@ -1,0 +1,11 @@
+# Gradle / Android build outputs
+.gradle/
+build/
+local.properties
+
+# The native binary is staged in by the build script, not committed.
+app/src/main/jniLibs/
+
+# Signing material must never be committed.
+*.jks
+*.keystore

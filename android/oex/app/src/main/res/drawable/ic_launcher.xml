@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Minimal vector launcher icon: a stylised king on a dark square. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#1B1B1F"
+        android:pathData="M0,0h48v48h-48z" />
+    <path
+        android:fillColor="#EDEDED"
+        android:pathData="M23,8h2v3h3v2h-3v3h-2v-3h-3v-2h3z" />
+    <path
+        android:fillColor="#EDEDED"
+        android:pathData="M24,17c4,0 7,3 7,7c0,3 -2,5 -4,7l2,9h-10l2,-9c-2,-2 -4,-4 -4,-7c0,-4 3,-7 7,-7z" />
+    <path
+        android:fillColor="#EDEDED"
+        android:pathData="M15,41h18v3h-18z" />
+</vector>

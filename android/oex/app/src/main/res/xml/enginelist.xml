@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Engines advertised to the GUI. 'filename' must match the binary packaged under
+  jniLibs/<abi>/ (extracted into nativeLibraryDir), and 'target' must equal the
+  device ABI string the GUI matches against (Build.SUPPORTED_ABIS[0]).
+-->
+<enginelist>
+    <engine
+        name="Endspiel"
+        filename="libendspiel.so"
+        target="arm64-v8a" />
+</enginelist>

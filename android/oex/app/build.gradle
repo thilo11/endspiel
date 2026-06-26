@@ -1,0 +1,41 @@
+plugins {
+    id 'com.android.application'
+}
+
+// The native UCI binary is dropped in by the build script / CI before assembly:
+//   src/main/jniLibs/arm64-v8a/libendspiel.so
+// Naming it lib*.so makes Android's installer extract it into nativeLibraryDir
+// with the execute bit set — the only place a non-rooted device can exec it.
+android {
+    namespace 'dev.thilo.endspiel.oex'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'dev.thilo.endspiel.oex'
+        // minSdk must match the NDK --platform used to build the binary (24).
+        minSdk 24
+        targetSdk 34
+        versionCode project.hasProperty('vcode') ? project.vcode.toInteger() : 1
+        versionName project.hasProperty('vname') ? project.vname : '1.2.1'
+
+        // arm64-v8a only — covers essentially every Android device of the last decade.
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    packaging {
+        jniLibs {
+            // Extract the binary to disk (nativeLibraryDir) so the GUI can exec it.
+            useLegacyPackaging = true
+            // It's a stripped PIE executable, not a real .so — don't let AGP strip it again.
+            keepDebugSymbols += '**/libendspiel.so'
+        }
+    }
+}

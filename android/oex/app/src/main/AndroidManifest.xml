@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Open Exchange (OEX) engine plugin for Endspiel.
+
+  This APK ships no UI of its own; it advertises the bundled UCI binary to chess
+  GUIs (DroidFish, Chess for Android, …) via the Open Exchange protocol. After
+  install, pick "Endspiel" as a UCI engine inside the GUI.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="true"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:extractNativeLibs="true"
+        android:hasCode="true"
+        android:theme="@android:style/Theme.Translucent.NoTitleBar">
+
+        <!--
+          The GUI discovers engines via queryIntentActivities() for the
+          intent.chess.provider.ENGINE action; the meta-data names the
+          ContentProvider authority it reads the engine file through.
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="intent.chess.provider.ENGINE" />
+            </intent-filter>
+
+            <meta-data
+                android:name="chess.provider.engine.authority"
+                android:value="dev.thilo.endspiel.oex.EngineProvider" />
+        </activity>
+
+        <provider
+            android:name=".EngineProvider"
+            android:authorities="dev.thilo.endspiel.oex.EngineProvider"
+            android:exported="true" />
+    </application>
+
+</manifest>

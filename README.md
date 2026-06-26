@@ -78,7 +78,8 @@ supports**:
 | macOS Apple Silicon | `endspiel-mac-arm64` | `apple-m1`, PGO-optimised |
 | Windows ARM64 | `endspiel-win-arm64.exe` | generic ARM64 |
 | Raspberry Pi 5 | `endspiel-linux-arm64-pi5` | `cortex-a76`, PGO-optimised; needs Raspberry Pi OS (Trixie / Debian 13) or newer — glibc ≥ 2.39 |
-| Android arm64 | `endspiel-android-arm64` | `arm64-v8a`, minSdk 24 (Termux / `adb shell`) |
+| Android arm64 (app) | `endspiel-android-arm64.apk` | `arm64-v8a`, minSdk 24 — installs like an app; pick "Endspiel" as a UCI engine in DroidFish / Chess for Android |
+| Android arm64 (raw) | `endspiel-android-arm64` | bare UCI binary for Termux / `adb shell` |
 
 **Picking an x86-64 build.** `-v3` (AVX2) is the safe default — it runs on
 essentially any CPU sold since ~2013. Go up to `-v4` if your CPU has AVX-512
@@ -188,6 +189,13 @@ scripts/build-android.sh
 On-device the engine auto-tunes its defaults: `Threads` is the performance-core
 count of the SoC, and `Hash` is ~128 MB per such core, capped at ~1/16 of
 available RAM (floor 16 MB). Both remain overridable via UCI `setoption`.
+
+The raw binary is only convenient under Termux or `adb` — a non-rooted device
+can't `exec` a binary off shared storage. For normal use, install the **Open
+Exchange (OEX) engine APK** instead (`endspiel-android-arm64.apk` on the release
+page): it installs like an app and is auto-discovered as a UCI engine by GUIs
+such as DroidFish and Chess for Android. The APK wraps the same binary; the
+release workflow builds it, and `android/oex/` documents building it by hand.
 
 ## License
 

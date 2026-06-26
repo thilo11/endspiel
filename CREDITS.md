@@ -40,6 +40,14 @@ These are algorithmic ideas and conventions, re-implemented from scratch in Rust
   is a subprocess call to a separate program; no Stockfish code is linked into or
   distributed with endspiel.
 
+## Android packaging
+
+- **[Chess Engine Support Library](https://github.com/gkalab/chessenginesupport-androidlib)**
+  (Apache-2.0) by Gerhard Kalab — the `ChessEngineProvider` class used by the
+  Open Exchange (OEX) engine APK (`android/oex/`) is vendored from this library
+  so chess GUIs (DroidFish, Chess for Android) can discover the bundled engine.
+  Only that one file is included; the Apache-2.0 header is retained verbatim.
+
 ## Other notable dependencies
 
 All permissive (MIT / Apache-2.0 / BSD-family): `rayon`, `zstd`, `rand`,

@@ -197,6 +197,69 @@ jobs:
           path: endspiel-android-arm64
           retention-days: 7
 
+      # ── Wrap the binary in an Open Exchange (OEX) engine APK ──
+      # Installs like a normal app on a non-rooted device; chess GUIs
+      # (DroidFish, Chess for Android) auto-discover it. See android/oex/.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Build OEX engine APK
+        env:
+          VERSION_NAME: ${{ inputs.tag }}
+        run: |
+          # Derive a clean versionName/versionCode from the tag (e.g. v1.2.1).
+          VER="${VERSION_NAME#v}"
+          MA=$(echo "$VER" | cut -d. -f1 | tr -dc 0-9)
+          MI=$(echo "$VER" | cut -d. -f2 | tr -dc 0-9)
+          PA=$(echo "$VER" | cut -d. -f3 | tr -dc 0-9)
+          VCODE=$(( ${MA:-0} * 10000 + ${MI:-0} * 100 + ${PA:-0} ))
+          VERSION_NAME="$VER" VERSION_CODE="$VCODE" scripts/build-android-apk.sh
+
+      - name: Sign APK
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          BT="$ANDROID_HOME/build-tools/34.0.0"
+          UNSIGNED=android/oex/app/build/outputs/apk/release/app-release-unsigned.apk
+          if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            echo "Signing with the repository keystore (stable upgrade signature)."
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > ks.jks
+            STOREPASS="$ANDROID_KEYSTORE_PASSWORD"; ALIAS="$ANDROID_KEY_ALIAS"; KEYPASS="$ANDROID_KEY_PASSWORD"
+          else
+            echo "::warning::No ANDROID_KEYSTORE_* secrets set — signing with an ephemeral key."
+            echo "::warning::Users must uninstall any previous build before installing this one."
+            keytool -genkeypair -keystore ks.jks -alias endspiel -keyalg RSA -keysize 2048 \
+              -validity 10000 -storepass changeit -keypass changeit -dname "CN=Endspiel, O=thilo.dev"
+            STOREPASS=changeit; ALIAS=endspiel; KEYPASS=changeit
+          fi
+          "$BT/zipalign" -p -f 4 "$UNSIGNED" aligned.apk
+          "$BT/apksigner" sign --ks ks.jks --ks-pass "pass:$STOREPASS" \
+            --ks-key-alias "$ALIAS" --key-pass "pass:$KEYPASS" \
+            --out endspiel-android-arm64.apk aligned.apk
+          "$BT/apksigner" verify --print-certs endspiel-android-arm64.apk
+          rm -f ks.jks aligned.apk
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: endspiel-android-arm64-apk
+          path: endspiel-android-arm64.apk
+          retention-days: 7
+
   release:
     needs: [build, build-android]
     runs-on: ubuntu-latest
