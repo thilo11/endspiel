@@ -161,7 +161,8 @@ jobs:
 
   # Android needs the NDK toolchain + cargo-ndk (for the bionic linker), so it
   # can't share the cross-platform matrix above. No PGO: the cross-compiled
-  # binary can't run the bench workload on the x86 host.
+  # binary can't run the bench workload on the x86 host. The release artifact is
+  # the OEX engine APK; the bare NDK binary is only an intermediate it wraps.
   build-android:
     name: android-arm64
     runs-on: ubuntu-latest
@@ -182,20 +183,12 @@ jobs:
         run: cargo install cargo-ndk --locked
 
       # ubuntu-latest ships an NDK and exports ANDROID_NDK_LATEST_HOME, which
-      # cargo-ndk auto-detects. minSdk 24; portable ARMv8-A baseline.
+      # cargo-ndk auto-detects. minSdk 24; portable ARMv8-A baseline. The output
+      # at target/aarch64-linux-android/release/endspiel feeds the APK below.
       - name: Build (Android NDK)
         run: cargo ndk --target arm64-v8a --platform 24 build --release --bin endspiel
         env:
           RUSTFLAGS: "-C target-cpu=generic"
-
-      - name: Rename binary
-        run: cp target/aarch64-linux-android/release/endspiel endspiel-android-arm64
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: endspiel-android-arm64
-          path: endspiel-android-arm64
-          retention-days: 7
 
       # ── Wrap the binary in an Open Exchange (OEX) engine APK ──
       # Installs like a normal app on a non-rooted device; chess GUIs

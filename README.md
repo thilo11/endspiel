@@ -78,8 +78,7 @@ supports**:
 | macOS Apple Silicon | `endspiel-mac-arm64` | `apple-m1`, PGO-optimised |
 | Windows ARM64 | `endspiel-win-arm64.exe` | generic ARM64 |
 | Raspberry Pi 5 | `endspiel-linux-arm64-pi5` | `cortex-a76`, PGO-optimised; needs Raspberry Pi OS (Trixie / Debian 13) or newer — glibc ≥ 2.39 |
-| Android arm64 (app) | `endspiel-android-arm64.apk` | `arm64-v8a`, minSdk 24 — installs like an app; pick "Endspiel" as a UCI engine in DroidFish / Chess for Android |
-| Android arm64 (raw) | `endspiel-android-arm64` | bare UCI binary for Termux / `adb shell` |
+| Android arm64 | `endspiel-android-arm64.apk` | `arm64-v8a`, minSdk 24 — installs like an app; pick "Endspiel" as a UCI engine in DroidFish / Chess for Android |
 
 **Picking an x86-64 build.** `-v3` (AVX2) is the safe default — it runs on
 essentially any CPU sold since ~2013. Go up to `-v4` if your CPU has AVX-512

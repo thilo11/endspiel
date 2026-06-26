@@ -83,8 +83,7 @@ the following variants. x86-64 ships three micro-architecture tiers (v2–v4):
 | `endspiel-win-arm64.exe` | `generic` | no | cross-built, no PGO |
 | `endspiel-mac-arm64` | `apple-m1` | yes | macOS Apple Silicon |
 | `endspiel-linux-arm64-pi5` | `cortex-a76` | yes | Raspberry Pi 5 (Raspberry Pi OS Trixie / Debian 13 or newer, glibc ≥ 2.39) |
-| `endspiel-android-arm64` | `generic` | no | Android arm64-v8a, minSdk 24 (raw UCI binary) |
-| `endspiel-android-arm64.apk` | `generic` | no | Open Exchange engine APK wrapping the binary (see `android/oex/`) |
+| `endspiel-android-arm64.apk` | `generic` | no | Android arm64-v8a, minSdk 24 — Open Exchange engine APK (see `android/oex/`) |
 
 PGO is a two-stage build: an instrumented binary is built with
 `-Cprofile-generate`, then `endspiel bench` is run against it to produce
