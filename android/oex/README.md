@@ -74,3 +74,12 @@ users must uninstall the previous build before installing a new one.
 Download `endspiel-android-arm64.apk` from the GitHub release, copy it to the
 device, and open it (enable "install from unknown sources" if prompted). Then in
 your chess GUI, add a UCI engine and select **Endspiel** from the list.
+
+### Troubleshooting: DroidFish doesn't list Endspiel
+
+DroidFish only scans for installed OEX engines when it has storage permission —
+its engine picker gates the `ChessEngineResolver.resolveEngines()` call behind
+`storageAvailable()`. If the engine list shows only Stockfish and CuckooChess,
+grant the permission under **Settings → Apps → DroidFish → Permissions → Files
+and media (Storage) → Allow**, then reopen **⋮ → Set engine…**. This is a
+DroidFish-side requirement, not something the APK can change.

@@ -196,6 +196,12 @@ page): it installs like an app and is auto-discovered as a UCI engine by GUIs
 such as DroidFish and Chess for Android. The APK wraps the same binary; the
 release workflow builds it, and `android/oex/` documents building it by hand.
 
+> **DroidFish doesn't list Endspiel?** DroidFish only scans for installed OEX
+> engines when it has storage permission. Grant it under **Settings → Apps →
+> DroidFish → Permissions → Files and media (Storage) → Allow**, then reopen the
+> engine selector (**⋮ → Set engine…**) — Endspiel will appear next to Stockfish
+> and CuckooChess.
+
 ## License
 
 GPL-3.0-or-later — see [LICENSE](LICENSE).
