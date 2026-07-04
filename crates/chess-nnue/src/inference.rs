@@ -2,7 +2,14 @@ use chess_common::Color;
 
 use crate::accumulator::Accumulator;
 use crate::network::NnueNetwork;
-use crate::{FT_QUANT, HIDDEN_SIZE, NET_QUANT};
+use crate::{FT_QUANT, HIDDEN_SIZE, NET_QUANT, OUTPUT_BUCKETS};
+
+/// Material-keyed output bucket: (piece_count - 2) / 4 → 0..OUTPUT_BUCKETS.
+/// Must match the trainer's bullet `MaterialCount<8>` (divisor = ceil(32/8) = 4).
+#[inline]
+pub fn output_bucket(piece_count: u32) -> usize {
+    ((piece_count.saturating_sub(2) / 4) as usize).min(OUTPUT_BUCKETS - 1)
+}
 
 /// SCReLU dot product for one perspective:
 ///   sum( clamp(acc[i], 0, FT_QUANT)² × weights[i] )
@@ -143,18 +150,26 @@ unsafe fn screlu_sum_neon(acc: &[i16; HIDDEN_SIZE], weights: &[i8]) -> i32 {
 /// Evaluate the position using the NNUE accumulator.
 ///
 /// Returns score from the **side-to-move perspective** (positive = good for STM).
-/// Uses SCReLU activation: clamp(x, 0, FT_QUANT)² then dot product with output weights.
+/// Uses SCReLU activation: clamp(x, 0, FT_QUANT)² then dot product with the
+/// output weights of the material-keyed bucket for `piece_count`.
 #[inline]
-pub fn nnue_evaluate(acc: &Accumulator, side_to_move: Color, net: &NnueNetwork) -> i32 {
+pub fn nnue_evaluate(
+    acc: &Accumulator,
+    side_to_move: Color,
+    net: &NnueNetwork,
+    piece_count: u32,
+) -> i32 {
     let (stm_acc, opp_acc) = match side_to_move {
         Color::White => (&acc.white, &acc.black),
         Color::Black => (&acc.black, &acc.white),
     };
 
-    let output = screlu_sum(stm_acc, &net.output_weights[..HIDDEN_SIZE])
-        + screlu_sum(opp_acc, &net.output_weights[HIDDEN_SIZE..]);
+    let bucket = output_bucket(piece_count);
+    let weights = &net.output_weights[bucket];
+    let output = screlu_sum(stm_acc, &weights[..HIDDEN_SIZE])
+        + screlu_sum(opp_acc, &weights[HIDDEN_SIZE..]);
 
-    (output / FT_QUANT + i32::from(net.output_bias)) * 400 / (FT_QUANT * NET_QUANT)
+    (output / FT_QUANT + i32::from(net.output_bias[bucket])) * 400 / (FT_QUANT * NET_QUANT)
 }
 
 #[cfg(test)]
@@ -185,7 +200,8 @@ mod tests {
         let mut acc = Accumulator::new();
         acc.refresh(&board, &net);
 
-        let score = nnue_evaluate(&acc, Color::White, &net);
+        let piece_count = (board.occupancy[0].0 | board.occupancy[1].0).count_ones();
+        let score = nnue_evaluate(&acc, Color::White, &net, piece_count);
         // The 768-wide net has a larger output range than narrower nets; the
         // threshold here is a sanity check against completely broken evaluation,
         // not a calibration target.
@@ -204,30 +220,41 @@ mod tests {
         let mut acc = Accumulator::new();
         acc.refresh(&board, &net);
 
-        let scalar_stm = screlu_sum_scalar(&acc.white, &net.output_weights[..HIDDEN_SIZE]);
-        let scalar_opp = screlu_sum_scalar(&acc.black, &net.output_weights[HIDDEN_SIZE..]);
+        // Exercise every output bucket's weight row, not just the full-board one.
+        for weights in net.output_weights.iter() {
+            let scalar_stm = screlu_sum_scalar(&acc.white, &weights[..HIDDEN_SIZE]);
+            let scalar_opp = screlu_sum_scalar(&acc.black, &weights[HIDDEN_SIZE..]);
 
-        #[cfg(target_arch = "x86_64")]
-        if is_x86_feature_detected!("avx2") {
-            let simd_stm =
-                unsafe { screlu_sum_avx2(&acc.white, &net.output_weights[..HIDDEN_SIZE]) };
-            let simd_opp =
-                unsafe { screlu_sum_avx2(&acc.black, &net.output_weights[HIDDEN_SIZE..]) };
-            assert_eq!(scalar_stm, simd_stm, "AVX2 STM half mismatch");
-            assert_eq!(scalar_opp, simd_opp, "AVX2 opponent half mismatch");
+            #[cfg(target_arch = "x86_64")]
+            if is_x86_feature_detected!("avx2") {
+                let simd_stm = unsafe { screlu_sum_avx2(&acc.white, &weights[..HIDDEN_SIZE]) };
+                let simd_opp = unsafe { screlu_sum_avx2(&acc.black, &weights[HIDDEN_SIZE..]) };
+                assert_eq!(scalar_stm, simd_stm, "AVX2 STM half mismatch");
+                assert_eq!(scalar_opp, simd_opp, "AVX2 opponent half mismatch");
+            }
+
+            #[cfg(target_arch = "aarch64")]
+            {
+                let neon_stm = unsafe { screlu_sum_neon(&acc.white, &weights[..HIDDEN_SIZE]) };
+                let neon_opp = unsafe { screlu_sum_neon(&acc.black, &weights[HIDDEN_SIZE..]) };
+                assert_eq!(scalar_stm, neon_stm, "NEON STM half mismatch");
+                assert_eq!(scalar_opp, neon_opp, "NEON opponent half mismatch");
+            }
+
+            // Suppress unused-variable warnings on targets without SIMD paths.
+            let _ = (scalar_stm, scalar_opp);
         }
+    }
 
-        #[cfg(target_arch = "aarch64")]
-        {
-            let neon_stm =
-                unsafe { screlu_sum_neon(&acc.white, &net.output_weights[..HIDDEN_SIZE]) };
-            let neon_opp =
-                unsafe { screlu_sum_neon(&acc.black, &net.output_weights[HIDDEN_SIZE..]) };
-            assert_eq!(scalar_stm, neon_stm, "NEON STM half mismatch");
-            assert_eq!(scalar_opp, neon_opp, "NEON opponent half mismatch");
-        }
-
-        // Suppress unused-variable warnings on targets without SIMD paths.
-        let _ = (scalar_stm, scalar_opp);
+    /// Bucket mapping must match bullet's MaterialCount<8>: (occ - 2) / 4.
+    #[test]
+    fn output_bucket_matches_material_count() {
+        assert_eq!(output_bucket(2), 0);
+        assert_eq!(output_bucket(5), 0);
+        assert_eq!(output_bucket(6), 1);
+        assert_eq!(output_bucket(17), 3);
+        assert_eq!(output_bucket(29), 6);
+        assert_eq!(output_bucket(30), 7);
+        assert_eq!(output_bucket(32), 7);
     }
 }

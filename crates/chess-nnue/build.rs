@@ -1,8 +1,8 @@
 fn main() {
-    // NET_FILE_SIZE = (INPUT_SIZE × HIDDEN_SIZE × 2) + (HIDDEN_SIZE × 4) + 2
-    //              = (704 × 32 × 768 × 2) + (768 × 4) + 2 = 34,606,082
-    // l0w: INPUT_SIZE×HIDDEN_SIZE i16 (×2), l0b: HIDDEN_SIZE i16 (×2),
-    // l1w: HIDDEN_SIZE×2 i8 (×1), l1b: 1 i16 (×2)
+    // Minimum accepted size = legacy single-output-bucket format:
+    // (INPUT_SIZE × HIDDEN_SIZE × 2) + (HIDDEN_SIZE × 4) + 2 = 34,606,082.
+    // The 8-output-bucket format is larger (extra l1w rows + biases) and also
+    // passes this check; NnueNetwork::from_bytes dispatches on actual size.
     let expected: usize = 704 * 32 * 768 * 2 + 768 * 4 + 2;
     let src = std::path::Path::new("nets/default.nnue");
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("default.nnue");

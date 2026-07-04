@@ -1,25 +1,34 @@
 use std::sync::{Arc, LazyLock};
 
-use crate::{HIDDEN_SIZE, INPUT_SIZE};
+use crate::{HIDDEN_SIZE, INPUT_SIZE, OUTPUT_BUCKETS};
 
 /// NNUE network parameters.
 ///
 /// Binary layout (little-endian, sequential, matches Bullet trainer output):
-/// - ft_weights:     INPUT_SIZE × HIDDEN_SIZE i16 values  (QA=127)
-/// - ft_biases:      HIDDEN_SIZE i16 values               (QA=127)
-/// - output_weights: HIDDEN_SIZE × 2 i8 values            (QB=64)
-/// - output_bias:    1 i16 value                          (QA×QB=8128)
+/// - ft_weights:     INPUT_SIZE × HIDDEN_SIZE i16 values              (QA=127)
+/// - ft_biases:      HIDDEN_SIZE i16 values                           (QA=127)
+/// - output_weights: OUTPUT_BUCKETS × (HIDDEN_SIZE × 2) i8 values     (QB=64, bucket rows contiguous)
+/// - output_bias:    OUTPUT_BUCKETS i16 values                        (QA×QB=8128)
 ///
-/// Total: (INPUT_SIZE × HIDDEN_SIZE × 2) + (HIDDEN_SIZE × 4) + 2 bytes
+/// The legacy single-bucket format (one HIDDEN_SIZE×2 row + one bias) is still
+/// accepted: it is loaded by replicating the row into every bucket, so legacy
+/// nets evaluate identically to before.
 pub struct NnueNetwork {
     pub ft_weights: Box<[[i16; HIDDEN_SIZE]; INPUT_SIZE]>,
     pub ft_biases: Box<[i16; HIDDEN_SIZE]>,
-    pub output_weights: Box<[i8; HIDDEN_SIZE * 2]>,
-    pub output_bias: i16,
+    pub output_weights: Box<[[i8; HIDDEN_SIZE * 2]; OUTPUT_BUCKETS]>,
+    pub output_bias: [i16; OUTPUT_BUCKETS],
 }
 
-/// Expected size of the network file in bytes.
+/// Expected size of the network file in bytes (bucketed format).
 pub const NET_FILE_SIZE: usize =
+    INPUT_SIZE * HIDDEN_SIZE * 2               // ft_weights (i16)
+    + HIDDEN_SIZE * 2                          // ft_biases (i16)
+    + OUTPUT_BUCKETS * HIDDEN_SIZE * 2         // output_weights (i8)
+    + OUTPUT_BUCKETS * 2;                      // output_bias (i16)
+
+/// Size of the legacy single-output-bucket format.
+pub const LEGACY_NET_FILE_SIZE: usize =
     INPUT_SIZE * HIDDEN_SIZE * 2   // ft_weights (i16)
     + HIDDEN_SIZE * 2              // ft_biases (i16)
     + HIDDEN_SIZE * 2              // output_weights (i8)
@@ -27,10 +36,15 @@ pub const NET_FILE_SIZE: usize =
 
 impl NnueNetwork {
     /// Parse a network from raw bytes (little-endian sequential format).
+    /// Accepts both the bucketed and the legacy single-bucket layout.
     pub fn from_bytes(data: &[u8]) -> Result<Self, &'static str> {
-        if data.len() < NET_FILE_SIZE {
+        let bucketed = if data.len() >= NET_FILE_SIZE {
+            true
+        } else if data.len() >= LEGACY_NET_FILE_SIZE {
+            false
+        } else {
             return Err("NNUE file too small");
-        }
+        };
 
         let mut offset = 0;
 
@@ -58,15 +72,30 @@ impl NnueNetwork {
             offset += 2;
         }
 
-        // Output weights: HIDDEN_SIZE * 2 i8
-        let mut output_weights = Box::new([0i8; HIDDEN_SIZE * 2]);
-        for val in output_weights.iter_mut() {
-            *val = data[offset] as i8;
-            offset += 1;
+        // Output weights: bucket rows contiguous (legacy = one row, replicated).
+        let mut output_weights = Box::new([[0i8; HIDDEN_SIZE * 2]; OUTPUT_BUCKETS]);
+        let rows = if bucketed { OUTPUT_BUCKETS } else { 1 };
+        for b in 0..rows {
+            for val in output_weights[b].iter_mut() {
+                *val = data[offset] as i8;
+                offset += 1;
+            }
         }
 
-        // Output bias: i16
-        let output_bias = i16::from_le_bytes([data[offset], data[offset + 1]]);
+        // Output bias: OUTPUT_BUCKETS i16 (legacy = one value, replicated).
+        let mut output_bias = [0i16; OUTPUT_BUCKETS];
+        for val in output_bias.iter_mut().take(rows) {
+            *val = i16::from_le_bytes([data[offset], data[offset + 1]]);
+            offset += 2;
+        }
+
+        if !bucketed {
+            let row = output_weights[0];
+            for b in 1..OUTPUT_BUCKETS {
+                output_weights[b] = row;
+                output_bias[b] = output_bias[0];
+            }
+        }
 
         Ok(Self {
             ft_weights,
@@ -87,7 +116,9 @@ impl NnueNetwork {
 
     /// Returns false if this is a zero-initialised placeholder (net not yet trained).
     pub fn is_trained(&self) -> bool {
-        self.output_weights.iter().any(|&w| w != 0)
+        self.output_weights
+            .iter()
+            .any(|row| row.iter().any(|&w| w != 0))
     }
 
     /// Load a network from a file path, falling back to embedded if path is empty.

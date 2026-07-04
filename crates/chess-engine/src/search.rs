@@ -2879,7 +2879,13 @@ fn evaluate_for_side(board: &Board, state: &mut SearchState, ply: u8) -> i32 {
         }
         // nnue_evaluate returns score from side-to-move perspective.
         // scale_for_endgame expects White's perspective, so flip for Black then flip back.
-        let raw = nnue_evaluate(&state.accumulators[ply as usize], board.side_to_move, &state.net);
+        let piece_count = (board.occupancy[0].0 | board.occupancy[1].0).count_ones();
+        let raw = nnue_evaluate(
+            &state.accumulators[ply as usize],
+            board.side_to_move,
+            &state.net,
+            piece_count,
+        );
         let sign = if board.side_to_move == Color::White { 1 } else { -1 };
         crate::eval::scale_for_endgame(board, raw * sign) * sign
     } else {
