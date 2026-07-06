@@ -2826,11 +2826,15 @@ fn endgame_scale_factor(board: &Board, params: &EvalParams, eval: i32, phase: i3
         return 12;
     }
 
-    // Rook + minor vs rook with pawns on the board — drawish but pawn(s) add winning chances
+    // Rook + minor vs rook with pawns on the board — the R+minor-vs-R draw
+    // tendency fades as pawns are added; with several pawns the position is a
+    // normal piece-up (or piece-for-pawns) fight and must keep full eval.
+    // A flat 64 here halved a genuine +330 in R+N+3P vs R+5P and made shedding
+    // a knight for two pawns look ~free (lichess xGKDKesn, 60...Ke7??).
     if (wr == 1 && w_minors == 1 && br == 1 && b_minors == 0 && wq == 0 && bq == 0)
         || (br == 1 && b_minors == 1 && wr == 1 && w_minors == 0 && bq == 0 && wq == 0)
     {
-        return 64; // halve the eval
+        return 64 + 16 * (wp + bp).min(4);
     }
 
     128 // full eval
@@ -2941,6 +2945,26 @@ fn chebyshev_distance(a: Square, b: Square) -> u8 {
 mod tests {
     use super::*;
     use chess_common::Board;
+
+    #[test]
+    fn r_minor_vs_r_scale_respects_pawn_count() {
+        // lichess xGKDKesn: after 60...Ke7?? 61.Rbxb4 Nxb4 62.Ng6+ Ke8 63.Rxb4
+        // White (R+N+3P vs R+5P) is winning ~+330 (SF18 d30) and the raw NNUE
+        // agreed (+338), but the flat R+minor-vs-R scale of 64 halved it, so at
+        // the root the engine saw only ~8cp between keeping the piece (60...Na6)
+        // and shedding it. With 8 pawns on the board there is no draw tendency.
+        let fork = Board::from_fen("4k3/6p1/4ppNp/7P/1R6/1pr3P1/5P1K/8 b - - 0 63").unwrap();
+        assert_eq!(scale_for_endgame(&fork, 338), 338);
+
+        // Down to 2 pawns total the drawish scaling should still bite...
+        let two_pawns = Board::from_fen("4k3/6p1/6N1/8/1R6/2r3P1/7K/8 b - - 0 1").unwrap();
+        let scaled = scale_for_endgame(&two_pawns, 300);
+        assert!(scaled < 300, "expected damped eval, got {scaled}");
+
+        // ...and bare R+minor vs R remains a theoretical draw (scale 12 path).
+        let bare = Board::from_fen("4k3/8/6N1/8/1R6/2r5/7K/8 b - - 0 1").unwrap();
+        assert!(scale_for_endgame(&bare, 300) < 50);
+    }
 
     #[test]
     fn opening_evals_not_inflated() {
