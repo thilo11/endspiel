@@ -1305,26 +1305,53 @@ pub fn iterative_deepening(
 
     // Tablebase root restriction. In a TB-won position, confine the search to
     // the win-preserving moves, ordered by the tablebase ranking (fastest DTZ
-    // conversion first). This is the one thing the search cannot do on its own:
-    // every winning move comes back with the same flat `TB_WIN_SCORE` from leaf
-    // probing, so search has no way to prefer a converting move over an aimless
-    // shuffle, and could drift toward the 50-move draw. The stable sort below
-    // preserves this DTZ order among equal-scored moves, so the progress move
-    // stays first and is chosen — unless the search finds a genuine (higher)
-    // mate, which correctly outranks the TB-win band. Single-PV play only;
-    // multi-PV analysis keeps the full move list.
+    // conversion first). This is the one thing the search cannot do on its
+    // own: interior WDL probes fire only at halfmove_clock == 0, so inside a
+    // conversion the search sees no tablebase gradient at all and would drift
+    // toward the 50-move or repetition draw. While restricted, the iteration
+    // re-sort keeps this order sticky (see the bucketed sort in the ID loop):
+    // cp noise cannot displace the progress move; only a proven mate promotes
+    // a move and only a draw-or-worse score (a repetition the search actually
+    // saw) demotes one. Single-PV play only; multi-PV keeps the full list.
+    let mut tb_restricted = false;
     if params.multi_pv.max(1) == 1
         && let Some(ranking) = root_tb_ranking.as_ref()
         && !ranking.winning_moves.is_empty()
     {
-        let restricted: Vec<(Move, i32)> = ranking
-            .winning_moves
-            .iter()
-            .filter(|m| root_move_scores.iter().any(|(rm, _)| rm == *m))
-            .map(|&m| (m, 0i32))
-            .collect();
+        // Syzygy is blind to game history: a statically win-preserving move
+        // can still complete a claimable threefold on the board (lichess
+        // 45geMoUz: 82.Kg4 in TB-won K+N+2P vs K+B reached the position a
+        // third time). Grade each winning move by how often its child
+        // position already occurred in the game: twice-seen children are
+        // dropped outright, and fresh children keep their DTZ order ahead of
+        // once-seen ones, so the repetition budget can never be spent faster
+        // than conversion progress is made.
+        let prior_occurrences = |m: Move| -> usize {
+            let mut child = board.clone();
+            child.make_move(m);
+            let target = child.hash;
+            child
+                .position_history
+                .iter()
+                .filter(|&&h| h == target)
+                .count()
+        };
+        let mut restricted: Vec<(Move, i32)> = Vec::new();
+        let mut seen_once: Vec<(Move, i32)> = Vec::new();
+        for &m in &ranking.winning_moves {
+            if !root_move_scores.iter().any(|(rm, _)| *rm == m) {
+                continue;
+            }
+            match prior_occurrences(m) {
+                0 => restricted.push((m, 0i32)),
+                1 => seen_once.push((m, 0i32)),
+                _ => {}
+            }
+        }
+        restricted.extend(seen_once);
         if !restricted.is_empty() {
             root_move_scores = restricted;
+            tb_restricted = true;
         }
     }
 
@@ -1355,9 +1382,30 @@ pub fn iterative_deepening(
             continue;
         }
 
-        // Sort root moves by previous iteration score (best first)
+        // Sort root moves by previous iteration score (best first).
+        // In TB-restricted mode every listed move is a tablebase win, so cp
+        // differences between them are search noise that must not displace
+        // the DTZ/repetition-freshness order (a shuffle move that "scores"
+        // 20cp above the converting move burns the repetition budget —
+        // lichess 45geMoUz). Sort into buckets only: proven mates first
+        // (fine-grained, shorter mate wins), then still-winning scores in
+        // their tablebase order (stable), then draw-or-worse (a repetition
+        // or loss the search actually found) last.
         if base_depth > 1 {
-            root_move_scores.sort_by_key(|b| std::cmp::Reverse(b.1));
+            if tb_restricted {
+                root_move_scores.sort_by_key(|&(_, s)| {
+                    let bucket = if Score(s).is_mate() && s > 0 {
+                        2
+                    } else if s > 0 {
+                        1
+                    } else {
+                        0
+                    };
+                    std::cmp::Reverse((bucket, if bucket == 2 { s } else { 0 }))
+                });
+            } else {
+                root_move_scores.sort_by_key(|b| std::cmp::Reverse(b.1));
+            }
         }
         // If the best move has been highly stable, ensure it is searched first
         // at root regardless of TT or score ordering. In PVS, the first move
@@ -2111,11 +2159,14 @@ fn alpha_beta(
             return -state.contempt;
         }
         // Threefold across the full history (catches game-history positions).
+        // A SINGLE game-history occurrence is deliberately NOT a draw here
+        // (standard semantics): scoring first revisits as terminal draws lets
+        // a defender poison every winning line by steering toward once-seen
+        // positions — in lichess 45geMoUz it flattened all of White's TB-won
+        // continuations to ~0 and the engine walked into an actual threefold.
+        // Shuffle pressure at the root comes from the TB restriction's child-
+        // repetition grading instead.
         if board.is_repetition() {
-            return -state.contempt;
-        }
-        // Twofold in recent move history: discourage shuffling
-        if board.has_repeated(state.game_ply) {
             return -state.contempt;
         }
     }
@@ -2166,10 +2217,20 @@ fn alpha_beta(
     // game-theoretic score that is used to bound (or immediately return from)
     // this node.  We skip probing during singular-extension searches to avoid
     // interfering with the null-window test.
+    //
+    // Probe only at halfmove_clock == 0 (the position right after a capture or
+    // pawn move). WDL is blind to game history: at hmc > 0 a "won" position can
+    // still be drawn on the board via threefold repetition or the 50-move rule,
+    // and a cutoff here adjudicates the line before the repetition checks in
+    // the subtree can see it (lichess 45geMoUz: 81.Kh5 Be8+ was cut off as
+    // "Black is lost" two plies above the draw Black was actually forcing).
+    // After a zeroing move no earlier position can recur and the 50-move count
+    // restarts, so the cutoff is sound — the standard Stockfish guard.
     if let Some(ref tb) = state.syzygy_tb {
         let piece_count = board.all_occupancy().count();
         if piece_count <= tb.max_pieces()
             && board.castling.0 == 0
+            && board.halfmove_clock == 0
             && excluded_move.is_null()
             && let Some(wdl) = syzygy::probe_wdl(tb, board)
         {
@@ -2921,9 +2982,6 @@ fn quiescence(
         if board.is_repetition() {
             return -state.contempt;
         }
-        if board.has_repeated(state.game_ply) {
-            return -state.contempt;
-        }
     }
 
     state.nodes += 1;
@@ -3671,6 +3729,111 @@ mod tests {
         assert!(
             result.score.is_mate() && result.score.0 > 0 || result.score.0 > 200,
             "should find a winning continuation, got {}",
+            result.score
+        );
+    }
+
+    /// Build a board from startpos + a UCI move list (populating
+    /// `position_history`, so the search sees the real game history) and run
+    /// a fixed-depth search with tablebases, like `search_position_with_syzygy`.
+    fn search_game_with_syzygy(
+        moves_uci: &str,
+        max_depth: u8,
+        syzygy_tb: Option<SyzygyTB>,
+    ) -> SearchResult {
+        let moves_uci = moves_uci.to_owned();
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                let mut board = Board::starting_position();
+                for uci in moves_uci.split_whitespace() {
+                    let parsed = Move::from_uci(uci).expect("valid UCI move");
+                    let legal = chess_core::generate_legal_moves(&board)
+                        .as_slice()
+                        .iter()
+                        .copied()
+                        .find(|m| {
+                            m.from_sq() == parsed.from_sq()
+                                && m.to_sq() == parsed.to_sq()
+                                && m.flag().promotion_piece() == parsed.flag().promotion_piece()
+                        })
+                        .unwrap_or_else(|| panic!("illegal move in game record: {uci}"));
+                    board.make_move(legal);
+                }
+                let stop = Arc::new(AtomicBool::new(false));
+                let tt = Arc::new(SharedTT::new(16));
+                let params = SearchParams {
+                    max_depth,
+                    use_nnue: false,
+                    ..Default::default()
+                };
+                let root_tb_ranking = syzygy_tb
+                    .as_ref()
+                    .and_then(|tb| crate::syzygy::rank_root_moves(tb, &board));
+                iterative_deepening(
+                    &board,
+                    &params,
+                    &stop,
+                    &tt,
+                    None,
+                    0,
+                    &NnueNetwork::embedded(),
+                    None,
+                    syzygy_tb,
+                    root_tb_ranking,
+                    None,
+                    None,
+                )
+            })
+            .expect("failed to spawn search thread")
+            .join()
+            .expect("search thread panicked")
+    }
+
+    #[test]
+    fn converts_tb_win_instead_of_repeating_from_lichess_45gemouz() {
+        // lichess.org/45geMoUz: TB-won K+N+2P vs K+B, drawn by threefold at
+        // move 82. The losing moment was 81.Kh5?? — after 81...Be8+ the only
+        // still-winning move (82.Kg4) completed the repetition, so by move 82
+        // the win was gone. Three bugs conspired: interior WDL cutoffs at
+        // hmc > 0 adjudicated lines above the repetition the defender was
+        // forcing; a single game-history revisit was scored as a terminal
+        // draw, flattening every winning line to noise; and cp noise could
+        // reorder the DTZ-ranked root moves, so the engine shuffled its
+        // repetition budget away (77.Kg4, 79.Kg4, 81.Kh5) instead of
+        // converting. At move 81 the DTZ-progress move is Nf4 (dtz 16, fresh
+        // child); the shuffles Kg4/Kh5 (dtz 20/22) must stay behind it.
+        let _guard = crate::syzygy::syzygy_test_lock()
+            .lock()
+            .expect("lock syzygy test mutex");
+        let path = syzygy_path();
+        if !path.exists() {
+            return;
+        }
+        let tb = SyzygyTB::new(path.to_string_lossy().as_ref()).expect("load syzygy tables");
+        // Full game up to and including 80...Ba4 (White to move 81).
+        let moves = "d2d4 d7d5 c2c4 c7c6 g1f3 g8f6 e2e3 e7e6 b1d2 b8d7 f1d3 f8d6 e1g1 e8g8 e3e4 \
+                     e6e5 c4d5 c6d5 e4d5 e5d4 d2e4 f6e4 d3e4 d7f6 d1d4 f6e4 d4e4 f8e8 e4d4 c8f5 \
+                     c1g5 f7f6 g5h4 e8e4 d4d3 f5g6 h4g3 d6g3 h2g3 e4e6 d3c4 e6d6 f3d4 a8c8 c4b3 \
+                     g6e4 b3e3 e4d5 d4f5 d6e6 e3a7 g7g6 f5e3 e6a6 a7d4 d5a2 d4e4 a2f7 e4b7 a6a1 \
+                     f1a1 c8b8 b7f3 g8g7 a1d1 d8c7 d1d2 c7c1 f3d1 c1d1 e3d1 f6f5 d1c3 g7f6 c3e2 \
+                     f7c4 e2d4 c4d5 f2f3 f6e5 g1f2 e5d6 d4e2 d6c5 f2e3 d5c4 e3f4 c4b3 f4g5 b8b7 \
+                     e2g1 c5c4 g5h6 c4c5 g1h3 b3g8 h3g5 c5c4 b2b3 c4b5 d2d8 g8b3 g5h7 b7e7 d8d2 \
+                     b3f7 h7g5 f7e8 g5h3 b5c6 h3f4 e7e5 d2e2 e5e2 f4e2 c6d6 e2f4 d6e5 h6g5 e8a4 \
+                     f4g6 e5e6 g6f4 e6e5 g3g4 f5g4 f3g4 e5e4 f4h5 a4d1 h5g3 e4e3 g3f5 e3f2 f5h4 \
+                     f2g3 h4f5 g3f2 g2g3 f2f3 g5h4 f3e4 f5d6 e4e5 d6c4 e5f6 g4g5 f6g7 c4e3 d1a4 \
+                     e3d5 g7h7 h4g4 a4d7 g4h5 d7e8 h5g4 e8d7 g4h4 d7a4";
+        let result = search_game_with_syzygy(moves, 16, Some(tb));
+        assert_ne!(
+            result.best_move.to_uci(),
+            "h4h5",
+            "81.Kh5 forfeits the win: after Be8+ the only winning reply repeats, score={}",
+            result.score
+        );
+        assert_eq!(
+            result.best_move.to_uci(),
+            "d5f4",
+            "must play the DTZ-progress move Nf4 instead of shuffling, score={}",
             result.score
         );
     }
