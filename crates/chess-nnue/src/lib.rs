@@ -10,7 +10,7 @@ pub const HIDDEN_SIZE: usize = 768;
 /// bullet's MaterialCount<8> (divisor = ceil(32/8) = 4).
 pub const OUTPUT_BUCKETS: usize = 8;
 pub const FT_QUANT: i32 = 127; // feature transformer quantization (QA)
-pub const NET_QUANT: i32 = 64;  // output layer quantization (QB)
+pub const NET_QUANT: i32 = 64; // output layer quantization (QB)
 
 pub use accumulator::Accumulator;
 pub use inference::nnue_evaluate;

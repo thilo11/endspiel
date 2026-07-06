@@ -90,7 +90,9 @@ pub fn log_summary() {
     log::info!(
         "device tuning: Threads={} (of {} logical), Hash={} MB",
         default_threads(),
-        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0),
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(0),
         default_hash_mb(default_threads()),
     );
     let (total, avail) = mem_total_avail_mb();
@@ -148,7 +150,9 @@ fn performance_cores() -> Option<usize> {
         let name = entry.file_name();
         let name = name.to_string_lossy();
         // Match cpuN directories only (skip "cpufreq", "cpuidle", "cpu" etc.).
-        let Some(digits) = name.strip_prefix("cpu") else { continue };
+        let Some(digits) = name.strip_prefix("cpu") else {
+            continue;
+        };
         if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
             continue;
         }

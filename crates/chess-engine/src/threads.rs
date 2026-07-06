@@ -4,8 +4,8 @@
 //! search the same root position with depth diversity (Stockfish-style
 //! offsets) and share results via the lock-free transposition table.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 
 use chess_common::{Board, Move, Score};
@@ -85,7 +85,20 @@ impl ThreadPool {
 
         if self.num_threads <= 1 {
             // Single-thread fast path: avoid SMP setup and root prechecks.
-            return search::iterative_deepening(board, params, stop, tt, info_callback, 0, net, None, syzygy_tb, root_tb_ranking, book, persistent);
+            return search::iterative_deepening(
+                board,
+                params,
+                stop,
+                tt,
+                info_callback,
+                0,
+                net,
+                None,
+                syzygy_tb,
+                root_tb_ranking,
+                book,
+                persistent,
+            );
         }
 
         let root_moves = chess_core::generate_legal_moves(board);
@@ -93,7 +106,20 @@ impl ThreadPool {
 
         if active_threads <= 1 {
             // Single-thread fast path: no spawning overhead
-            return search::iterative_deepening(board, params, stop, tt, info_callback, 0, net, None, syzygy_tb, root_tb_ranking, book, persistent);
+            return search::iterative_deepening(
+                board,
+                params,
+                stop,
+                tt,
+                info_callback,
+                0,
+                net,
+                None,
+                syzygy_tb,
+                root_tb_ranking,
+                book,
+                persistent,
+            );
         }
 
         // `max_nodes` is a GLOBAL budget, but each SMP thread enforces only its
@@ -105,9 +131,8 @@ impl ThreadPool {
             (0..t).map(|i| n / t + u64::from(i < n % t)).collect()
         });
 
-        let counters: Arc<Vec<PaddedCounter>> = Arc::new(
-            (0..active_threads).map(|_| PaddedCounter::new()).collect(),
-        );
+        let counters: Arc<Vec<PaddedCounter>> =
+            Arc::new((0..active_threads).map(|_| PaddedCounter::new()).collect());
 
         // Spawn helper threads (1..N)
         let mut handles = Vec::with_capacity(active_threads - 1);
@@ -128,18 +153,33 @@ impl ThreadPool {
             let handle = thread::Builder::new()
                 .stack_size(4 * 1024 * 1024) // 4 MB – prevent stack overflow on Windows ARM64
                 .spawn(move || {
-                // Helper threads run without info callback — they just
-                // contribute to the TT.  Wrap in catch_unwind so a panic
-                // in a helper doesn't poison the process.
-                let search_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    search::iterative_deepening(
-                        &board, &params, &stop, &tt, None, thread_id, &net, Some(&counters[thread_id].value), tb, None, book, None,
-                    )
-                }));
-                if let Ok(result) = search_result {
-                    counters[thread_id].value.store(result.nodes, Ordering::Relaxed);
-                }
-            }).expect("failed to spawn search thread");
+                    // Helper threads run without info callback — they just
+                    // contribute to the TT.  Wrap in catch_unwind so a panic
+                    // in a helper doesn't poison the process.
+                    let search_result =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            search::iterative_deepening(
+                                &board,
+                                &params,
+                                &stop,
+                                &tt,
+                                None,
+                                thread_id,
+                                &net,
+                                Some(&counters[thread_id].value),
+                                tb,
+                                None,
+                                book,
+                                None,
+                            )
+                        }));
+                    if let Ok(result) = search_result {
+                        counters[thread_id]
+                            .value
+                            .store(result.nodes, Ordering::Relaxed);
+                    }
+                })
+                .expect("failed to spawn search thread");
             handles.push(handle);
         }
 
@@ -183,7 +223,20 @@ impl ThreadPool {
         }
 
         let search_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            search::iterative_deepening(board, &main_params, stop, tt, wrapped_cb, 0, net, Some(&counters[0].value), syzygy_tb, root_tb_ranking, book, persistent)
+            search::iterative_deepening(
+                board,
+                &main_params,
+                stop,
+                tt,
+                wrapped_cb,
+                0,
+                net,
+                Some(&counters[0].value),
+                syzygy_tb,
+                root_tb_ranking,
+                book,
+                persistent,
+            )
         }));
 
         let result = match search_result {
@@ -195,7 +248,11 @@ impl ThreadPool {
                     score: Score(0),
                     depth: 0,
                     nodes: 0,
-                    pv: if fallback_move.is_null() { vec![] } else { vec![fallback_move] },
+                    pv: if fallback_move.is_null() {
+                        vec![]
+                    } else {
+                        vec![fallback_move]
+                    },
                 }
             }
         };
@@ -208,7 +265,10 @@ impl ThreadPool {
         }
 
         // Total nodes from all threads
-        let total_nodes: u64 = counters.iter().map(|c| c.value.load(Ordering::Relaxed)).sum();
+        let total_nodes: u64 = counters
+            .iter()
+            .map(|c| c.value.load(Ordering::Relaxed))
+            .sum();
 
         SearchResult {
             best_move: result.best_move,
@@ -245,12 +305,12 @@ mod tests {
     }
 
     use super::ThreadPool;
-    use crate::tt::SharedTT;
     use crate::SearchParams;
+    use crate::tt::SharedTT;
     use chess_common::Board;
     use chess_nnue::NnueNetwork;
-    use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
 
     fn run_search(threads: usize, params: SearchParams) -> super::SearchResult {
         let board = Board::starting_position();
@@ -258,7 +318,9 @@ mod tests {
         let pool = ThreadPool::new(threads);
         let tt = Arc::new(SharedTT::new(16));
         let stop = Arc::new(AtomicBool::new(false));
-        pool.search(&board, &params, &stop, &tt, None, &net, None, None, None, None)
+        pool.search(
+            &board, &params, &stop, &tt, None, &net, None, None, None, None,
+        )
     }
 
     /// `max_nodes` is a GLOBAL budget: adding threads must not multiply the node
@@ -273,7 +335,10 @@ mod tests {
         };
 
         let n1 = run_search(1, mk()).nodes;
-        assert!(n1 <= limit * 2, "single-thread nodes {n1} exceeded 2x budget {limit}");
+        assert!(
+            n1 <= limit * 2,
+            "single-thread nodes {n1} exceeded 2x budget {limit}"
+        );
 
         let n8 = run_search(8, mk()).nodes;
         assert!(
@@ -293,6 +358,10 @@ mod tests {
                 ..SearchParams::default()
             },
         );
-        assert_eq!(res.depth, 8, "search did not stop at max_depth 8 (got {})", res.depth);
+        assert_eq!(
+            res.depth, 8,
+            "search did not stop at max_depth 8 (got {})",
+            res.depth
+        );
     }
 }

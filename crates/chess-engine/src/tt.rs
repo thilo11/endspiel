@@ -5,7 +5,7 @@
 //! throughout — the TT is a best-effort cache and occasional corruption
 //! from races is acceptable.
 
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
 use chess_common::Move;
 
@@ -110,7 +110,6 @@ pub struct SharedTT {
     generation: AtomicU8,
 }
 
-
 impl SharedTT {
     /// Create a new transposition table with the given size in MB.
     pub fn new(size_mb: usize) -> Self {
@@ -169,10 +168,7 @@ impl SharedTT {
             let (_old_entry, old_generation) = unpack_data(old_data);
 
             // Keep deeper entries from the current generation
-            if old_hash != hash
-                && old_generation == generation
-                && _old_entry.depth >= depth + 2
-            {
+            if old_hash != hash && old_generation == generation && _old_entry.depth >= depth + 2 {
                 return;
             }
         }

@@ -2,8 +2,7 @@ use chess_common::moves::{Move, MoveFlag, MoveList};
 use chess_common::{Bitboard, Board, CastlingRights, Color, PieceKind, Square};
 
 use crate::attacks::{
-    bishop_attacks, is_square_attacked, king_attacks, knight_attacks, queen_attacks,
-    rook_attacks,
+    bishop_attacks, is_square_attacked, king_attacks, knight_attacks, queen_attacks, rook_attacks,
 };
 
 /// Generate all legal moves for the current position.
@@ -175,12 +174,7 @@ fn generate_pawn_moves(
     }
 }
 
-fn generate_knight_moves(
-    board: &Board,
-    us: Color,
-    our_occ: Bitboard,
-    moves: &mut MoveList,
-) {
+fn generate_knight_moves(board: &Board, us: Color, our_occ: Bitboard, moves: &mut MoveList) {
     let ci = us.index();
     let knights = board.pieces[ci][PieceKind::Knight.index()];
     let their_occ = board.occupancy[us.opposite().index()];
@@ -286,12 +280,7 @@ fn generate_king_moves(
     }
 }
 
-fn generate_castling_moves(
-    board: &Board,
-    us: Color,
-    all_occ: Bitboard,
-    moves: &mut MoveList,
-) {
+fn generate_castling_moves(board: &Board, us: Color, all_occ: Bitboard, moves: &mut MoveList) {
     let them = us.opposite();
     let king_sq = board.king_square(us);
 
@@ -570,7 +559,8 @@ mod tests {
 
     #[test]
     fn test_position_after_e4() {
-        let board = Board::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1").unwrap();
+        let board =
+            Board::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1").unwrap();
         let moves = generate_legal_moves(&board);
         // After 1.e4, Black has 20 legal moves
         assert_eq!(moves.len(), 20);
@@ -598,19 +588,15 @@ mod tests {
     #[test]
     fn test_en_passant() {
         // White pawn on e5, black pawn just pushed d7-d5
-        let board =
-            Board::from_fen("rnbqkbnr/ppp1pppp/8/3pP3/8/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 3")
-                .unwrap();
+        let board = Board::from_fen("rnbqkbnr/ppp1pppp/8/3pP3/8/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 3")
+            .unwrap();
         let moves = generate_legal_moves(&board);
         let ep_moves: Vec<_> = moves
             .iter()
             .filter(|m| m.flag() == MoveFlag::EnPassant)
             .collect();
         assert_eq!(ep_moves.len(), 1, "Expected 1 en passant move");
-        assert_eq!(
-            ep_moves[0].to_sq(),
-            Square::from_algebraic("d6").unwrap()
-        );
+        assert_eq!(ep_moves[0].to_sq(), Square::from_algebraic("d6").unwrap());
     }
 
     #[test]
@@ -639,21 +625,22 @@ mod tests {
     #[test]
     fn test_no_castling_through_check() {
         // Rook on f8 attacks f1, preventing kingside castle
-        let board =
-            Board::from_fen("5r2/8/8/8/8/8/8/R3K2R w KQ - 0 1").unwrap();
+        let board = Board::from_fen("5r2/8/8/8/8/8/8/R3K2R w KQ - 0 1").unwrap();
         let moves = generate_legal_moves(&board);
         let ks_castle: Vec<_> = moves
             .iter()
             .filter(|m| m.flag() == MoveFlag::KingsideCastle)
             .collect();
-        assert!(ks_castle.is_empty(), "Should not be able to castle kingside through attacked f1");
+        assert!(
+            ks_castle.is_empty(),
+            "Should not be able to castle kingside through attacked f1"
+        );
     }
 
     #[test]
     fn test_no_castling_in_check() {
         // King in check, cannot castle
-        let board =
-            Board::from_fen("4r3/8/8/8/8/8/8/R3K2R w KQ - 0 1").unwrap();
+        let board = Board::from_fen("4r3/8/8/8/8/8/8/R3K2R w KQ - 0 1").unwrap();
         let moves = generate_legal_moves(&board);
         let castling_moves: Vec<_> = moves
             .iter()
@@ -667,9 +654,15 @@ mod tests {
     #[test]
     fn test_checkmate_no_moves() {
         // Scholar's mate position - black is checkmated
-        let board = Board::from_fen("r1bqkb1r/pppp1Qpp/2n2n2/4p3/2B1P3/8/PPPP1PPP/RNB1K1NR b KQkq - 0 4").unwrap();
+        let board =
+            Board::from_fen("r1bqkb1r/pppp1Qpp/2n2n2/4p3/2B1P3/8/PPPP1PPP/RNB1K1NR b KQkq - 0 4")
+                .unwrap();
         let moves = generate_legal_moves(&board);
-        assert_eq!(moves.len(), 0, "Checkmate position should have 0 legal moves");
+        assert_eq!(
+            moves.len(),
+            0,
+            "Checkmate position should have 0 legal moves"
+        );
     }
 
     #[test]
@@ -678,7 +671,11 @@ mod tests {
         // Actually let's use a simpler stalemate
         let board = Board::from_fen("k7/2Q5/1K6/8/8/8/8/8 b - - 0 1").unwrap();
         let moves = generate_legal_moves(&board);
-        assert_eq!(moves.len(), 0, "Stalemate position should have 0 legal moves");
+        assert_eq!(
+            moves.len(),
+            0,
+            "Stalemate position should have 0 legal moves"
+        );
     }
 
     /// Perft test: count leaf nodes at a given depth.
@@ -728,28 +725,25 @@ mod tests {
     #[test]
     fn test_perft_kiwipete_depth_1() {
         // "Kiwipete" position - good test for tactical move generation
-        let board = Board::from_fen(
-            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
-        )
-        .unwrap();
+        let board =
+            Board::from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")
+                .unwrap();
         assert_eq!(perft(&board, 1), 48);
     }
 
     #[test]
     fn test_perft_kiwipete_depth_2() {
-        let board = Board::from_fen(
-            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
-        )
-        .unwrap();
+        let board =
+            Board::from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")
+                .unwrap();
         assert_eq!(perft(&board, 2), 2039);
     }
 
     #[test]
     fn test_perft_kiwipete_depth_3() {
-        let board = Board::from_fen(
-            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
-        )
-        .unwrap();
+        let board =
+            Board::from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")
+                .unwrap();
         assert_eq!(perft(&board, 3), 97862);
     }
 
@@ -767,24 +761,25 @@ mod tests {
             "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
             "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1",
             "r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1",
-            "k7/4P3/8/8/8/8/8/4K3 w - - 0 1",              // promotion
-            "3rkr2/4P3/8/8/8/8/8/4K3 w - - 0 1",            // promo-capture
+            "k7/4P3/8/8/8/8/8/4K3 w - - 0 1",    // promotion
+            "3rkr2/4P3/8/8/8/8/8/4K3 w - - 0 1", // promo-capture
             "rnbqkbnr/ppp1pppp/8/3pP3/8/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 3", // en passant
-            "k7/2Q5/1K6/8/8/8/8/8 b - - 0 1",                // stalemate
+            "k7/2Q5/1K6/8/8/8/8/8 b - - 0 1",    // stalemate
         ];
 
         for fen in &positions {
             let board = Board::from_fen(fen).unwrap();
-            let all  = generate_pseudo_legal_moves(&board);
+            let all = generate_pseudo_legal_moves(&board);
             let caps = generate_pseudo_legal_captures(&board);
-            let qts  = generate_pseudo_legal_quiets(&board);
+            let qts = generate_pseudo_legal_quiets(&board);
 
             // Every capture/promotion from caps must be in all
             for &m in caps.iter() {
                 assert!(
                     all.iter().any(|a| *a == m),
                     "capture move {} from captures-gen not found in all pseudo-legal (fen: {})",
-                    m, fen,
+                    m,
+                    fen,
                 );
             }
             // Every quiet from qts must be in all
@@ -792,7 +787,8 @@ mod tests {
                 assert!(
                     all.iter().any(|a| *a == m),
                     "quiet move {} from quiets-gen not found in all pseudo-legal (fen: {})",
-                    m, fen,
+                    m,
+                    fen,
                 );
             }
             // Union must match total count (promotions appear only in caps)
@@ -800,7 +796,10 @@ mod tests {
                 caps.len() + qts.len(),
                 all.len(),
                 "capture ({}) + quiet ({}) ≠ all ({}) for fen: {}",
-                caps.len(), qts.len(), all.len(), fen,
+                caps.len(),
+                qts.len(),
+                all.len(),
+                fen,
             );
         }
     }

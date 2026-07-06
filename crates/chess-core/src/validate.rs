@@ -1,5 +1,5 @@
-use chess_common::moves::Move;
 use chess_common::Board;
+use chess_common::moves::Move;
 
 use crate::movegen::generate_legal_moves;
 
@@ -25,9 +25,7 @@ pub fn is_legal_move(board: &Board, m: Move) -> bool {
     let promo = m.flag().promotion_piece();
 
     legal_moves.iter().any(|legal| {
-        legal.from_sq() == from
-            && legal.to_sq() == to
-            && legal.flag().promotion_piece() == promo
+        legal.from_sq() == from && legal.to_sq() == to && legal.flag().promotion_piece() == promo
     })
 }
 
@@ -52,8 +50,8 @@ pub fn find_legal_move(board: &Board, m: Move) -> Option<Move> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chess_common::moves::MoveFlag;
     use chess_common::Square;
+    use chess_common::moves::MoveFlag;
 
     #[test]
     fn test_e2e4_is_legal() {

@@ -82,9 +82,8 @@ unsafe fn screlu_sum_avx2(acc: &[i16; HIDDEN_SIZE], weights: &[i8]) -> i32 {
             let sq = _mm256_mullo_epi16(clamped, clamped);
 
             // Load 16 × i8 weights (128 bits) and sign-extend to 16 × i16.
-            let w = _mm256_cvtepi8_epi16(_mm_loadu_si128(
-                weights.as_ptr().add(i) as *const __m128i,
-            ));
+            let w =
+                _mm256_cvtepi8_epi16(_mm_loadu_si128(weights.as_ptr().add(i) as *const __m128i));
 
             // Multiply adjacent pairs and accumulate to i32:
             // madd(sq, w)[k] = sq[2k]*w[2k] + sq[2k+1]*w[2k+1]  (8 × i32)
@@ -166,8 +165,8 @@ pub fn nnue_evaluate(
 
     let bucket = output_bucket(piece_count);
     let weights = &net.output_weights[bucket];
-    let output = screlu_sum(stm_acc, &weights[..HIDDEN_SIZE])
-        + screlu_sum(opp_acc, &weights[HIDDEN_SIZE..]);
+    let output =
+        screlu_sum(stm_acc, &weights[..HIDDEN_SIZE]) + screlu_sum(opp_acc, &weights[HIDDEN_SIZE..]);
 
     (output / FT_QUANT + i32::from(net.output_bias[bucket])) * 400 / (FT_QUANT * NET_QUANT)
 }

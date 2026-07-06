@@ -8,8 +8,8 @@ pub mod tt;
 
 use chess_common::{Board, Move, Score};
 use chess_nnue::NnueNetwork;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use polyglot::OpeningBook;
 use syzygy::SyzygyTB;
@@ -371,11 +371,17 @@ impl Engine {
                     ));
                 }
                 let max = tb.max_pieces();
-                log::info!("Syzygy tablebases loaded from '{}' (max {} pieces)", path, max);
+                log::info!(
+                    "Syzygy tablebases loaded from '{}' (max {} pieces)",
+                    path,
+                    max
+                );
                 self.syzygy_tb = Some(tb);
                 Ok(())
             }
-            Err(e) => Err(format!("Failed to load Syzygy tablebases from '{path}': {e:?}")),
+            Err(e) => Err(format!(
+                "Failed to load Syzygy tablebases from '{path}': {e:?}"
+            )),
         }
     }
 
@@ -392,15 +398,42 @@ impl Engine {
     /// Set a single tune parameter by name. Returns false if the name is unknown.
     pub fn set_tune_param(&mut self, name: &str, value: i32) -> bool {
         match name {
-            "lmr_base"          => { self.tune.lmr_base          = value; true }
-            "lmr_div"           => { self.tune.lmr_div            = value; true }
-            "hist_lmr_div"      => { self.tune.hist_lmr_div       = value; true }
-            "rfp_margin_imp"    => { self.tune.rfp_margin_imp     = value; true }
-            "rfp_margin_noimp"  => { self.tune.rfp_margin_noimp   = value; true }
-            "fut_margin_imp"    => { self.tune.fut_margin_imp     = value; true }
-            "fut_margin_noimp"  => { self.tune.fut_margin_noimp   = value; true }
-            "see_quiet_margin"  => { self.tune.see_quiet_margin   = value; true }
-            "corrhist_mult"     => { self.tune.corrhist_mult      = value; true }
+            "lmr_base" => {
+                self.tune.lmr_base = value;
+                true
+            }
+            "lmr_div" => {
+                self.tune.lmr_div = value;
+                true
+            }
+            "hist_lmr_div" => {
+                self.tune.hist_lmr_div = value;
+                true
+            }
+            "rfp_margin_imp" => {
+                self.tune.rfp_margin_imp = value;
+                true
+            }
+            "rfp_margin_noimp" => {
+                self.tune.rfp_margin_noimp = value;
+                true
+            }
+            "fut_margin_imp" => {
+                self.tune.fut_margin_imp = value;
+                true
+            }
+            "fut_margin_noimp" => {
+                self.tune.fut_margin_noimp = value;
+                true
+            }
+            "see_quiet_margin" => {
+                self.tune.see_quiet_margin = value;
+                true
+            }
+            "corrhist_mult" => {
+                self.tune.corrhist_mult = value;
+                true
+            }
             _ => false,
         }
     }
@@ -416,7 +449,18 @@ impl Engine {
         let mut p = params.clone();
         p.tune = self.tune.clone();
         self.stop.store(false, Ordering::SeqCst);
-        self.thread_pool.search(board, &p, &self.stop, &self.tt, info_callback, &self.nnue_net, self.syzygy_tb.clone(), None, self.book.clone(), None)
+        self.thread_pool.search(
+            board,
+            &p,
+            &self.stop,
+            &self.tt,
+            info_callback,
+            &self.nnue_net,
+            self.syzygy_tb.clone(),
+            None,
+            self.book.clone(),
+            None,
+        )
     }
 
     /// Signal the engine to stop searching.

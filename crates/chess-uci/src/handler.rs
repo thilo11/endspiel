@@ -21,9 +21,9 @@ const ENGINE_NAME: &str = "Endspiel";
 /// Convert a centipawn score to WDL in millipawns (0–1000, summing to 1000).
 fn score_to_wdl(cp: i32) -> (u32, u32, u32) {
     let s = cp as f64;
-    let p_win  = 1.0 / (1.0 + (-(s - WDL_A) / WDL_B).exp());
-    let p_loss = 1.0 / (1.0 + ( (s + WDL_A) / WDL_B).exp());
-    let win  = (p_win  * 1000.0).round() as u32;
+    let p_win = 1.0 / (1.0 + (-(s - WDL_A) / WDL_B).exp());
+    let p_loss = 1.0 / (1.0 + ((s + WDL_A) / WDL_B).exp());
+    let win = (p_win * 1000.0).round() as u32;
     let loss = (p_loss * 1000.0).round() as u32;
     let draw = 1000u32.saturating_sub(win + loss);
     (win, draw, loss)
@@ -178,8 +178,7 @@ impl UciHandler {
         send_response(&UciResponse::Option(UciOptionDef {
             name: "Hash".to_string(),
             opt_type: UciOptionType::Spin {
-                default: chess_common::platform::default_hash_mb(self.engine.num_threads())
-                    as i64,
+                default: chess_common::platform::default_hash_mb(self.engine.num_threads()) as i64,
                 min: 1,
                 max: 131072,
             },
@@ -236,9 +235,7 @@ impl UciHandler {
         }));
         send_response(&UciResponse::Option(UciOptionDef {
             name: "UseNNUE".to_string(),
-            opt_type: UciOptionType::Check {
-                default: true,
-            },
+            opt_type: UciOptionType::Check { default: true },
         }));
         send_response(&UciResponse::Option(UciOptionDef {
             name: "EvalFile".to_string(),
@@ -267,15 +264,15 @@ impl UciHandler {
         // ── SPSA-tunable search parameters ────────────────────────────────
         let t = self.engine.tune();
         for (name, default, min, max) in [
-            ("LmrBase",        t.lmr_base,          10,  200),
-            ("LmrDiv",         t.lmr_div,           100, 400),
-            ("HistLmrDiv",     t.hist_lmr_div,      500, 20000),
-            ("RfpMarginImp",   t.rfp_margin_imp,    10,  300),
-            ("RfpMarginNoImp", t.rfp_margin_noimp,  10,  300),
-            ("FutMarginImp",   t.fut_margin_imp,    10,  300),
-            ("FutMarginNoImp", t.fut_margin_noimp,  10,  300),
-            ("SeeQuietMargin", t.see_quiet_margin,  10,  200),
-            ("CorrHistMult",   t.corrhist_mult,     0,   300),
+            ("LmrBase", t.lmr_base, 10, 200),
+            ("LmrDiv", t.lmr_div, 100, 400),
+            ("HistLmrDiv", t.hist_lmr_div, 500, 20000),
+            ("RfpMarginImp", t.rfp_margin_imp, 10, 300),
+            ("RfpMarginNoImp", t.rfp_margin_noimp, 10, 300),
+            ("FutMarginImp", t.fut_margin_imp, 10, 300),
+            ("FutMarginNoImp", t.fut_margin_noimp, 10, 300),
+            ("SeeQuietMargin", t.see_quiet_margin, 10, 200),
+            ("CorrHistMult", t.corrhist_mult, 0, 300),
         ] {
             send_response(&UciResponse::Option(UciOptionDef {
                 name: name.to_string(),
@@ -344,7 +341,8 @@ impl UciHandler {
             let Some(m) = find_legal_move(&board, move_str) else {
                 log::error!(
                     "handle_position: could not apply move {} (index {}) — board NOT updated",
-                    move_str, i
+                    move_str,
+                    i
                 );
                 return;
             };
@@ -422,82 +420,98 @@ impl UciHandler {
         let handle = thread::Builder::new()
             .stack_size(4 * 1024 * 1024) // 4 MB – match helper thread stack size
             .spawn(move || {
-            let search_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let info_cb: InfoCallback = Box::new(move |info: &SearchInfo| {
-                    let nps = (info.nodes * 1000).checked_div(info.time_ms);
-                    // WDL uses the raw score (sigmoid formula is calibrated against it).
-                    let wdl = if show_wdl && !info.score.is_mate() {
-                        Some(score_to_wdl(info.score.centipawns()))
-                    } else {
-                        None
-                    };
-                    // Normalize displayed cp score: divide raw score by WDL_B/100 so that
-                    // 100 displayed cp ≈ 1 "WDL pawn" (consistent with Stockfish's convention).
-                    // Mate scores are passed through unchanged.
-                    let displayed_score = normalize_display_score(info.score);
-                    let uci_info = UciInfo {
-                        depth: Some(info.depth),
-                        seldepth: Some(info.seldepth),
-                        multipv: if multi_pv > 1 { Some(info.multipv_line) } else { None },
-                        score: Some(displayed_score),
-                        nodes: Some(info.nodes),
-                        time: Some(info.time_ms),
-                        pv: info.pv.clone(),
-                        hashfull: Some(info.hashfull),
-                        nps,
-                        wdl,
-                        string: None,
-                    };
-                    send_response(&UciResponse::Info(uci_info));
-                });
+                let search_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let info_cb: InfoCallback = Box::new(move |info: &SearchInfo| {
+                        let nps = (info.nodes * 1000).checked_div(info.time_ms);
+                        // WDL uses the raw score (sigmoid formula is calibrated against it).
+                        let wdl = if show_wdl && !info.score.is_mate() {
+                            Some(score_to_wdl(info.score.centipawns()))
+                        } else {
+                            None
+                        };
+                        // Normalize displayed cp score: divide raw score by WDL_B/100 so that
+                        // 100 displayed cp ≈ 1 "WDL pawn" (consistent with Stockfish's convention).
+                        // Mate scores are passed through unchanged.
+                        let displayed_score = normalize_display_score(info.score);
+                        let uci_info = UciInfo {
+                            depth: Some(info.depth),
+                            seldepth: Some(info.seldepth),
+                            multipv: if multi_pv > 1 {
+                                Some(info.multipv_line)
+                            } else {
+                                None
+                            },
+                            score: Some(displayed_score),
+                            nodes: Some(info.nodes),
+                            time: Some(info.time_ms),
+                            pv: info.pv.clone(),
+                            hashfull: Some(info.hashfull),
+                            nps,
+                            wdl,
+                            string: None,
+                        };
+                        send_response(&UciResponse::Info(uci_info));
+                    });
 
-                let pool = chess_engine::threads::ThreadPool::new(num_threads);
-                // Hold the game-level history across this search so corrections
-                // accumulate over the game. Recover from a poisoned lock (a prior
-                // search panic) rather than propagating the panic — the tables are
-                // just stats, never unsafe. The guard is released here, before the
-                // ponder-wait below.
-                let mut guard = history.lock().unwrap_or_else(|p| p.into_inner());
-                pool.search(&board, &search_params, &stop, &tt, Some(info_cb), &net, syzygy_tb, root_tb_ranking, book, Some(&mut guard))
-            }));
+                    let pool = chess_engine::threads::ThreadPool::new(num_threads);
+                    // Hold the game-level history across this search so corrections
+                    // accumulate over the game. Recover from a poisoned lock (a prior
+                    // search panic) rather than propagating the panic — the tables are
+                    // just stats, never unsafe. The guard is released here, before the
+                    // ponder-wait below.
+                    let mut guard = history.lock().unwrap_or_else(|p| p.into_inner());
+                    pool.search(
+                        &board,
+                        &search_params,
+                        &stop,
+                        &tt,
+                        Some(info_cb),
+                        &net,
+                        syzygy_tb,
+                        root_tb_ranking,
+                        book,
+                        Some(&mut guard),
+                    )
+                }));
 
-            let result = match search_result {
-                Ok(r) => r,
-                Err(e) => {
-                    log::error!("Search panicked: {:?}", e);
-                    chess_engine::SearchResult {
-                        best_move: Move::NULL,
-                        score: chess_common::Score(0),
-                        depth: 0,
-                        nodes: 0,
-                        pv: vec![],
+                let result = match search_result {
+                    Ok(r) => r,
+                    Err(e) => {
+                        log::error!("Search panicked: {:?}", e);
+                        chess_engine::SearchResult {
+                            best_move: Move::NULL,
+                            score: chess_common::Score(0),
+                            depth: 0,
+                            nodes: 0,
+                            pv: vec![],
+                        }
+                    }
+                };
+
+                // Pondering: do not surrender the move until we are told to play
+                // it. `ponderhit` converts this into a timed search that trips
+                // `stop` after the allocated budget; a `stop` (ponder-miss or quit)
+                // trips it immediately. This guarantees we never emit a move
+                // mid-ponder, even if the search resolves the position early.
+                if is_ponder {
+                    while !stop.load(Ordering::SeqCst) {
+                        thread::sleep(Duration::from_millis(2));
                     }
                 }
-            };
 
-            // Pondering: do not surrender the move until we are told to play
-            // it. `ponderhit` converts this into a timed search that trips
-            // `stop` after the allocated budget; a `stop` (ponder-miss or quit)
-            // trips it immediately. This guarantees we never emit a move
-            // mid-ponder, even if the search resolves the position early.
-            if is_ponder {
-                while !stop.load(Ordering::SeqCst) {
-                    thread::sleep(Duration::from_millis(2));
-                }
-            }
+                // Advertise the expected reply (PV[1]) as the ponder move, but only
+                // if it is actually legal after best_move. PV reconstruction can
+                // yield an illegal continuation (e.g. a TT hash collision); sending
+                // an illegal `ponder` move makes a GUI reject it ("invalid ponder
+                // move") and can desync/hang its ponder state machine.
+                let ponder_move = validated_ponder_move(&board, result.best_move, &result.pv);
 
-            // Advertise the expected reply (PV[1]) as the ponder move, but only
-            // if it is actually legal after best_move. PV reconstruction can
-            // yield an illegal continuation (e.g. a TT hash collision); sending
-            // an illegal `ponder` move makes a GUI reject it ("invalid ponder
-            // move") and can desync/hang its ponder state machine.
-            let ponder_move = validated_ponder_move(&board, result.best_move, &result.pv);
-
-            send_response(&UciResponse::BestMove {
-                best: result.best_move,
-                ponder: ponder_move,
-            });
-        }).expect("failed to spawn search thread");
+                send_response(&UciResponse::BestMove {
+                    best: result.best_move,
+                    ponder: ponder_move,
+                });
+            })
+            .expect("failed to spawn search thread");
 
         self.search_thread = Some(handle);
     }
@@ -652,7 +666,8 @@ impl UciHandler {
                     // alone — exactly the failure that drew a won KQP-vs-KP game.
                     match self.engine.set_syzygy_path(path) {
                         Ok(()) => {
-                            let max_pieces = self.engine.syzygy_tb().map_or(0, |tb| tb.max_pieces());
+                            let max_pieces =
+                                self.engine.syzygy_tb().map_or(0, |tb| tb.max_pieces());
                             log::info!("SyzygyPath set to '{path}' (max {max_pieces} pieces)");
                             send_response(&UciResponse::Info(UciInfo {
                                 string: Some(format!(
@@ -687,47 +702,65 @@ impl UciHandler {
             }
             // SPSA-tunable search parameters
             "lmrbase" => {
-                if let Some(v) = value && let Ok(n) = v.trim().parse::<i32>() {
+                if let Some(v) = value
+                    && let Ok(n) = v.trim().parse::<i32>()
+                {
                     self.engine.set_tune_param("lmr_base", n);
                 }
             }
             "lmrdiv" => {
-                if let Some(v) = value && let Ok(n) = v.trim().parse::<i32>() {
+                if let Some(v) = value
+                    && let Ok(n) = v.trim().parse::<i32>()
+                {
                     self.engine.set_tune_param("lmr_div", n);
                 }
             }
             "histlmrdiv" => {
-                if let Some(v) = value && let Ok(n) = v.trim().parse::<i32>() {
+                if let Some(v) = value
+                    && let Ok(n) = v.trim().parse::<i32>()
+                {
                     self.engine.set_tune_param("hist_lmr_div", n);
                 }
             }
             "rfpmarginimp" => {
-                if let Some(v) = value && let Ok(n) = v.trim().parse::<i32>() {
+                if let Some(v) = value
+                    && let Ok(n) = v.trim().parse::<i32>()
+                {
                     self.engine.set_tune_param("rfp_margin_imp", n);
                 }
             }
             "rfpmarginnoimp" => {
-                if let Some(v) = value && let Ok(n) = v.trim().parse::<i32>() {
+                if let Some(v) = value
+                    && let Ok(n) = v.trim().parse::<i32>()
+                {
                     self.engine.set_tune_param("rfp_margin_noimp", n);
                 }
             }
             "futmarginimp" => {
-                if let Some(v) = value && let Ok(n) = v.trim().parse::<i32>() {
+                if let Some(v) = value
+                    && let Ok(n) = v.trim().parse::<i32>()
+                {
                     self.engine.set_tune_param("fut_margin_imp", n);
                 }
             }
             "futmarginnoimp" => {
-                if let Some(v) = value && let Ok(n) = v.trim().parse::<i32>() {
+                if let Some(v) = value
+                    && let Ok(n) = v.trim().parse::<i32>()
+                {
                     self.engine.set_tune_param("fut_margin_noimp", n);
                 }
             }
             "seequietmargin" => {
-                if let Some(v) = value && let Ok(n) = v.trim().parse::<i32>() {
+                if let Some(v) = value
+                    && let Ok(n) = v.trim().parse::<i32>()
+                {
                     self.engine.set_tune_param("see_quiet_margin", n);
                 }
             }
             "corrhistmult" => {
-                if let Some(v) = value && let Ok(n) = v.trim().parse::<i32>() {
+                if let Some(v) = value
+                    && let Ok(n) = v.trim().parse::<i32>()
+                {
                     self.engine.set_tune_param("corrhist_mult", n);
                 }
             }
@@ -772,18 +805,24 @@ const MIN_PONDERHIT_THINK_MS: u64 = 20;
 /// since `go ponder`), floored at `MIN_PONDERHIT_THINK_MS`. When pondering has
 /// already consumed the whole budget the move plays almost immediately.
 fn ponderhit_think_ms(alloc_ms: u64, elapsed_ms: u64) -> u64 {
-    alloc_ms.saturating_sub(elapsed_ms).max(MIN_PONDERHIT_THINK_MS)
+    alloc_ms
+        .saturating_sub(elapsed_ms)
+        .max(MIN_PONDERHIT_THINK_MS)
 }
 
 fn find_legal_move(board: &Board, uci_str: &str) -> Option<Move> {
     let parsed = Move::from_uci(uci_str)?;
     let legal_moves = chess_core::generate_legal_moves(board);
 
-    legal_moves.as_slice().iter().find(|&&legal| {
-        legal.from_sq() == parsed.from_sq()
-            && legal.to_sq() == parsed.to_sq()
-            && legal.flag().promotion_piece() == parsed.flag().promotion_piece()
-    }).copied()
+    legal_moves
+        .as_slice()
+        .iter()
+        .find(|&&legal| {
+            legal.from_sq() == parsed.from_sq()
+                && legal.to_sq() == parsed.to_sq()
+                && legal.flag().promotion_piece() == parsed.flag().promotion_piece()
+        })
+        .copied()
 }
 
 /// Send a UCI response to stdout.
@@ -802,7 +841,9 @@ fn send_response(response: &UciResponse) {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_display_score, ponderhit_think_ms, validated_ponder_move, MIN_PONDERHIT_THINK_MS};
+    use super::{
+        MIN_PONDERHIT_THINK_MS, normalize_display_score, ponderhit_think_ms, validated_ponder_move,
+    };
     use chess_common::{Board, Move, Score};
     use chess_engine::syzygy::{TB_LOSS_SCORE, TB_WIN_SCORE};
 
@@ -841,7 +882,10 @@ mod tests {
         // continuation must not be advertised as a ponder move.
         let board = Board::starting_position();
         let best = mv("e2e4");
-        assert_eq!(validated_ponder_move(&board, best, &[best, mv("e2e4")]), None);
+        assert_eq!(
+            validated_ponder_move(&board, best, &[best, mv("e2e4")]),
+            None
+        );
     }
 
     #[test]

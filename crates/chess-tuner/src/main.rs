@@ -26,7 +26,7 @@ use std::time::Instant;
 
 use chess_common::{Board, Square};
 use chess_core::is_in_check;
-use chess_engine::eval::{evaluate_with_params, EvalParams};
+use chess_engine::eval::{EvalParams, evaluate_with_params};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -86,11 +86,23 @@ struct ParamConstraint {
 
 impl ParamConstraint {
     fn new(min: i32, max: i32, step: i32) -> Self {
-        Self { min, max, step, initial_step: step, frozen: false }
+        Self {
+            min,
+            max,
+            step,
+            initial_step: step,
+            frozen: false,
+        }
     }
 
     fn frozen() -> Self {
-        Self { min: i32::MIN, max: i32::MAX, step: 0, initial_step: 0, frozen: true }
+        Self {
+            min: i32::MIN,
+            max: i32::MAX,
+            step: 0,
+            initial_step: 0,
+            frozen: true,
+        }
     }
 
     fn clamp(&self, val: i32) -> i32 {
@@ -106,7 +118,11 @@ impl ParamConstraint {
 ///   10..394  = pst_mg (6 pieces × 64 squares)
 ///   394..778 = pst_eg (6 pieces × 64 squares)
 ///   778..    = scalar params (61 total)
-fn build_constraints(tune_material: bool, freeze_pst: bool, freeze_mobility: bool) -> Vec<ParamConstraint> {
+fn build_constraints(
+    tune_material: bool,
+    freeze_pst: bool,
+    freeze_mobility: bool,
+) -> Vec<ParamConstraint> {
     let total = EvalParams::param_count();
     let mut constraints = Vec::with_capacity(total);
 
@@ -486,20 +502,30 @@ fn parse_args() -> Config {
                 eprintln!("  --min-depth N        Min Stockfish depth (default: 30)");
                 eprintln!("  --output PATH        Save params JSON to file");
                 eprintln!("  --apply PATH         Apply params from JSON to eval.rs and exit");
-                eprintln!("  --eval-path PATH     Path to eval.rs (default: crates/chess-engine/src/eval.rs)");
+                eprintln!(
+                    "  --eval-path PATH     Path to eval.rs (default: crates/chess-engine/src/eval.rs)"
+                );
                 eprintln!("  --tune-material      Also tune material values (frozen by default)");
                 eprintln!("  --freeze-pst         Freeze PST values, tune only scalar params");
                 eprintln!("  --freeze-mobility    Freeze mobility params at defaults");
                 eprintln!("  --max-cp N           Filter positions with |cp| > N (default: 1000)");
-                eprintln!("  --max-eval N         Filter positions with |engine eval| > N (default: 2000)");
-                eprintln!("  --l2-lambda F        L2 regularization strength (default: 1e-7, 0 = off)");
+                eprintln!(
+                    "  --max-eval N         Filter positions with |engine eval| > N (default: 2000)"
+                );
+                eprintln!(
+                    "  --l2-lambda F        L2 regularization strength (default: 1e-7, 0 = off)"
+                );
                 eprintln!("  --no-quiet-filter    Disable filtering of non-quiet positions");
                 eprintln!("  --learning-rate F    Adam optimizer learning rate (default: 2.0)");
-                eprintln!("  --validate PATH      Validate params from JSON (loss + SF cross-check)");
+                eprintln!(
+                    "  --validate PATH      Validate params from JSON (loss + SF cross-check)"
+                );
                 eprintln!("  --sf-path PATH       Path to stockfish binary (default: stockfish)");
                 eprintln!("  --sf-movetime MS     Stockfish time per position in ms (0=use depth)");
                 eprintln!("  --sf-depth D         Stockfish depth (deterministic, default: 20)");
-                eprintln!("  --converge           Iterative tune+validate loop until thresholds met");
+                eprintln!(
+                    "  --converge           Iterative tune+validate loop until thresholds met"
+                );
                 eprintln!("  --max-rounds N       Max convergence rounds (default: 10)");
                 eprintln!("  --target-mae CP      Target SF MAE in cp (default: 155)");
                 eprintln!("  --target-correlation F  Target SF correlation (default: 0.38)");
@@ -638,8 +664,8 @@ fn load_positions(config: &Config) -> Vec<TuningPosition> {
                 if best_move.len() >= 4 {
                     let to_str = &best_move[2..4];
                     if let Some(to_sq) = Square::from_algebraic(to_str) {
-                        let is_capture = board.piece_at(to_sq).is_some()
-                            || board.en_passant == Some(to_sq);
+                        let is_capture =
+                            board.piece_at(to_sq).is_some() || board.en_passant == Some(to_sq);
                         if is_capture {
                             skipped_tactical += 1;
                             continue;
@@ -657,8 +683,12 @@ fn load_positions(config: &Config) -> Vec<TuningPosition> {
     }
 
     let elapsed = start.elapsed();
-    let total_skipped = skipped_mate + skipped_depth + skipped_parse + skipped_extreme
-        + skipped_in_check + skipped_tactical;
+    let total_skipped = skipped_mate
+        + skipped_depth
+        + skipped_parse
+        + skipped_extreme
+        + skipped_in_check
+        + skipped_tactical;
     eprintln!(
         "Loaded {} positions in {:.1}s ({} lines read, {} skipped: {} mate, {} depth<{}, {} |cp|>{}, {} in-check, {} tactical, {} parse errors)",
         positions.len(),
@@ -836,7 +866,8 @@ fn adam_optimize(
                 params.set_param(i, plus);
                 let err_plus = mean_squared_error(positions, params, k, l2, &defaults, constraints);
                 params.set_param(i, minus);
-                let err_minus = mean_squared_error(positions, params, k, l2, &defaults, constraints);
+                let err_minus =
+                    mean_squared_error(positions, params, k, l2, &defaults, constraints);
                 params.set_param(i, original);
                 grad[j] = (err_plus - err_minus) / 2.0;
             } else if plus != original {
@@ -848,7 +879,8 @@ fn adam_optimize(
             } else {
                 // Backward difference (at upper bound)
                 params.set_param(i, minus);
-                let err_minus = mean_squared_error(positions, params, k, l2, &defaults, constraints);
+                let err_minus =
+                    mean_squared_error(positions, params, k, l2, &defaults, constraints);
                 params.set_param(i, original);
                 grad[j] = base_error - err_minus;
             }
@@ -974,10 +1006,18 @@ fn load_params(path: &PathBuf) -> Option<EvalParams> {
 // ---------------------------------------------------------------------------
 
 const PST_CONST_NAMES: [&str; 12] = [
-    "PST_PAWN_MG", "PST_KNIGHT_MG", "PST_BISHOP_MG",
-    "PST_ROOK_MG", "PST_QUEEN_MG", "PST_KING_MG",
-    "PST_PAWN_EG", "PST_KNIGHT_EG", "PST_BISHOP_EG",
-    "PST_ROOK_EG", "PST_QUEEN_EG", "PST_KING_EG",
+    "PST_PAWN_MG",
+    "PST_KNIGHT_MG",
+    "PST_BISHOP_MG",
+    "PST_ROOK_MG",
+    "PST_QUEEN_MG",
+    "PST_KING_MG",
+    "PST_PAWN_EG",
+    "PST_KNIGHT_EG",
+    "PST_BISHOP_EG",
+    "PST_ROOK_EG",
+    "PST_QUEEN_EG",
+    "PST_KING_EG",
 ];
 
 fn format_pst_array(name: &str, values: &[i32; 64]) -> String {
@@ -1013,10 +1053,14 @@ fn generate_pst_section(params: &EvalParams) -> String {
         s.push('\n');
     }
     s.push_str("const PST_MG: [[i32; 64]; 6] = [\n");
-    s.push_str("    PST_PAWN_MG, PST_KNIGHT_MG, PST_BISHOP_MG, PST_ROOK_MG, PST_QUEEN_MG, PST_KING_MG,\n");
+    s.push_str(
+        "    PST_PAWN_MG, PST_KNIGHT_MG, PST_BISHOP_MG, PST_ROOK_MG, PST_QUEEN_MG, PST_KING_MG,\n",
+    );
     s.push_str("];\n\n");
     s.push_str("const PST_EG: [[i32; 64]; 6] = [\n");
-    s.push_str("    PST_PAWN_EG, PST_KNIGHT_EG, PST_BISHOP_EG, PST_ROOK_EG, PST_QUEEN_EG, PST_KING_EG,\n");
+    s.push_str(
+        "    PST_PAWN_EG, PST_KNIGHT_EG, PST_BISHOP_EG, PST_ROOK_EG, PST_QUEEN_EG, PST_KING_EG,\n",
+    );
     s.push_str("];\n");
     s.push_str("// @tuner:pst_end");
     s
@@ -1027,13 +1071,19 @@ fn generate_material_section(params: &EvalParams) -> String {
     s.push_str("// @tuner:material_start\n");
     s.push_str(&format!(
         "const _MATERIAL_MG: [i32; 6] = [{}, {}, {}, {}, {}, 0]; // P N B R Q K\n",
-        params.material_mg[0], params.material_mg[1], params.material_mg[2],
-        params.material_mg[3], params.material_mg[4],
+        params.material_mg[0],
+        params.material_mg[1],
+        params.material_mg[2],
+        params.material_mg[3],
+        params.material_mg[4],
     ));
     s.push_str(&format!(
         "const MATERIAL_EG: [i32; 6] = [{}, {}, {}, {}, {}, 0];\n",
-        params.material_eg[0], params.material_eg[1], params.material_eg[2],
-        params.material_eg[3], params.material_eg[4],
+        params.material_eg[0],
+        params.material_eg[1],
+        params.material_eg[2],
+        params.material_eg[3],
+        params.material_eg[4],
     ));
     s.push_str("// @tuner:material_end");
     s
@@ -1045,95 +1095,353 @@ fn generate_defaults_section(params: &EvalParams) -> String {
     s.push_str("impl Default for EvalParams {\n");
     s.push_str("    fn default() -> Self {\n");
     s.push_str("        Self {\n");
-    s.push_str(&format!("            material_mg: {:?},\n", params.material_mg));
-    s.push_str(&format!("            material_eg: {:?},\n", params.material_eg));
+    s.push_str(&format!(
+        "            material_mg: {:?},\n",
+        params.material_mg
+    ));
+    s.push_str(&format!(
+        "            material_eg: {:?},\n",
+        params.material_eg
+    ));
     s.push_str("            pst_mg: PST_MG,\n");
     s.push_str("            pst_eg: PST_EG,\n");
-    s.push_str(&format!("            doubled_pawn_mg: {},\n", params.doubled_pawn_mg));
-    s.push_str(&format!("            doubled_pawn_eg: {},\n", params.doubled_pawn_eg));
-    s.push_str(&format!("            isolated_pawn_mg: {},\n", params.isolated_pawn_mg));
-    s.push_str(&format!("            isolated_pawn_eg: {},\n", params.isolated_pawn_eg));
-    s.push_str(&format!("            doubled_isolated_mg: {},\n", params.doubled_isolated_mg));
-    s.push_str(&format!("            doubled_isolated_eg: {},\n", params.doubled_isolated_eg));
-    s.push_str(&format!("            backward_pawn_mg: {},\n", params.backward_pawn_mg));
-    s.push_str(&format!("            backward_pawn_eg: {},\n", params.backward_pawn_eg));
-    s.push_str(&format!("            passed_pawn_base_mg: {},\n", params.passed_pawn_base_mg));
-    s.push_str(&format!("            passed_pawn_base_eg: {},\n", params.passed_pawn_base_eg));
-    s.push_str(&format!("            passed_pawn_adv_mg: {},\n", params.passed_pawn_adv_mg));
-    s.push_str(&format!("            passed_pawn_adv_eg: {},\n", params.passed_pawn_adv_eg));
-    s.push_str(&format!("            connected_passer_base_mg: {},\n", params.connected_passer_base_mg));
-    s.push_str(&format!("            connected_passer_base_eg: {},\n", params.connected_passer_base_eg));
-    s.push_str(&format!("            connected_passer_adv_mg: {},\n", params.connected_passer_adv_mg));
-    s.push_str(&format!("            connected_passer_adv_eg: {},\n", params.connected_passer_adv_eg));
-    s.push_str(&format!("            rook_behind_passer_mg: {},\n", params.rook_behind_passer_mg));
-    s.push_str(&format!("            rook_behind_passer_eg: {},\n", params.rook_behind_passer_eg));
-    s.push_str(&format!("            blocked_passer_mg: {},\n", params.blocked_passer_mg));
-    s.push_str(&format!("            blocked_passer_eg: {},\n", params.blocked_passer_eg));
-    s.push_str(&format!("            king_passer_own_eg: {},\n", params.king_passer_own_eg));
-    s.push_str(&format!("            king_passer_enemy_eg: {},\n", params.king_passer_enemy_eg));
-    s.push_str(&format!("            connected_passer_sq_mg: {},\n", params.connected_passer_sq_mg));
-    s.push_str(&format!("            connected_passer_sq_eg: {},\n", params.connected_passer_sq_eg));
-    s.push_str(&format!("            bishop_pair_base_mg: {},\n", params.bishop_pair_base_mg));
-    s.push_str(&format!("            bishop_pair_base_eg: {},\n", params.bishop_pair_base_eg));
-    s.push_str(&format!("            rook_open_file_mg: {},\n", params.rook_open_file_mg));
-    s.push_str(&format!("            rook_open_file_eg: {},\n", params.rook_open_file_eg));
-    s.push_str(&format!("            rook_semi_open_mg: {},\n", params.rook_semi_open_mg));
-    s.push_str(&format!("            rook_semi_open_eg: {},\n", params.rook_semi_open_eg));
-    s.push_str(&format!("            rook_seventh_mg: {},\n", params.rook_seventh_mg));
-    s.push_str(&format!("            rook_seventh_eg: {},\n", params.rook_seventh_eg));
-    s.push_str(&format!("            doubled_rook_file_mg: {},\n", params.doubled_rook_file_mg));
-    s.push_str(&format!("            doubled_rook_file_eg: {},\n", params.doubled_rook_file_eg));
-    s.push_str(&format!("            doubled_rook_7th_mg: {},\n", params.doubled_rook_7th_mg));
-    s.push_str(&format!("            doubled_rook_7th_eg: {},\n", params.doubled_rook_7th_eg));
-    s.push_str(&format!("            trapped_bishop_mg: {},\n", params.trapped_bishop_mg));
-    s.push_str(&format!("            trapped_bishop_eg: {},\n", params.trapped_bishop_eg));
-    s.push_str(&format!("            ks_shield_1: {},\n", params.ks_shield_1));
-    s.push_str(&format!("            ks_shield_2: {},\n", params.ks_shield_2));
-    s.push_str(&format!("            ks_open_file: {},\n", params.ks_open_file));
-    s.push_str(&format!("            ks_semi_open: {},\n", params.ks_semi_open));
-    s.push_str(&format!("            ks_center_king: {},\n", params.ks_center_king));
-    s.push_str(&format!("            ks_knight_weight: {},\n", params.ks_knight_weight));
-    s.push_str(&format!("            ks_bishop_weight: {},\n", params.ks_bishop_weight));
-    s.push_str(&format!("            ks_rook_weight: {},\n", params.ks_rook_weight));
-    s.push_str(&format!("            ks_queen_weight: {},\n", params.ks_queen_weight));
-    s.push_str(&format!("            mobility_knight_mg: {},\n", params.mobility_knight_mg));
-    s.push_str(&format!("            mobility_knight_eg: {},\n", params.mobility_knight_eg));
-    s.push_str(&format!("            mobility_bishop_mg: {},\n", params.mobility_bishop_mg));
-    s.push_str(&format!("            mobility_bishop_eg: {},\n", params.mobility_bishop_eg));
-    s.push_str(&format!("            mobility_rook_mg: {},\n", params.mobility_rook_mg));
-    s.push_str(&format!("            mobility_rook_eg: {},\n", params.mobility_rook_eg));
-    s.push_str(&format!("            mobility_queen_mg: {},\n", params.mobility_queen_mg));
-    s.push_str(&format!("            mobility_queen_eg: {},\n", params.mobility_queen_eg));
-    s.push_str(&format!("            center_pawn_bonus: {},\n", params.center_pawn_bonus));
-    s.push_str(&format!("            center_knight_bonus: {},\n", params.center_knight_bonus));
-    s.push_str(&format!("            center_bishop_bonus: {},\n", params.center_bishop_bonus));
-    s.push_str(&format!("            pawn_protected_knight: {},\n", params.pawn_protected_knight));
-    s.push_str(&format!("            knight_outpost: {},\n", params.knight_outpost));
-    s.push_str(&format!("            threat_pawn_minor_mg: {},\n", params.threat_pawn_minor_mg));
-    s.push_str(&format!("            threat_pawn_minor_eg: {},\n", params.threat_pawn_minor_eg));
-    s.push_str(&format!("            threat_pawn_rook_mg: {},\n", params.threat_pawn_rook_mg));
-    s.push_str(&format!("            threat_pawn_rook_eg: {},\n", params.threat_pawn_rook_eg));
-    s.push_str(&format!("            threat_minor_rook_mg: {},\n", params.threat_minor_rook_mg));
-    s.push_str(&format!("            threat_minor_rook_eg: {},\n", params.threat_minor_rook_eg));
-    s.push_str(&format!("            threat_piece_queen_mg: {},\n", params.threat_piece_queen_mg));
-    s.push_str(&format!("            threat_piece_queen_eg: {},\n", params.threat_piece_queen_eg));
-    s.push_str(&format!("            threat_hanging_mg: {},\n", params.threat_hanging_mg));
-    s.push_str(&format!("            threat_hanging_eg: {},\n", params.threat_hanging_eg));
+    s.push_str(&format!(
+        "            doubled_pawn_mg: {},\n",
+        params.doubled_pawn_mg
+    ));
+    s.push_str(&format!(
+        "            doubled_pawn_eg: {},\n",
+        params.doubled_pawn_eg
+    ));
+    s.push_str(&format!(
+        "            isolated_pawn_mg: {},\n",
+        params.isolated_pawn_mg
+    ));
+    s.push_str(&format!(
+        "            isolated_pawn_eg: {},\n",
+        params.isolated_pawn_eg
+    ));
+    s.push_str(&format!(
+        "            doubled_isolated_mg: {},\n",
+        params.doubled_isolated_mg
+    ));
+    s.push_str(&format!(
+        "            doubled_isolated_eg: {},\n",
+        params.doubled_isolated_eg
+    ));
+    s.push_str(&format!(
+        "            backward_pawn_mg: {},\n",
+        params.backward_pawn_mg
+    ));
+    s.push_str(&format!(
+        "            backward_pawn_eg: {},\n",
+        params.backward_pawn_eg
+    ));
+    s.push_str(&format!(
+        "            passed_pawn_base_mg: {},\n",
+        params.passed_pawn_base_mg
+    ));
+    s.push_str(&format!(
+        "            passed_pawn_base_eg: {},\n",
+        params.passed_pawn_base_eg
+    ));
+    s.push_str(&format!(
+        "            passed_pawn_adv_mg: {},\n",
+        params.passed_pawn_adv_mg
+    ));
+    s.push_str(&format!(
+        "            passed_pawn_adv_eg: {},\n",
+        params.passed_pawn_adv_eg
+    ));
+    s.push_str(&format!(
+        "            connected_passer_base_mg: {},\n",
+        params.connected_passer_base_mg
+    ));
+    s.push_str(&format!(
+        "            connected_passer_base_eg: {},\n",
+        params.connected_passer_base_eg
+    ));
+    s.push_str(&format!(
+        "            connected_passer_adv_mg: {},\n",
+        params.connected_passer_adv_mg
+    ));
+    s.push_str(&format!(
+        "            connected_passer_adv_eg: {},\n",
+        params.connected_passer_adv_eg
+    ));
+    s.push_str(&format!(
+        "            rook_behind_passer_mg: {},\n",
+        params.rook_behind_passer_mg
+    ));
+    s.push_str(&format!(
+        "            rook_behind_passer_eg: {},\n",
+        params.rook_behind_passer_eg
+    ));
+    s.push_str(&format!(
+        "            blocked_passer_mg: {},\n",
+        params.blocked_passer_mg
+    ));
+    s.push_str(&format!(
+        "            blocked_passer_eg: {},\n",
+        params.blocked_passer_eg
+    ));
+    s.push_str(&format!(
+        "            king_passer_own_eg: {},\n",
+        params.king_passer_own_eg
+    ));
+    s.push_str(&format!(
+        "            king_passer_enemy_eg: {},\n",
+        params.king_passer_enemy_eg
+    ));
+    s.push_str(&format!(
+        "            connected_passer_sq_mg: {},\n",
+        params.connected_passer_sq_mg
+    ));
+    s.push_str(&format!(
+        "            connected_passer_sq_eg: {},\n",
+        params.connected_passer_sq_eg
+    ));
+    s.push_str(&format!(
+        "            bishop_pair_base_mg: {},\n",
+        params.bishop_pair_base_mg
+    ));
+    s.push_str(&format!(
+        "            bishop_pair_base_eg: {},\n",
+        params.bishop_pair_base_eg
+    ));
+    s.push_str(&format!(
+        "            rook_open_file_mg: {},\n",
+        params.rook_open_file_mg
+    ));
+    s.push_str(&format!(
+        "            rook_open_file_eg: {},\n",
+        params.rook_open_file_eg
+    ));
+    s.push_str(&format!(
+        "            rook_semi_open_mg: {},\n",
+        params.rook_semi_open_mg
+    ));
+    s.push_str(&format!(
+        "            rook_semi_open_eg: {},\n",
+        params.rook_semi_open_eg
+    ));
+    s.push_str(&format!(
+        "            rook_seventh_mg: {},\n",
+        params.rook_seventh_mg
+    ));
+    s.push_str(&format!(
+        "            rook_seventh_eg: {},\n",
+        params.rook_seventh_eg
+    ));
+    s.push_str(&format!(
+        "            doubled_rook_file_mg: {},\n",
+        params.doubled_rook_file_mg
+    ));
+    s.push_str(&format!(
+        "            doubled_rook_file_eg: {},\n",
+        params.doubled_rook_file_eg
+    ));
+    s.push_str(&format!(
+        "            doubled_rook_7th_mg: {},\n",
+        params.doubled_rook_7th_mg
+    ));
+    s.push_str(&format!(
+        "            doubled_rook_7th_eg: {},\n",
+        params.doubled_rook_7th_eg
+    ));
+    s.push_str(&format!(
+        "            trapped_bishop_mg: {},\n",
+        params.trapped_bishop_mg
+    ));
+    s.push_str(&format!(
+        "            trapped_bishop_eg: {},\n",
+        params.trapped_bishop_eg
+    ));
+    s.push_str(&format!(
+        "            ks_shield_1: {},\n",
+        params.ks_shield_1
+    ));
+    s.push_str(&format!(
+        "            ks_shield_2: {},\n",
+        params.ks_shield_2
+    ));
+    s.push_str(&format!(
+        "            ks_open_file: {},\n",
+        params.ks_open_file
+    ));
+    s.push_str(&format!(
+        "            ks_semi_open: {},\n",
+        params.ks_semi_open
+    ));
+    s.push_str(&format!(
+        "            ks_center_king: {},\n",
+        params.ks_center_king
+    ));
+    s.push_str(&format!(
+        "            ks_knight_weight: {},\n",
+        params.ks_knight_weight
+    ));
+    s.push_str(&format!(
+        "            ks_bishop_weight: {},\n",
+        params.ks_bishop_weight
+    ));
+    s.push_str(&format!(
+        "            ks_rook_weight: {},\n",
+        params.ks_rook_weight
+    ));
+    s.push_str(&format!(
+        "            ks_queen_weight: {},\n",
+        params.ks_queen_weight
+    ));
+    s.push_str(&format!(
+        "            mobility_knight_mg: {},\n",
+        params.mobility_knight_mg
+    ));
+    s.push_str(&format!(
+        "            mobility_knight_eg: {},\n",
+        params.mobility_knight_eg
+    ));
+    s.push_str(&format!(
+        "            mobility_bishop_mg: {},\n",
+        params.mobility_bishop_mg
+    ));
+    s.push_str(&format!(
+        "            mobility_bishop_eg: {},\n",
+        params.mobility_bishop_eg
+    ));
+    s.push_str(&format!(
+        "            mobility_rook_mg: {},\n",
+        params.mobility_rook_mg
+    ));
+    s.push_str(&format!(
+        "            mobility_rook_eg: {},\n",
+        params.mobility_rook_eg
+    ));
+    s.push_str(&format!(
+        "            mobility_queen_mg: {},\n",
+        params.mobility_queen_mg
+    ));
+    s.push_str(&format!(
+        "            mobility_queen_eg: {},\n",
+        params.mobility_queen_eg
+    ));
+    s.push_str(&format!(
+        "            center_pawn_bonus: {},\n",
+        params.center_pawn_bonus
+    ));
+    s.push_str(&format!(
+        "            center_knight_bonus: {},\n",
+        params.center_knight_bonus
+    ));
+    s.push_str(&format!(
+        "            center_bishop_bonus: {},\n",
+        params.center_bishop_bonus
+    ));
+    s.push_str(&format!(
+        "            pawn_protected_knight: {},\n",
+        params.pawn_protected_knight
+    ));
+    s.push_str(&format!(
+        "            knight_outpost: {},\n",
+        params.knight_outpost
+    ));
+    s.push_str(&format!(
+        "            threat_pawn_minor_mg: {},\n",
+        params.threat_pawn_minor_mg
+    ));
+    s.push_str(&format!(
+        "            threat_pawn_minor_eg: {},\n",
+        params.threat_pawn_minor_eg
+    ));
+    s.push_str(&format!(
+        "            threat_pawn_rook_mg: {},\n",
+        params.threat_pawn_rook_mg
+    ));
+    s.push_str(&format!(
+        "            threat_pawn_rook_eg: {},\n",
+        params.threat_pawn_rook_eg
+    ));
+    s.push_str(&format!(
+        "            threat_minor_rook_mg: {},\n",
+        params.threat_minor_rook_mg
+    ));
+    s.push_str(&format!(
+        "            threat_minor_rook_eg: {},\n",
+        params.threat_minor_rook_eg
+    ));
+    s.push_str(&format!(
+        "            threat_piece_queen_mg: {},\n",
+        params.threat_piece_queen_mg
+    ));
+    s.push_str(&format!(
+        "            threat_piece_queen_eg: {},\n",
+        params.threat_piece_queen_eg
+    ));
+    s.push_str(&format!(
+        "            threat_hanging_mg: {},\n",
+        params.threat_hanging_mg
+    ));
+    s.push_str(&format!(
+        "            threat_hanging_eg: {},\n",
+        params.threat_hanging_eg
+    ));
     s.push_str(&format!("            tempo: {},\n", params.tempo));
-    s.push_str(&format!("            bad_bishop_mg: {},\n", params.bad_bishop_mg));
-    s.push_str(&format!("            bad_bishop_eg: {},\n", params.bad_bishop_eg));
-    s.push_str(&format!("            knight_closed_bonus: {},\n", params.knight_closed_bonus));
-    s.push_str(&format!("            bishop_open_bonus: {},\n", params.bishop_open_bonus));
-    s.push_str(&format!("            pawn_islands_mg: {},\n", params.pawn_islands_mg));
-    s.push_str(&format!("            pawn_islands_eg: {},\n", params.pawn_islands_eg));
-    s.push_str(&format!("            ocb_scale_factor: {},\n", params.ocb_scale_factor));
-    s.push_str(&format!("            imbalance_exchange_mg: {},\n", params.imbalance_exchange_mg));
-    s.push_str(&format!("            imbalance_exchange_eg: {},\n", params.imbalance_exchange_eg));
-    s.push_str(&format!("            imbalance_rook_pair_mg: {},\n", params.imbalance_rook_pair_mg));
-    s.push_str(&format!("            imbalance_rook_pair_eg: {},\n", params.imbalance_rook_pair_eg));
-    s.push_str(&format!("            imbalance_knight_pair_eg: {},\n", params.imbalance_knight_pair_eg));
-    s.push_str(&format!("            imbalance_queen_vs_minors_mg: {},\n", params.imbalance_queen_vs_minors_mg));
-    s.push_str(&format!("            imbalance_queen_vs_minors_eg: {},\n", params.imbalance_queen_vs_minors_eg));
+    s.push_str(&format!(
+        "            bad_bishop_mg: {},\n",
+        params.bad_bishop_mg
+    ));
+    s.push_str(&format!(
+        "            bad_bishop_eg: {},\n",
+        params.bad_bishop_eg
+    ));
+    s.push_str(&format!(
+        "            knight_closed_bonus: {},\n",
+        params.knight_closed_bonus
+    ));
+    s.push_str(&format!(
+        "            bishop_open_bonus: {},\n",
+        params.bishop_open_bonus
+    ));
+    s.push_str(&format!(
+        "            pawn_islands_mg: {},\n",
+        params.pawn_islands_mg
+    ));
+    s.push_str(&format!(
+        "            pawn_islands_eg: {},\n",
+        params.pawn_islands_eg
+    ));
+    s.push_str(&format!(
+        "            ocb_scale_factor: {},\n",
+        params.ocb_scale_factor
+    ));
+    s.push_str(&format!(
+        "            imbalance_exchange_mg: {},\n",
+        params.imbalance_exchange_mg
+    ));
+    s.push_str(&format!(
+        "            imbalance_exchange_eg: {},\n",
+        params.imbalance_exchange_eg
+    ));
+    s.push_str(&format!(
+        "            imbalance_rook_pair_mg: {},\n",
+        params.imbalance_rook_pair_mg
+    ));
+    s.push_str(&format!(
+        "            imbalance_rook_pair_eg: {},\n",
+        params.imbalance_rook_pair_eg
+    ));
+    s.push_str(&format!(
+        "            imbalance_knight_pair_eg: {},\n",
+        params.imbalance_knight_pair_eg
+    ));
+    s.push_str(&format!(
+        "            imbalance_queen_vs_minors_mg: {},\n",
+        params.imbalance_queen_vs_minors_mg
+    ));
+    s.push_str(&format!(
+        "            imbalance_queen_vs_minors_eg: {},\n",
+        params.imbalance_queen_vs_minors_eg
+    ));
     s.push_str("        }\n");
     s.push_str("    }\n");
     s.push_str("}\n");
@@ -1174,10 +1482,17 @@ fn test_generate_defaults_covers_all_fields() {
     );
 }
 
-fn replace_between_markers(source: &str, start_marker: &str, end_marker: &str, replacement: &str) -> Result<String, String> {
-    let start = source.find(start_marker)
+fn replace_between_markers(
+    source: &str,
+    start_marker: &str,
+    end_marker: &str,
+    replacement: &str,
+) -> Result<String, String> {
+    let start = source
+        .find(start_marker)
         .ok_or_else(|| format!("Marker not found: {start_marker}"))?;
-    let end = source.find(end_marker)
+    let end = source
+        .find(end_marker)
         .ok_or_else(|| format!("Marker not found: {end_marker}"))?;
     let end = end + end_marker.len();
 
@@ -1195,19 +1510,28 @@ fn apply_params_to_eval_rs(params: &EvalParams, eval_rs_path: &PathBuf) {
         .unwrap_or_else(|e| panic!("Failed to read {}: {e}", eval_rs_path.display()));
 
     let source = replace_between_markers(
-        &source, "// @tuner:material_start", "// @tuner:material_end",
+        &source,
+        "// @tuner:material_start",
+        "// @tuner:material_end",
         &generate_material_section(params),
-    ).expect("Failed to replace material section");
+    )
+    .expect("Failed to replace material section");
 
     let source = replace_between_markers(
-        &source, "// @tuner:pst_start", "// @tuner:pst_end",
+        &source,
+        "// @tuner:pst_start",
+        "// @tuner:pst_end",
         &generate_pst_section(params),
-    ).expect("Failed to replace PST section");
+    )
+    .expect("Failed to replace PST section");
 
     let source = replace_between_markers(
-        &source, "// @tuner:defaults_start", "// @tuner:defaults_end",
+        &source,
+        "// @tuner:defaults_start",
+        "// @tuner:defaults_end",
         &generate_defaults_section(params),
-    ).expect("Failed to replace defaults section");
+    )
+    .expect("Failed to replace defaults section");
 
     std::fs::write(eval_rs_path, source)
         .unwrap_or_else(|e| panic!("Failed to write {}: {e}", eval_rs_path.display()));
@@ -1215,8 +1539,13 @@ fn apply_params_to_eval_rs(params: &EvalParams, eval_rs_path: &PathBuf) {
     // Count changes
     let defaults = EvalParams::default();
     let total = EvalParams::param_count();
-    let changed = (0..total).filter(|&i| defaults.get_param(i) != params.get_param(i)).count();
-    eprintln!("Applied {changed}/{total} changed parameters to {}", eval_rs_path.display());
+    let changed = (0..total)
+        .filter(|&i| defaults.get_param(i) != params.get_param(i))
+        .count();
+    eprintln!(
+        "Applied {changed}/{total} changed parameters to {}",
+        eval_rs_path.display()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1328,7 +1657,8 @@ impl StockfishProcess {
             if trimmed.starts_with("info") && trimmed.contains(" score ") {
                 let parts: Vec<&str> = trimmed.split_whitespace().collect();
                 for (i, &part) in parts.iter().enumerate() {
-                    if i > 0 && parts[i - 1] == "score"
+                    if i > 0
+                        && parts[i - 1] == "score"
                         && let Some(&val_str) = parts.get(i + 1)
                     {
                         if part == "cp" {
@@ -1384,11 +1714,7 @@ fn pearson_correlation(xs: &[f64], ys: &[f64]) -> f64 {
     }
 
     let denom = (var_x * var_y).sqrt();
-    if denom < 1e-12 {
-        0.0
-    } else {
-        cov / denom
-    }
+    if denom < 1e-12 { 0.0 } else { cov / denom }
 }
 
 /// Results from the validation pipeline (for programmatic convergence checks).
@@ -1409,13 +1735,20 @@ struct ValidationResult {
 
 /// Run the full validation pipeline: loss check + Stockfish cross-check.
 fn run_validation(config: &Config, params: &EvalParams) -> ValidationResult {
-    let constraints = build_constraints(config.tune_material, config.freeze_pst, config.freeze_mobility);
+    let constraints = build_constraints(
+        config.tune_material,
+        config.freeze_pst,
+        config.freeze_mobility,
+    );
     let defaults = EvalParams::default();
 
     // Load all positions
     let positions = load_positions(config);
     if positions.len() < 1000 {
-        eprintln!("ERROR: Need at least 1000 positions for validation, got {}", positions.len());
+        eprintln!(
+            "ERROR: Need at least 1000 positions for validation, got {}",
+            positions.len()
+        );
         std::process::exit(1);
     }
 
@@ -1431,12 +1764,20 @@ fn run_validation(config: &Config, params: &EvalParams) -> ValidationResult {
     // === Validation Loss ===
     let train_mse = mean_squared_error(train_positions, params, k, 0.0, &defaults, &constraints);
     let val_mse = mean_squared_error(val_positions, params, k, 0.0, &defaults, &constraints);
-    let ratio = if train_mse > 0.0 { val_mse / train_mse } else { 1.0 };
+    let ratio = if train_mse > 0.0 {
+        val_mse / train_mse
+    } else {
+        1.0
+    };
 
     println!("\n=== Validation Report ===");
     println!("Training MSE:    {train_mse:.8} ({train_count} positions)");
     println!("Validation MSE:  {val_mse:.8} ({val_count} positions)");
-    let status = if ratio > 1.05 { "WARNING: > 1.05, potential overfitting" } else { "OK: < 1.05" };
+    let status = if ratio > 1.05 {
+        "WARNING: > 1.05, potential overfitting"
+    } else {
+        "OK: < 1.05"
+    };
     println!("Ratio:           {ratio:.3} ({status})");
 
     // === Stockfish Cross-Check ===
@@ -1445,10 +1786,18 @@ fn run_validation(config: &Config, params: &EvalParams) -> ValidationResult {
 
     if sf_process.is_none() {
         println!("\n=== Stockfish Cross-Check ===");
-        println!("SKIPPED: stockfish not found at '{}' (use --sf-path to specify)", config.sf_path);
+        println!(
+            "SKIPPED: stockfish not found at '{}' (use --sf-path to specify)",
+            config.sf_path
+        );
         return ValidationResult {
-            train_mse, val_mse, ratio,
-            sf_mae: f64::NAN, sf_correlation: 0.0, sf_outlier_pct: 100.0, sf_evaluated: 0,
+            train_mse,
+            val_mse,
+            ratio,
+            sf_mae: f64::NAN,
+            sf_correlation: 0.0,
+            sf_outlier_pct: 100.0,
+            sf_evaluated: 0,
         };
     }
 
@@ -1492,7 +1841,11 @@ fn run_validation(config: &Config, params: &EvalParams) -> ValidationResult {
         if let Some(sf_cp) = sf_result {
             // SF returns score from side-to-move; our eval is from White's perspective.
             // Convert SF to White's perspective.
-            let sf_cp_white = if pos.board.side_to_move == chess_common::Color::White { sf_cp } else { -sf_cp };
+            let sf_cp_white = if pos.board.side_to_move == chess_common::Color::White {
+                sf_cp
+            } else {
+                -sf_cp
+            };
             let delta = engine_cp - sf_cp_white;
             let abs_err = delta.abs();
 
@@ -1522,8 +1875,13 @@ fn run_validation(config: &Config, params: &EvalParams) -> ValidationResult {
     if evaluated == 0 {
         println!("No positions could be evaluated by Stockfish.");
         return ValidationResult {
-            train_mse, val_mse, ratio,
-            sf_mae: f64::NAN, sf_correlation: 0.0, sf_outlier_pct: 100.0, sf_evaluated: 0,
+            train_mse,
+            val_mse,
+            ratio,
+            sf_mae: f64::NAN,
+            sf_correlation: 0.0,
+            sf_outlier_pct: 100.0,
+            sf_evaluated: 0,
         };
     }
 
@@ -1577,20 +1935,26 @@ fn convergence_passed(config: &Config, result: &ValidationResult) -> bool {
 
 fn print_convergence_status(config: &Config, result: &ValidationResult) {
     println!("\n=== Convergence Status ===");
-    let mae_ok  = result.sf_mae <= config.target_mae;
+    let mae_ok = result.sf_mae <= config.target_mae;
     let corr_ok = result.sf_correlation >= config.target_correlation;
-    let out_ok  = result.sf_outlier_pct <= config.target_outlier_pct;
+    let out_ok = result.sf_outlier_pct <= config.target_outlier_pct;
     println!(
         "MAE:         {:.0} cp  (target: ≤{:.0})  {}",
-        result.sf_mae, config.target_mae, if mae_ok { "✓" } else { "✗" }
+        result.sf_mae,
+        config.target_mae,
+        if mae_ok { "✓" } else { "✗" }
     );
     println!(
         "Correlation: {:.2}    (target: ≥{:.2})  {}",
-        result.sf_correlation, config.target_correlation, if corr_ok { "✓" } else { "✗" }
+        result.sf_correlation,
+        config.target_correlation,
+        if corr_ok { "✓" } else { "✗" }
     );
     println!(
         "Outliers:    {:.1}%   (target: ≤{:.1}%)  {}",
-        result.sf_outlier_pct, config.target_outlier_pct, if out_ok { "✓" } else { "✗" }
+        result.sf_outlier_pct,
+        config.target_outlier_pct,
+        if out_ok { "✓" } else { "✗" }
     );
     if mae_ok && corr_ok && out_ok {
         println!("PASSED: all thresholds met.");
@@ -1601,9 +1965,10 @@ fn print_convergence_status(config: &Config, result: &ValidationResult) {
 
 /// Iterative convergence loop: tune → validate → check → repeat.
 fn run_convergence_loop(config: &Config) {
-    let output_path = config.output_path.clone().unwrap_or_else(|| {
-        PathBuf::from("tuned_params.json")
-    });
+    let output_path = config
+        .output_path
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("tuned_params.json"));
 
     eprintln!("Chess Tuner — Convergence Mode");
     eprintln!("===============================");
@@ -1615,7 +1980,11 @@ fn run_convergence_loop(config: &Config) {
     eprintln!();
 
     // Build constraints once
-    let constraints = build_constraints(config.tune_material, config.freeze_pst, config.freeze_mobility);
+    let constraints = build_constraints(
+        config.tune_material,
+        config.freeze_pst,
+        config.freeze_mobility,
+    );
 
     // Try to resume from existing params
     let mut params = if output_path.exists() {
@@ -1660,12 +2029,19 @@ fn run_convergence_loop(config: &Config) {
             if filtered > 0 {
                 eprintln!(
                     "Filtered {filtered} positions with |engine eval| > {} ({} remaining)",
-                    config.max_eval, positions.len()
+                    config.max_eval,
+                    positions.len()
                 );
             }
         }
 
-        let k = find_optimal_k(&positions, &params, config.l2_lambda, &EvalParams::default(), &constraints);
+        let k = find_optimal_k(
+            &positions,
+            &params,
+            config.l2_lambda,
+            &EvalParams::default(),
+            &constraints,
+        );
         adam_optimize(&positions, &mut params, k, config, &constraints);
         save_params(&params, &output_path);
         drop(positions); // free memory before validation
@@ -1676,7 +2052,10 @@ fn run_convergence_loop(config: &Config) {
         print_convergence_status(config, &result);
 
         let round_elapsed = round_start.elapsed();
-        eprintln!("Round {round} completed in {:.0}s", round_elapsed.as_secs_f64());
+        eprintln!(
+            "Round {round} completed in {:.0}s",
+            round_elapsed.as_secs_f64()
+        );
 
         if convergence_passed(config, &result) {
             let total_elapsed = loop_start.elapsed();
@@ -1744,15 +2123,28 @@ fn main() {
 
     eprintln!("Chess Texel Tuner");
     eprintln!("=================");
-    eprintln!("Parameters: {} total, material: {}, mobility: {}, L2 lambda: {:.1e}",
+    eprintln!(
+        "Parameters: {} total, material: {}, mobility: {}, L2 lambda: {:.1e}",
         EvalParams::param_count(),
-        if config.tune_material { "TUNABLE (bounded)" } else { "FROZEN" },
-        if config.freeze_mobility { "FROZEN" } else { "TUNABLE (bounded)" },
+        if config.tune_material {
+            "TUNABLE (bounded)"
+        } else {
+            "FROZEN"
+        },
+        if config.freeze_mobility {
+            "FROZEN"
+        } else {
+            "TUNABLE (bounded)"
+        },
         config.l2_lambda,
     );
 
     // Build constraints
-    let constraints = build_constraints(config.tune_material, config.freeze_pst, config.freeze_mobility);
+    let constraints = build_constraints(
+        config.tune_material,
+        config.freeze_pst,
+        config.freeze_mobility,
+    );
 
     // Try to resume from saved params
     let mut params = if let Some(ref path) = config.output_path {
@@ -1798,7 +2190,13 @@ fn main() {
     }
 
     // Find optimal K
-    let k = find_optimal_k(&positions, &params, config.l2_lambda, &EvalParams::default(), &constraints);
+    let k = find_optimal_k(
+        &positions,
+        &params,
+        config.l2_lambda,
+        &EvalParams::default(),
+        &constraints,
+    );
 
     // Run Adam optimizer
     adam_optimize(&positions, &mut params, k, &config, &constraints);

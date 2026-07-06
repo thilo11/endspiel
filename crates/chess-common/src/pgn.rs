@@ -65,9 +65,7 @@ impl PgnGame {
                     continue;
                 }
                 "1/2-1/2" => {
-                    game.result = Some(GameResult::Draw(
-                        crate::types::DrawReason::Agreement,
-                    ));
+                    game.result = Some(GameResult::Draw(crate::types::DrawReason::Agreement));
                     continue;
                 }
                 "*" => {

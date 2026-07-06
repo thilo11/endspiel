@@ -7,10 +7,16 @@ pub enum UciCommand {
     Uci,
     Debug(bool),
     IsReady,
-    SetOption { name: String, value: Option<String> },
+    SetOption {
+        name: String,
+        value: Option<String>,
+    },
     Register,
     UciNewGame,
-    Position { fen: Option<String>, moves: Vec<String> },
+    Position {
+        fen: Option<String>,
+        moves: Vec<String>,
+    },
     Go(GoParams),
     Stop,
     PonderHit,
@@ -73,11 +79,22 @@ pub struct UciOptionDef {
 
 #[derive(Debug, Clone)]
 pub enum UciOptionType {
-    Check { default: bool },
-    Spin { default: i64, min: i64, max: i64 },
-    Combo { default: String, options: Vec<String> },
+    Check {
+        default: bool,
+    },
+    Spin {
+        default: i64,
+        min: i64,
+        max: i64,
+    },
+    Combo {
+        default: String,
+        options: Vec<String>,
+    },
     Button,
-    String { default: String },
+    String {
+        default: String,
+    },
 }
 
 impl UciCommand {
@@ -159,14 +176,20 @@ fn parse_position<'a>(tokens: &mut impl Iterator<Item = &'a str>) -> Option<UciC
         "startpos" => {
             // Find "moves" keyword if present
             if let Some(moves_idx) = remaining.iter().position(|&t| t == "moves") {
-                moves = remaining[moves_idx + 1..].iter().map(|s| s.to_string()).collect();
+                moves = remaining[moves_idx + 1..]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect();
             }
         }
         "fen" => {
             // Collect FEN parts until we hit "moves" or run out
             if let Some(moves_idx) = remaining.iter().position(|&t| t == "moves") {
                 fen = Some(remaining[..moves_idx].join(" "));
-                moves = remaining[moves_idx + 1..].iter().map(|s| s.to_string()).collect();
+                moves = remaining[moves_idx + 1..]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect();
             } else {
                 fen = Some(remaining.join(" "));
             }
@@ -382,7 +405,10 @@ mod tests {
 
     #[test]
     fn test_parse_ucinewgame() {
-        assert_eq!(UciCommand::parse("ucinewgame"), Some(UciCommand::UciNewGame));
+        assert_eq!(
+            UciCommand::parse("ucinewgame"),
+            Some(UciCommand::UciNewGame)
+        );
     }
 
     #[test]

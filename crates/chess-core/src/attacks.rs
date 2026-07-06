@@ -138,7 +138,8 @@ pub fn is_square_attacked(board: &Board, sq: Square, by_color: Color) -> bool {
     // A pawn of `by_color` attacks `sq` iff `sq` is in the pawn-attack set of that pawn.
     // Equivalently, we check if any `by_color` pawn is in the "reverse pawn attack" from `sq`.
     // The reverse pawn attack from sq (for by_color attacking) uses the *opposite* color direction.
-    let pawn_attackers = pawn_attacks(sq, by_color.opposite()) & board.pieces[ci][PieceKind::Pawn.index()];
+    let pawn_attackers =
+        pawn_attacks(sq, by_color.opposite()) & board.pieces[ci][PieceKind::Pawn.index()];
     if !pawn_attackers.is_empty() {
         return true;
     }
@@ -157,7 +158,8 @@ pub fn is_square_attacked(board: &Board, sq: Square, by_color: Color) -> bool {
 
     // Bishop/Queen (diagonal attacks)
     let diag_attackers = bishop_attacks(sq, occ)
-        & (board.pieces[ci][PieceKind::Bishop.index()] | board.pieces[ci][PieceKind::Queen.index()]);
+        & (board.pieces[ci][PieceKind::Bishop.index()]
+            | board.pieces[ci][PieceKind::Queen.index()]);
     if !diag_attackers.is_empty() {
         return true;
     }
@@ -181,7 +183,8 @@ pub fn attackers_of(board: &Board, sq: Square, by_color: Color) -> Bitboard {
     let knights = knight_attacks(sq) & board.pieces[ci][PieceKind::Knight.index()];
     let king = king_attacks(sq) & board.pieces[ci][PieceKind::King.index()];
     let bishops_queens = bishop_attacks(sq, occ)
-        & (board.pieces[ci][PieceKind::Bishop.index()] | board.pieces[ci][PieceKind::Queen.index()]);
+        & (board.pieces[ci][PieceKind::Bishop.index()]
+            | board.pieces[ci][PieceKind::Queen.index()]);
     let rooks_queens = rook_attacks(sq, occ)
         & (board.pieces[ci][PieceKind::Rook.index()] | board.pieces[ci][PieceKind::Queen.index()]);
 
@@ -194,16 +197,14 @@ pub fn attackers_of(board: &Board, sq: Square, by_color: Color) -> Bitboard {
 pub fn all_attackers_of(board: &Board, sq: Square, occupancy: Bitboard) -> Bitboard {
     let white_pawns = board.pieces[Color::White.index()][PieceKind::Pawn.index()];
     let black_pawns = board.pieces[Color::Black.index()][PieceKind::Pawn.index()];
-    let knights = board.pieces[0][PieceKind::Knight.index()]
-        | board.pieces[1][PieceKind::Knight.index()];
-    let bishops = board.pieces[0][PieceKind::Bishop.index()]
-        | board.pieces[1][PieceKind::Bishop.index()];
-    let rooks = board.pieces[0][PieceKind::Rook.index()]
-        | board.pieces[1][PieceKind::Rook.index()];
-    let queens = board.pieces[0][PieceKind::Queen.index()]
-        | board.pieces[1][PieceKind::Queen.index()];
-    let kings = board.pieces[0][PieceKind::King.index()]
-        | board.pieces[1][PieceKind::King.index()];
+    let knights =
+        board.pieces[0][PieceKind::Knight.index()] | board.pieces[1][PieceKind::Knight.index()];
+    let bishops =
+        board.pieces[0][PieceKind::Bishop.index()] | board.pieces[1][PieceKind::Bishop.index()];
+    let rooks = board.pieces[0][PieceKind::Rook.index()] | board.pieces[1][PieceKind::Rook.index()];
+    let queens =
+        board.pieces[0][PieceKind::Queen.index()] | board.pieces[1][PieceKind::Queen.index()];
+    let kings = board.pieces[0][PieceKind::King.index()] | board.pieces[1][PieceKind::King.index()];
 
     // Pawn attacks use reverse direction lookup
     (pawn_attacks(sq, Color::Black) & white_pawns)
@@ -304,10 +305,22 @@ mod tests {
     fn test_is_square_attacked_starting_position() {
         let board = Board::starting_position();
         // e3 is attacked by white pawns d2 and f2, and white king e1
-        assert!(is_square_attacked(&board, Square::from_algebraic("e3").unwrap(), Color::White));
+        assert!(is_square_attacked(
+            &board,
+            Square::from_algebraic("e3").unwrap(),
+            Color::White
+        ));
         // e6 is attacked by black pawns d7 and f7, and black king e8
-        assert!(is_square_attacked(&board, Square::from_algebraic("e6").unwrap(), Color::Black));
+        assert!(is_square_attacked(
+            &board,
+            Square::from_algebraic("e6").unwrap(),
+            Color::Black
+        ));
         // e4 is not attacked by white in starting position
-        assert!(!is_square_attacked(&board, Square::from_algebraic("e4").unwrap(), Color::White));
+        assert!(!is_square_attacked(
+            &board,
+            Square::from_algebraic("e4").unwrap(),
+            Color::White
+        ));
     }
 }

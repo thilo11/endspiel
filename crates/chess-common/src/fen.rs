@@ -193,7 +193,10 @@ mod tests {
     fn test_en_passant_fen() {
         let fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1";
         let board = Board::from_fen(fen).unwrap();
-        assert_eq!(board.en_passant, Some(Square::from_algebraic("e3").unwrap()));
+        assert_eq!(
+            board.en_passant,
+            Some(Square::from_algebraic("e3").unwrap())
+        );
         assert_eq!(board.to_fen(), fen);
     }
 }

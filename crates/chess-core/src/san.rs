@@ -166,7 +166,9 @@ mod tests {
 
     #[test]
     fn test_castling_kingside() {
-        let board = Board::from_fen("r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4").unwrap();
+        let board =
+            Board::from_fen("r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4")
+                .unwrap();
         let m = san_to_move(&board, "O-O").unwrap();
         assert_eq!(m.flag(), MoveFlag::KingsideCastle);
     }

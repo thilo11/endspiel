@@ -7,7 +7,11 @@ fn main() {
     let src = std::path::Path::new("nets/default.nnue");
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("default.nnue");
 
-    if src.metadata().map(|m| m.len() as usize >= expected).unwrap_or(false) {
+    if src
+        .metadata()
+        .map(|m| m.len() as usize >= expected)
+        .unwrap_or(false)
+    {
         std::fs::copy(src, &out).unwrap();
     } else {
         std::fs::write(&out, vec![0u8; expected]).unwrap();

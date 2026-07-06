@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use chess_common::{Bitboard, Board, Color, PieceKind, Score, Square};
 
@@ -37,7 +37,6 @@ struct PawnHashTable {
     entries: Box<[PawnHashEntry]>,
     mask: usize,
 }
-
 
 impl PawnHashTable {
     fn new() -> Self {
@@ -86,13 +85,21 @@ pub(crate) fn pawn_hash(board: &Board) -> u64 {
 const PIECE_MIX: [[u64; 6]; 2] = [
     // White: P, N, B, R, Q, K
     [
-        0xD4E8E29E56E8AAB6, 0x9E3779B97F4A7C15, 0xBF58476D1CE4E5B9,
-        0x94D049BB133111EB, 0x2545F4914F6CDD1D, 0xC2B2AE3D27D4EB4F,
+        0xD4E8E29E56E8AAB6,
+        0x9E3779B97F4A7C15,
+        0xBF58476D1CE4E5B9,
+        0x94D049BB133111EB,
+        0x2545F4914F6CDD1D,
+        0xC2B2AE3D27D4EB4F,
     ],
     // Black
     [
-        0x6A1E2D3C4B5F8097, 0xA0761D6478BD642F, 0xE7037ED1A0B428DB,
-        0x8EBC6AF09C88C6E3, 0x589965CC75374CC3, 0x1D8E4E27C47D124F,
+        0x6A1E2D3C4B5F8097,
+        0xA0761D6478BD642F,
+        0xE7037ED1A0B428DB,
+        0x8EBC6AF09C88C6E3,
+        0x589965CC75374CC3,
+        0x1D8E4E27C47D124F,
     ],
 ];
 
@@ -111,7 +118,13 @@ pub(crate) fn corr_keys(board: &Board) -> CorrKeys {
 
     let mut white = 0u64;
     let mut black = 0u64;
-    for k in [PieceKind::Knight, PieceKind::Bishop, PieceKind::Rook, PieceKind::Queen, PieceKind::King] {
+    for k in [
+        PieceKind::Knight,
+        PieceKind::Bishop,
+        PieceKind::Rook,
+        PieceKind::Queen,
+        PieceKind::King,
+    ] {
         white ^= mix(Color::White, k);
         black ^= mix(Color::Black, k);
     }
@@ -126,7 +139,13 @@ pub(crate) fn corr_keys(board: &Board) -> CorrKeys {
         major ^= mix(Color::White, k) ^ mix(Color::Black, k);
     }
 
-    CorrKeys { pawn: pawn_hash(board), white, black, minor, major }
+    CorrKeys {
+        pawn: pawn_hash(board),
+        white,
+        black,
+        minor,
+        major,
+    }
 }
 
 // Thread-local pawn hash table for zero-contention access
@@ -152,14 +171,27 @@ pub struct EvalBreakdown {
     pub final_score: i32,
 }
 
-fn evaluate_impl(board: &Board, params: &EvalParams, use_pawn_hash: bool, collect_terms: bool) -> EvalBreakdown {
+fn evaluate_impl(
+    board: &Board,
+    params: &EvalParams,
+    use_pawn_hash: bool,
+    collect_terms: bool,
+) -> EvalBreakdown {
     let phase = game_phase(board);
     let (mut mg, mut eg) = (0i32, 0i32);
-    let mut terms: Vec<EvalTerm> = if collect_terms { Vec::with_capacity(20) } else { Vec::new() };
+    let mut terms: Vec<EvalTerm> = if collect_terms {
+        Vec::with_capacity(20)
+    } else {
+        Vec::new()
+    };
     macro_rules! push_term {
         ($name:expr, $mg:expr, $eg:expr) => {
             if collect_terms {
-                terms.push(EvalTerm { name: $name, mg: $mg, eg: $eg });
+                terms.push(EvalTerm {
+                    name: $name,
+                    mg: $mg,
+                    eg: $eg,
+                });
             }
         };
     }
@@ -350,10 +382,14 @@ fn soft_cap_signed(value: i32, cap: i32) -> i32 {
 #[inline]
 fn non_pawn_material_mg(board: &Board, color: Color, params: &EvalParams) -> i32 {
     let ci = color.index();
-    board.pieces[ci][PieceKind::Knight.index()].count() as i32 * params.material_mg[PieceKind::Knight.index()]
-        + board.pieces[ci][PieceKind::Bishop.index()].count() as i32 * params.material_mg[PieceKind::Bishop.index()]
-        + board.pieces[ci][PieceKind::Rook.index()].count() as i32 * params.material_mg[PieceKind::Rook.index()]
-        + board.pieces[ci][PieceKind::Queen.index()].count() as i32 * params.material_mg[PieceKind::Queen.index()]
+    board.pieces[ci][PieceKind::Knight.index()].count() as i32
+        * params.material_mg[PieceKind::Knight.index()]
+        + board.pieces[ci][PieceKind::Bishop.index()].count() as i32
+            * params.material_mg[PieceKind::Bishop.index()]
+        + board.pieces[ci][PieceKind::Rook.index()].count() as i32
+            * params.material_mg[PieceKind::Rook.index()]
+        + board.pieces[ci][PieceKind::Queen.index()].count() as i32
+            * params.material_mg[PieceKind::Queen.index()]
 }
 
 #[inline]
@@ -586,11 +622,21 @@ const PST_KING_EG: [i32; 64] = [
 ];
 
 const PST_MG: [[i32; 64]; 6] = [
-    PST_PAWN_MG, PST_KNIGHT_MG, PST_BISHOP_MG, PST_ROOK_MG, PST_QUEEN_MG, PST_KING_MG,
+    PST_PAWN_MG,
+    PST_KNIGHT_MG,
+    PST_BISHOP_MG,
+    PST_ROOK_MG,
+    PST_QUEEN_MG,
+    PST_KING_MG,
 ];
 
 const PST_EG: [[i32; 64]; 6] = [
-    PST_PAWN_EG, PST_KNIGHT_EG, PST_BISHOP_EG, PST_ROOK_EG, PST_QUEEN_EG, PST_KING_EG,
+    PST_PAWN_EG,
+    PST_KNIGHT_EG,
+    PST_BISHOP_EG,
+    PST_ROOK_EG,
+    PST_QUEEN_EG,
+    PST_KING_EG,
 ];
 // @tuner:pst_end
 
@@ -705,8 +751,8 @@ pub struct EvalParams {
     pub bad_bishop_eg: i32,
 
     // Knight vs bishop adjustment based on pawn count (closed = many pawns)
-    pub knight_closed_bonus: i32,   // Knight bonus per pawn above 5
-    pub bishop_open_bonus: i32,     // Bishop bonus per pawn below 5
+    pub knight_closed_bonus: i32, // Knight bonus per pawn above 5
+    pub bishop_open_bonus: i32,   // Bishop bonus per pawn below 5
 
     // Pawn islands: penalty per island beyond the first
     pub pawn_islands_mg: i32,
@@ -716,9 +762,9 @@ pub struct EvalParams {
     pub ocb_scale_factor: i32,
 
     // Material imbalance params
-    pub imbalance_exchange_mg: i32,   // rook vs minor, MG
-    pub imbalance_exchange_eg: i32,   // rook vs minor, EG
-    pub imbalance_rook_pair_mg: i32,  // redundant rook pair penalty
+    pub imbalance_exchange_mg: i32,  // rook vs minor, MG
+    pub imbalance_exchange_eg: i32,  // rook vs minor, EG
+    pub imbalance_rook_pair_mg: i32, // redundant rook pair penalty
     pub imbalance_rook_pair_eg: i32,
     pub imbalance_knight_pair_eg: i32, // two-knight penalty (EG only)
     pub imbalance_queen_vs_minors_mg: i32, // queen vs 2+ minors
@@ -1071,50 +1117,91 @@ impl EvalParams {
 
     fn scalar_name(&self, idx: usize) -> String {
         const NAMES: [&str; NUM_SCALAR_PARAMS] = [
-            "doubled_pawn_mg", "doubled_pawn_eg",
-            "isolated_pawn_mg", "isolated_pawn_eg",
-            "doubled_isolated_mg", "doubled_isolated_eg",
-            "backward_pawn_mg", "backward_pawn_eg",
-            "passed_pawn_base_mg", "passed_pawn_base_eg",
-            "passed_pawn_adv_mg", "passed_pawn_adv_eg",
-            "connected_passer_base_mg", "connected_passer_base_eg",
-            "connected_passer_adv_mg", "connected_passer_adv_eg",
-            "rook_behind_passer_mg", "rook_behind_passer_eg",
-            "blocked_passer_mg", "blocked_passer_eg",
-            "bishop_pair_base_mg", "bishop_pair_base_eg",
-            "rook_open_file_mg", "rook_open_file_eg",
-            "rook_semi_open_mg", "rook_semi_open_eg",
-            "rook_seventh_mg", "rook_seventh_eg",
-            "ks_shield_1", "ks_shield_2",
-            "ks_open_file", "ks_semi_open",
+            "doubled_pawn_mg",
+            "doubled_pawn_eg",
+            "isolated_pawn_mg",
+            "isolated_pawn_eg",
+            "doubled_isolated_mg",
+            "doubled_isolated_eg",
+            "backward_pawn_mg",
+            "backward_pawn_eg",
+            "passed_pawn_base_mg",
+            "passed_pawn_base_eg",
+            "passed_pawn_adv_mg",
+            "passed_pawn_adv_eg",
+            "connected_passer_base_mg",
+            "connected_passer_base_eg",
+            "connected_passer_adv_mg",
+            "connected_passer_adv_eg",
+            "rook_behind_passer_mg",
+            "rook_behind_passer_eg",
+            "blocked_passer_mg",
+            "blocked_passer_eg",
+            "bishop_pair_base_mg",
+            "bishop_pair_base_eg",
+            "rook_open_file_mg",
+            "rook_open_file_eg",
+            "rook_semi_open_mg",
+            "rook_semi_open_eg",
+            "rook_seventh_mg",
+            "rook_seventh_eg",
+            "ks_shield_1",
+            "ks_shield_2",
+            "ks_open_file",
+            "ks_semi_open",
             "ks_center_king",
-            "ks_knight_weight", "ks_bishop_weight",
-            "ks_rook_weight", "ks_queen_weight",
-            "mobility_knight_mg", "mobility_knight_eg",
-            "mobility_bishop_mg", "mobility_bishop_eg",
-            "mobility_rook_mg", "mobility_rook_eg",
-            "mobility_queen_mg", "mobility_queen_eg",
-            "center_pawn_bonus", "center_knight_bonus", "center_bishop_bonus",
-            "pawn_protected_knight", "knight_outpost",
-            "threat_pawn_minor_mg", "threat_pawn_minor_eg",
-            "threat_pawn_rook_mg", "threat_pawn_rook_eg",
-            "threat_minor_rook_mg", "threat_minor_rook_eg",
-            "threat_piece_queen_mg", "threat_piece_queen_eg",
-            "threat_hanging_mg", "threat_hanging_eg",
+            "ks_knight_weight",
+            "ks_bishop_weight",
+            "ks_rook_weight",
+            "ks_queen_weight",
+            "mobility_knight_mg",
+            "mobility_knight_eg",
+            "mobility_bishop_mg",
+            "mobility_bishop_eg",
+            "mobility_rook_mg",
+            "mobility_rook_eg",
+            "mobility_queen_mg",
+            "mobility_queen_eg",
+            "center_pawn_bonus",
+            "center_knight_bonus",
+            "center_bishop_bonus",
+            "pawn_protected_knight",
+            "knight_outpost",
+            "threat_pawn_minor_mg",
+            "threat_pawn_minor_eg",
+            "threat_pawn_rook_mg",
+            "threat_pawn_rook_eg",
+            "threat_minor_rook_mg",
+            "threat_minor_rook_eg",
+            "threat_piece_queen_mg",
+            "threat_piece_queen_eg",
+            "threat_hanging_mg",
+            "threat_hanging_eg",
             "tempo",
-            "bad_bishop_mg", "bad_bishop_eg",
-            "knight_closed_bonus", "bishop_open_bonus",
-            "pawn_islands_mg", "pawn_islands_eg",
+            "bad_bishop_mg",
+            "bad_bishop_eg",
+            "knight_closed_bonus",
+            "bishop_open_bonus",
+            "pawn_islands_mg",
+            "pawn_islands_eg",
             "ocb_scale_factor",
-            "king_passer_own_eg", "king_passer_enemy_eg",
-            "connected_passer_sq_mg", "connected_passer_sq_eg",
-            "imbalance_exchange_mg", "imbalance_exchange_eg",
-            "imbalance_rook_pair_mg", "imbalance_rook_pair_eg",
+            "king_passer_own_eg",
+            "king_passer_enemy_eg",
+            "connected_passer_sq_mg",
+            "connected_passer_sq_eg",
+            "imbalance_exchange_mg",
+            "imbalance_exchange_eg",
+            "imbalance_rook_pair_mg",
+            "imbalance_rook_pair_eg",
             "imbalance_knight_pair_eg",
-            "imbalance_queen_vs_minors_mg", "imbalance_queen_vs_minors_eg",
-            "doubled_rook_file_mg", "doubled_rook_file_eg",
-            "doubled_rook_7th_mg", "doubled_rook_7th_eg",
-            "trapped_bishop_mg", "trapped_bishop_eg",
+            "imbalance_queen_vs_minors_mg",
+            "imbalance_queen_vs_minors_eg",
+            "doubled_rook_file_mg",
+            "doubled_rook_file_eg",
+            "doubled_rook_7th_mg",
+            "doubled_rook_7th_eg",
+            "trapped_bishop_mg",
+            "trapped_bishop_eg",
         ];
         NAMES[idx].to_string()
     }
@@ -1131,7 +1218,9 @@ impl EvalParams {
             println!("// PST MG {name}");
             print!("[");
             for sq in 0..64 {
-                if sq % 8 == 0 { print!("\n    "); }
+                if sq % 8 == 0 {
+                    print!("\n    ");
+                }
                 print!("{:4},", self.pst_mg[i][sq]);
             }
             println!("\n],");
@@ -1143,7 +1232,9 @@ impl EvalParams {
             println!("// PST EG {name}");
             print!("[");
             for sq in 0..64 {
-                if sq % 8 == 0 { print!("\n    "); }
+                if sq % 8 == 0 {
+                    print!("\n    ");
+                }
                 print!("{:4},", self.pst_eg[i][sq]);
             }
             println!("\n],");
@@ -1190,8 +1281,10 @@ fn pawn_structure(board: &Board, params: &EvalParams) -> (i32, i32) {
     let white_pawns = board.pieces[Color::White.index()][PieceKind::Pawn.index()];
     let black_pawns = board.pieces[Color::Black.index()][PieceKind::Pawn.index()];
 
-    let (w_mg, w_eg) = pawn_structure_for_color(board, white_pawns, black_pawns, Color::White, params);
-    let (b_mg, b_eg) = pawn_structure_for_color(board, black_pawns, white_pawns, Color::Black, params);
+    let (w_mg, w_eg) =
+        pawn_structure_for_color(board, white_pawns, black_pawns, Color::White, params);
+    let (b_mg, b_eg) =
+        pawn_structure_for_color(board, black_pawns, white_pawns, Color::Black, params);
 
     mg += w_mg - b_mg;
     eg += w_eg - b_eg;
@@ -1212,8 +1305,7 @@ fn pawn_structure_for_color(
 
     // Pure pawn endgame: enemy has no pieces (only king + pawns)
     let enemy_ci = color.opposite().index();
-    let enemy_has_pieces =
-        !board.pieces[enemy_ci][PieceKind::Knight.index()].is_empty()
+    let enemy_has_pieces = !board.pieces[enemy_ci][PieceKind::Knight.index()].is_empty()
         || !board.pieces[enemy_ci][PieceKind::Bishop.index()].is_empty()
         || !board.pieces[enemy_ci][PieceKind::Rook.index()].is_empty()
         || !board.pieces[enemy_ci][PieceKind::Queen.index()].is_empty();
@@ -1273,8 +1365,10 @@ fn pawn_structure_for_color(
             };
 
             // Passed pawn bonus (quadratic in advancement)
-            let mut pass_mg = params.passed_pawn_base_mg + advancement * advancement * params.passed_pawn_adv_mg;
-            let mut pass_eg = params.passed_pawn_base_eg + advancement * advancement * params.passed_pawn_adv_eg;
+            let mut pass_mg =
+                params.passed_pawn_base_mg + advancement * advancement * params.passed_pawn_adv_mg;
+            let mut pass_eg =
+                params.passed_pawn_base_eg + advancement * advancement * params.passed_pawn_adv_eg;
 
             // Passed pawn bonus scaling vs enemy material (blockades/containment)
             let enemy_ci = color.opposite().index();
@@ -1320,11 +1414,14 @@ fn pawn_structure_for_color(
             if !adj_pawns.is_empty() {
                 for adj_sq in adj_pawns.iter() {
                     let adj_front = front_span_mask(adj_sq, color);
-                    let adj_block = adj_front & (file_bitboard(adj_sq.file()) | adjacent_files(adj_sq.file()));
+                    let adj_block =
+                        adj_front & (file_bitboard(adj_sq.file()) | adjacent_files(adj_sq.file()));
                     if (enemy_pawns & adj_block).is_empty() {
-                        mg += params.connected_passer_base_mg + advancement * params.connected_passer_adv_mg
+                        mg += params.connected_passer_base_mg
+                            + advancement * params.connected_passer_adv_mg
                             + advancement * advancement * params.connected_passer_sq_mg;
-                        eg += params.connected_passer_base_eg + advancement * params.connected_passer_adv_eg
+                        eg += params.connected_passer_base_eg
+                            + advancement * params.connected_passer_adv_eg
                             + advancement * advancement * params.connected_passer_sq_eg;
                         break;
                     }
@@ -1350,10 +1447,18 @@ fn pawn_structure_for_color(
             // Blocked passed pawn penalty
             let stop_sq = match color {
                 Color::White => {
-                    if sq.rank() < 7 { Some(Square::new(file, sq.rank() + 1)) } else { None }
+                    if sq.rank() < 7 {
+                        Some(Square::new(file, sq.rank() + 1))
+                    } else {
+                        None
+                    }
                 }
                 Color::Black => {
-                    if sq.rank() > 0 { Some(Square::new(file, sq.rank() - 1)) } else { None }
+                    if sq.rank() > 0 {
+                        Some(Square::new(file, sq.rank() - 1))
+                    } else {
+                        None
+                    }
                 }
             };
             if let Some(stop) = stop_sq {
@@ -1438,9 +1543,12 @@ fn pawn_structure_for_color(
                         // Pure pawn endgame: fully unstoppable
                         eg += 350;
                     } else if enemy_rooks.count() > 0
-                        && board.pieces[color.opposite().index()][PieceKind::Bishop.index()].is_empty()
-                        && board.pieces[color.opposite().index()][PieceKind::Knight.index()].is_empty()
-                        && board.pieces[color.opposite().index()][PieceKind::Queen.index()].is_empty()
+                        && board.pieces[color.opposite().index()][PieceKind::Bishop.index()]
+                            .is_empty()
+                        && board.pieces[color.opposite().index()][PieceKind::Knight.index()]
+                            .is_empty()
+                        && board.pieces[color.opposite().index()][PieceKind::Queen.index()]
+                            .is_empty()
                         && rook_behind
                     {
                         // Enemy has only rook(s) but our rook supports the passer:
@@ -1514,7 +1622,8 @@ fn rook_open_files(board: &Board, params: &EvalParams) -> (i32, i32) {
             eg += 6;
         }
         // Bonus for rook on file with an advanced own pawn
-        let advanced_pawns = white_pawns & file_bb
+        let advanced_pawns = white_pawns
+            & file_bb
             & (rank_bitboard(4) | rank_bitboard(5) | rank_bitboard(6) | rank_bitboard(7));
         if !advanced_pawns.is_empty() {
             mg += 6;
@@ -1562,7 +1671,8 @@ fn rook_open_files(board: &Board, params: &EvalParams) -> (i32, i32) {
             eg -= 6;
         }
         // Bonus for rook on file with an advanced own pawn
-        let advanced_pawns = black_pawns & file_bb
+        let advanced_pawns = black_pawns
+            & file_bb
             & (rank_bitboard(0) | rank_bitboard(1) | rank_bitboard(2) | rank_bitboard(3));
         if !advanced_pawns.is_empty() {
             mg -= 6;
@@ -1595,7 +1705,9 @@ fn rook_open_files(board: &Board, params: &EvalParams) -> (i32, i32) {
     let black_rooks = board.pieces[Color::Black.index()][PieceKind::Rook.index()];
     if white_rooks.count() >= 2 {
         let mut remaining = white_rooks;
-        let (Some(sq1), rest) = remaining.pop_lsb() else { unreachable!() };
+        let (Some(sq1), rest) = remaining.pop_lsb() else {
+            unreachable!()
+        };
         remaining = rest;
         while let (Some(sq2), next) = remaining.pop_lsb() {
             if sq1.file() == sq2.file() {
@@ -1612,7 +1724,9 @@ fn rook_open_files(board: &Board, params: &EvalParams) -> (i32, i32) {
     }
     if black_rooks.count() >= 2 {
         let mut remaining = black_rooks;
-        let (Some(sq1), rest) = remaining.pop_lsb() else { unreachable!() };
+        let (Some(sq1), rest) = remaining.pop_lsb() else {
+            unreachable!()
+        };
         remaining = rest;
         while let (Some(sq2), next) = remaining.pop_lsb() {
             if sq1.file() == sq2.file() {
@@ -1734,18 +1848,46 @@ fn king_safety_for(board: &Board, color: Color, phase: i32, params: &EvalParams)
     // Pawn shield
     let shield_files = {
         let mut bb = file_bitboard(king_file);
-        if king_file > 0 { bb |= file_bitboard(king_file - 1); }
-        if king_file < 7 { bb |= file_bitboard(king_file + 1); }
+        if king_file > 0 {
+            bb |= file_bitboard(king_file - 1);
+        }
+        if king_file < 7 {
+            bb |= file_bitboard(king_file + 1);
+        }
         bb
     };
 
     let shield_rank_1 = match color {
-        Color::White => if king_sq.rank() < 7 { rank_bitboard(king_sq.rank() + 1) } else { Bitboard::EMPTY },
-        Color::Black => if king_sq.rank() > 0 { rank_bitboard(king_sq.rank() - 1) } else { Bitboard::EMPTY },
+        Color::White => {
+            if king_sq.rank() < 7 {
+                rank_bitboard(king_sq.rank() + 1)
+            } else {
+                Bitboard::EMPTY
+            }
+        }
+        Color::Black => {
+            if king_sq.rank() > 0 {
+                rank_bitboard(king_sq.rank() - 1)
+            } else {
+                Bitboard::EMPTY
+            }
+        }
     };
     let shield_rank_2 = match color {
-        Color::White => if king_sq.rank() < 6 { rank_bitboard(king_sq.rank() + 2) } else { Bitboard::EMPTY },
-        Color::Black => if king_sq.rank() > 1 { rank_bitboard(king_sq.rank() - 2) } else { Bitboard::EMPTY },
+        Color::White => {
+            if king_sq.rank() < 6 {
+                rank_bitboard(king_sq.rank() + 2)
+            } else {
+                Bitboard::EMPTY
+            }
+        }
+        Color::Black => {
+            if king_sq.rank() > 1 {
+                rank_bitboard(king_sq.rank() - 2)
+            } else {
+                Bitboard::EMPTY
+            }
+        }
     };
 
     let shield_1 = (own_pawns & shield_files & shield_rank_1).count() as i32;
@@ -1783,7 +1925,10 @@ fn king_safety_for(board: &Board, color: Color, phase: i32, params: &EvalParams)
     }
 
     // Penalty for king exposed far from home rank
-    let home_rank = match color { Color::White => 0i32, Color::Black => 7i32 };
+    let home_rank = match color {
+        Color::White => 0i32,
+        Color::Black => 7i32,
+    };
     let rank_dist = (king_sq.rank() as i32 - home_rank).abs();
     if rank_dist >= 3 {
         score -= rank_dist * rank_dist * 15;
@@ -1851,8 +1996,8 @@ fn king_safety_for(board: &Board, color: Color, phase: i32, params: &EvalParams)
     // Pawn storm: penalize when enemy pawns are advancing toward our king
     let storm_zone = shield_files; // Same files as pawn shield
     let storm_ranks = match color {
-        Color::White => rank_bitboard(3) | rank_bitboard(4),  // enemy pawns on rank 4-5
-        Color::Black => rank_bitboard(3) | rank_bitboard(4),  // enemy pawns on rank 4-5
+        Color::White => rank_bitboard(3) | rank_bitboard(4), // enemy pawns on rank 4-5
+        Color::Black => rank_bitboard(3) | rank_bitboard(4), // enemy pawns on rank 4-5
     };
     let storm_pawns = (enemy_pawns & storm_zone & storm_ranks).count() as i32;
     score -= storm_pawns * 15;
@@ -1871,33 +2016,44 @@ fn pseudo_mobility(board: &Board, params: &EvalParams) -> (i32, i32) {
 
     // Knight mobility
     for sq in board.pieces[Color::White.index()][PieceKind::Knight.index()].iter() {
-        let count = (chess_core::attacks::knight_attacks(sq) & !board.occupancy[Color::White.index()]).count() as i32;
+        let count = (chess_core::attacks::knight_attacks(sq)
+            & !board.occupancy[Color::White.index()])
+        .count() as i32;
         mg += count * params.mobility_knight_mg;
         eg += count * params.mobility_knight_eg;
     }
     for sq in board.pieces[Color::Black.index()][PieceKind::Knight.index()].iter() {
-        let count = (chess_core::attacks::knight_attacks(sq) & !board.occupancy[Color::Black.index()]).count() as i32;
+        let count = (chess_core::attacks::knight_attacks(sq)
+            & !board.occupancy[Color::Black.index()])
+        .count() as i32;
         mg -= count * params.mobility_knight_mg;
         eg -= count * params.mobility_knight_eg;
     }
 
     // Bishop mobility
     for sq in board.pieces[Color::White.index()][PieceKind::Bishop.index()].iter() {
-        let count = (chess_core::attacks::bishop_attacks(sq, occ) & !board.occupancy[Color::White.index()]).count() as i32;
+        let count = (chess_core::attacks::bishop_attacks(sq, occ)
+            & !board.occupancy[Color::White.index()])
+        .count() as i32;
         mg += count * params.mobility_bishop_mg;
         eg += count * params.mobility_bishop_eg;
     }
     for sq in board.pieces[Color::Black.index()][PieceKind::Bishop.index()].iter() {
-        let count = (chess_core::attacks::bishop_attacks(sq, occ) & !board.occupancy[Color::Black.index()]).count() as i32;
+        let count = (chess_core::attacks::bishop_attacks(sq, occ)
+            & !board.occupancy[Color::Black.index()])
+        .count() as i32;
         mg -= count * params.mobility_bishop_mg;
         eg -= count * params.mobility_bishop_eg;
     }
 
     // Rook mobility
-    let enemy_half_white = rank_bitboard(4) | rank_bitboard(5) | rank_bitboard(6) | rank_bitboard(7);
-    let enemy_half_black = rank_bitboard(0) | rank_bitboard(1) | rank_bitboard(2) | rank_bitboard(3);
+    let enemy_half_white =
+        rank_bitboard(4) | rank_bitboard(5) | rank_bitboard(6) | rank_bitboard(7);
+    let enemy_half_black =
+        rank_bitboard(0) | rank_bitboard(1) | rank_bitboard(2) | rank_bitboard(3);
     for sq in board.pieces[Color::White.index()][PieceKind::Rook.index()].iter() {
-        let attacks = chess_core::attacks::rook_attacks(sq, occ) & !board.occupancy[Color::White.index()];
+        let attacks =
+            chess_core::attacks::rook_attacks(sq, occ) & !board.occupancy[Color::White.index()];
         let count = attacks.count() as i32;
         mg += count * params.mobility_rook_mg;
         eg += count * params.mobility_rook_eg;
@@ -1910,7 +2066,8 @@ fn pseudo_mobility(board: &Board, params: &EvalParams) -> (i32, i32) {
         eg += enemy_sq_count;
     }
     for sq in board.pieces[Color::Black.index()][PieceKind::Rook.index()].iter() {
-        let attacks = chess_core::attacks::rook_attacks(sq, occ) & !board.occupancy[Color::Black.index()];
+        let attacks =
+            chess_core::attacks::rook_attacks(sq, occ) & !board.occupancy[Color::Black.index()];
         let count = attacks.count() as i32;
         mg -= count * params.mobility_rook_mg;
         eg -= count * params.mobility_rook_eg;
@@ -1925,7 +2082,9 @@ fn pseudo_mobility(board: &Board, params: &EvalParams) -> (i32, i32) {
 
     // Queen mobility
     for sq in board.pieces[Color::White.index()][PieceKind::Queen.index()].iter() {
-        let count = (chess_core::attacks::queen_attacks(sq, occ) & !board.occupancy[Color::White.index()]).count() as i32;
+        let count = (chess_core::attacks::queen_attacks(sq, occ)
+            & !board.occupancy[Color::White.index()])
+        .count() as i32;
         mg += count * params.mobility_queen_mg;
         eg += count * params.mobility_queen_eg;
         // Trapped queen penalty: very few available squares
@@ -1935,7 +2094,9 @@ fn pseudo_mobility(board: &Board, params: &EvalParams) -> (i32, i32) {
         }
     }
     for sq in board.pieces[Color::Black.index()][PieceKind::Queen.index()].iter() {
-        let count = (chess_core::attacks::queen_attacks(sq, occ) & !board.occupancy[Color::Black.index()]).count() as i32;
+        let count = (chess_core::attacks::queen_attacks(sq, occ)
+            & !board.occupancy[Color::Black.index()])
+        .count() as i32;
         mg -= count * params.mobility_queen_mg;
         eg -= count * params.mobility_queen_eg;
         // Trapped queen penalty
@@ -1947,14 +2108,18 @@ fn pseudo_mobility(board: &Board, params: &EvalParams) -> (i32, i32) {
 
     // Low-mobility minor piece penalty (knight/bishop with 0-2 moves)
     for sq in board.pieces[Color::White.index()][PieceKind::Knight.index()].iter() {
-        let count = (chess_core::attacks::knight_attacks(sq) & !board.occupancy[Color::White.index()]).count() as i32;
+        let count = (chess_core::attacks::knight_attacks(sq)
+            & !board.occupancy[Color::White.index()])
+        .count() as i32;
         if count <= 2 {
             mg -= (3 - count) * 10;
             eg -= (3 - count) * 12;
         }
     }
     for sq in board.pieces[Color::Black.index()][PieceKind::Knight.index()].iter() {
-        let count = (chess_core::attacks::knight_attacks(sq) & !board.occupancy[Color::Black.index()]).count() as i32;
+        let count = (chess_core::attacks::knight_attacks(sq)
+            & !board.occupancy[Color::Black.index()])
+        .count() as i32;
         if count <= 2 {
             mg += (3 - count) * 10;
             eg += (3 - count) * 12;
@@ -2035,8 +2200,14 @@ fn center_control(board: &Board, params: &EvalParams) -> i32 {
 fn connectivity(board: &Board, params: &EvalParams) -> i32 {
     let mut score = 0i32;
 
-    let white_pawn_attacks = pawn_attack_span(board.pieces[Color::White.index()][PieceKind::Pawn.index()], Color::White);
-    let black_pawn_attacks = pawn_attack_span(board.pieces[Color::Black.index()][PieceKind::Pawn.index()], Color::Black);
+    let white_pawn_attacks = pawn_attack_span(
+        board.pieces[Color::White.index()][PieceKind::Pawn.index()],
+        Color::White,
+    );
+    let black_pawn_attacks = pawn_attack_span(
+        board.pieces[Color::Black.index()][PieceKind::Pawn.index()],
+        Color::Black,
+    );
 
     let white_knights = board.pieces[Color::White.index()][PieceKind::Knight.index()];
     let black_knights = board.pieces[Color::Black.index()][PieceKind::Knight.index()];
@@ -2045,7 +2216,9 @@ fn connectivity(board: &Board, params: &EvalParams) -> i32 {
         score += params.pawn_protected_knight;
         let adj = adjacent_files(sq.file());
         let enemy_front = front_span_mask(sq, Color::White);
-        if (board.pieces[Color::Black.index()][PieceKind::Pawn.index()] & adj & enemy_front).is_empty() {
+        if (board.pieces[Color::Black.index()][PieceKind::Pawn.index()] & adj & enemy_front)
+            .is_empty()
+        {
             score += params.knight_outpost;
         }
     }
@@ -2053,7 +2226,9 @@ fn connectivity(board: &Board, params: &EvalParams) -> i32 {
         score -= params.pawn_protected_knight;
         let adj = adjacent_files(sq.file());
         let enemy_front = front_span_mask(sq, Color::Black);
-        if (board.pieces[Color::White.index()][PieceKind::Pawn.index()] & adj & enemy_front).is_empty() {
+        if (board.pieces[Color::White.index()][PieceKind::Pawn.index()] & adj & enemy_front)
+            .is_empty()
+        {
             score -= params.knight_outpost;
         }
     }
@@ -2136,7 +2311,8 @@ fn threats(board: &Board, params: &EvalParams) -> (i32, i32) {
 
     // Hanging pieces (attacked by anything, not defended by pawns)
     let white_all_att = white_pawn_att | white_minor_att | white_rook_att;
-    let hanging_black = white_all_att & !black_pawn_att & (black_minors | black_rooks | black_queens);
+    let hanging_black =
+        white_all_att & !black_pawn_att & (black_minors | black_rooks | black_queens);
     mg += hanging_black.count() as i32 * params.threat_hanging_mg * white_attack_scale / 256;
     eg += hanging_black.count() as i32 * params.threat_hanging_eg * white_attack_scale / 256;
 
@@ -2163,7 +2339,8 @@ fn threats(board: &Board, params: &EvalParams) -> (i32, i32) {
     eg -= piece_threat_queens * params.threat_piece_queen_eg * black_attack_scale / 256;
 
     let black_all_att = black_pawn_att | black_minor_att | black_rook_att;
-    let hanging_white = black_all_att & !white_pawn_att & (white_minors | white_rooks | white_queens);
+    let hanging_white =
+        black_all_att & !white_pawn_att & (white_minors | white_rooks | white_queens);
     mg -= hanging_white.count() as i32 * params.threat_hanging_mg * black_attack_scale / 256;
     eg -= hanging_white.count() as i32 * params.threat_hanging_eg * black_attack_scale / 256;
 
@@ -2221,12 +2398,22 @@ fn material_imbalance(board: &Board, params: &EvalParams) -> (i32, i32) {
     }
 
     // Redundancy: two rooks are slightly less valuable than 2x one rook
-    if wr >= 2 { mg += params.imbalance_rook_pair_mg; eg += params.imbalance_rook_pair_eg; }
-    if br >= 2 { mg -= params.imbalance_rook_pair_mg; eg -= params.imbalance_rook_pair_eg; }
+    if wr >= 2 {
+        mg += params.imbalance_rook_pair_mg;
+        eg += params.imbalance_rook_pair_eg;
+    }
+    if br >= 2 {
+        mg -= params.imbalance_rook_pair_mg;
+        eg -= params.imbalance_rook_pair_eg;
+    }
 
     // Two knights are slightly less valuable (poor at endgame mating)
-    if wn >= 2 { eg += params.imbalance_knight_pair_eg; }
-    if bn >= 2 { eg -= params.imbalance_knight_pair_eg; }
+    if wn >= 2 {
+        eg += params.imbalance_knight_pair_eg;
+    }
+    if bn >= 2 {
+        eg -= params.imbalance_knight_pair_eg;
+    }
 
     // Queen vs 2 minors is usually good for the queen side
     if wq > bq && b_minors > w_minors + 1 {
@@ -2290,7 +2477,13 @@ fn mopup_eval(board: &Board, phase: i32) -> i32 {
 
     // Compute material balance (positive = White ahead)
     let mut material_balance = 0i32;
-    for &kind in &[PieceKind::Pawn, PieceKind::Knight, PieceKind::Bishop, PieceKind::Rook, PieceKind::Queen] {
+    for &kind in &[
+        PieceKind::Pawn,
+        PieceKind::Knight,
+        PieceKind::Bishop,
+        PieceKind::Rook,
+        PieceKind::Queen,
+    ] {
         let ki = kind.index();
         let w_count = board.pieces[Color::White.index()][ki].count() as i32;
         let b_count = board.pieces[Color::Black.index()][ki].count() as i32;
@@ -2520,7 +2713,11 @@ fn endgame_scale_factor(board: &Board, params: &EvalParams, eval: i32, phase: i3
     if (wq == 1 && w_all == 1 && wp == 0 && b_all == 0 && bp > 0)
         || (bq == 1 && b_all == 1 && bp == 0 && w_all == 0 && wp > 0)
     {
-        let (defending_pawns, defending_color) = if wq == 1 { (bp, Color::Black) } else { (wp, Color::White) };
+        let (defending_pawns, defending_color) = if wq == 1 {
+            (bp, Color::Black)
+        } else {
+            (wp, Color::White)
+        };
         if defending_pawns == 1 {
             // Check if the defending pawn is on the 7th rank (about to promote)
             let pawn_bb = board.pieces[defending_color.index()][PieceKind::Pawn.index()];
@@ -2566,8 +2763,12 @@ fn endgame_scale_factor(board: &Board, params: &EvalParams, eval: i32, phase: i3
         let losing_side_minors = if eval > 0 { b_minors } else { w_minors };
         let losing_side_majors = if eval > 0 { b_major } else { w_major };
         let losing_side_pawns = if eval > 0 { bp } else { wp };
-        if winning_side_majors == 1 && winning_side_minors == 0 && winning_side_pawns == 0
-            && losing_side_majors == 0 && losing_side_minors <= 1 && losing_side_pawns == 0
+        if winning_side_majors == 1
+            && winning_side_minors == 0
+            && winning_side_pawns == 0
+            && losing_side_majors == 0
+            && losing_side_minors <= 1
+            && losing_side_pawns == 0
         {
             // Q vs minor or Q vs nothing — scale down since no pawns to promote
             return 80;
@@ -2614,7 +2815,12 @@ fn endgame_scale_factor(board: &Board, params: &EvalParams, eval: i32, phase: i3
     // Scale=12 (not 16) because positional bonuses (active king, rook on 7th) inflate
     // the raw eval enough that 16 still yields ~55 cp after scaling.
     // Must come before the general R+minor vs R check below.
-    if wq == 0 && bq == 0 && wr == 1 && br == 1 && wp == 0 && bp == 0
+    if wq == 0
+        && bq == 0
+        && wr == 1
+        && br == 1
+        && wp == 0
+        && bp == 0
         && ((w_minors == 1 && b_minors == 0) || (b_minors == 1 && w_minors == 0))
     {
         return 12;
@@ -2740,50 +2946,95 @@ mod tests {
     fn opening_evals_not_inflated() {
         // Common opening positions should eval within +/- 100cp
         let positions = [
-            ("After 1.e4",   "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"),
-            ("Sicilian 2.Nf3","rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2"),
-            ("Najdorf 5.Nc3","rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R b KQkq - 2 5"),
+            (
+                "After 1.e4",
+                "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+            ),
+            (
+                "Sicilian 2.Nf3",
+                "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2",
+            ),
+            (
+                "Najdorf 5.Nc3",
+                "rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R b KQkq - 2 5",
+            ),
         ];
         for (label, fen) in positions {
             let board = Board::from_fen(fen).unwrap();
             let score = evaluate(&board).0;
-            assert!(score.abs() < 300,
-                "{label}: eval {score} is too far from zero (expected within +/- 300)");
+            assert!(
+                score.abs() < 300,
+                "{label}: eval {score} is too far from zero (expected within +/- 300)"
+            );
         }
     }
 
     #[test]
     fn berlin_endgame_not_overvalued() {
         // Berlin endgame after 9...Bd7: should be slightly positive, not +300
-        let board = Board::from_fen(
-            "r2k1b1r/pppb1ppp/2p2n2/4P3/8/2N2N2/PPP2PPP/R1B2RK1 w - - 3 10"
-        ).unwrap();
+        let board =
+            Board::from_fen("r2k1b1r/pppb1ppp/2p2n2/4P3/8/2N2N2/PPP2PPP/R1B2RK1 w - - 3 10")
+                .unwrap();
         let score = evaluate(&board).0;
-        assert!(score < 350, "Berlin eval {score} is too high (expected < 350)");
-        assert!(score > -50, "Berlin eval {score} is too low (expected > -50)");
+        assert!(
+            score < 350,
+            "Berlin eval {score} is too high (expected < 350)"
+        );
+        assert!(
+            score > -50,
+            "Berlin eval {score} is too low (expected > -50)"
+        );
     }
 
     #[test]
     fn debug_eval_positions() {
         let positions = [
             // Game 4 HM20: SF=+155, Engine(old)=-53
-            ("G4 HM20", "rn1qkb1r/pb3p2/2p1pn1p/6p1/1ppPP3/2N2NB1/PP2BPPP/R2Q1RK1 w KQkq - 0 11", 155),
+            (
+                "G4 HM20",
+                "rn1qkb1r/pb3p2/2p1pn1p/6p1/1ppPP3/2N2NB1/PP2BPPP/R2Q1RK1 w KQkq - 0 11",
+                155,
+            ),
             // Game 2 HM19: SF=+71, Engine(old)=-125
-            ("G2 HM19", "r1b1k2r/pp1nbpp1/1qp2n1p/3p4/3P1B2/2NBP2P/PPQ2PP1/R3K1NR b KQkq - 2 10", 71),
+            (
+                "G2 HM19",
+                "r1b1k2r/pp1nbpp1/1qp2n1p/3p4/3P1B2/2NBP2P/PPQ2PP1/R3K1NR b KQkq - 2 10",
+                71,
+            ),
             // Game 1 HM19: SF=-40, Engine(old)=+77
-            ("G1 HM19", "r1bq1rk1/pppp1ppp/3n1b2/4R3/3P4/3B4/PPP2PPP/RNBQ2K1 b - - 2 10", -40),
+            (
+                "G1 HM19",
+                "r1bq1rk1/pppp1ppp/3n1b2/4R3/3P4/3B4/PPP2PPP/RNBQ2K1 b - - 2 10",
+                -40,
+            ),
             // Game 2 HM53: SF=+384, Engine(old)=-108
-            ("G2 HM53", "3rr3/1k3pp1/p5qp/5b2/8/1Qb1P2P/PP3PPB/R4R1K b - - 1 27", 384),
+            (
+                "G2 HM53",
+                "3rr3/1k3pp1/p5qp/5b2/8/1Qb1P2P/PP3PPB/R4R1K b - - 1 27",
+                384,
+            ),
             // Game 1 HM73: SF=-525, Engine(old)=+300
-            ("G1 HM73", "8/p2r1k1p/1p3Bp1/2p3P1/3p4/1P5P/P1PR1PK1/1r6 b - - 0 37", -525),
+            (
+                "G1 HM73",
+                "8/p2r1k1p/1p3Bp1/2p3P1/3p4/1P5P/P1PR1PK1/1r6 b - - 0 37",
+                -525,
+            ),
             // Game 5 HM84: SF=-855, Engine(old)=+363
-            ("G5 HM84", "1R6/8/2p1k3/p1p3P1/P1P1b2p/4P3/1P2K2r/8 w - - 3 43", -855),
+            (
+                "G5 HM84",
+                "1R6/8/2p1k3/p1p3P1/P1P1b2p/4P3/1P2K2r/8 w - - 3 43",
+                -855,
+            ),
         ];
 
         for (label, fen_str, sf) in positions {
             let board = Board::from_fen(fen_str).unwrap();
             let score = evaluate(&board);
-            let sign_match = if (score.0 > 0) == (sf > 0) || score.0 == 0 || sf == 0 { "OK" } else { "FLIP" };
+            let sign_match = if (score.0 > 0) == (sf > 0) || score.0 == 0 || sf == 0 {
+                "OK"
+            } else {
+                "FLIP"
+            };
             eprintln!("{label:10}: eval={:+5}  SF={sf:+5}  {sign_match}", score.0);
         }
     }
@@ -2792,31 +3043,67 @@ mod tests {
     fn diagnose_sf_outliers() {
         // Top outlier positions from convergence validation
         let positions = [
-            ("KBN vs K",         "8/8/8/8/K2B3N/8/4k3/8 w - - 0 1",                              194),
-            ("R+P vs R",         "5r2/5P2/8/6k1/8/6KP/5R2/8 w - - 0 1",                          0),
-            ("Middlegame1",      "r1bqk1nr/ppp2ppp/1b1p4/n5B1/2BPP3/2N2N2/P4PPP/R2Q1RK1 b kq - 0 1",  -12),
-            ("Middlegame2",      "rn2kbnr/ppp1pppp/q7/1R6/6b1/2N2N2/P1PP1PPP/2BQKB1R w Kkq - 0 1",    97),
-            ("Middlegame3",      "r1b2rk1/2q3pp/pb1p1pn1/1ppP4/4P1n1/P4NB1/1PBN1PPP/R2QR1K1 w - - 0 1",-29),
-            ("Tactical",         "1r5k/p1p3pp/8/8/4p3/P1P2q2/1P1Q1Pr1/2KRR3 w - - 0 1",          -110),
-            ("Middlegame4",      "r6r/p3pk1p/1n1p1npQ/q1p5/4P3/1Pp2P2/P1P3PP/K2R1BNR b - - 0 1", -38),
-            ("Middlegame5",      "3r1rk1/pp1qnpb1/4n1pp/2pp4/4P1P1/P1NP4/1PPB2QP/1R2NR1K w - - 0 1", -45),
-            ("Middlegame6",      "r2q1r2/pR2ppkp/2n3p1/8/4P3/5B2/P4PPP/3Q1RK1 b - - 0 1",        -16),
-            ("Middlegame7",      "r1bq1r1k/p3nn1p/3p2pb/2pPpp2/2P1P3/P1N2P2/3NBBPP/1R1Q1RK1 b - - 0 1", -15),
+            ("KBN vs K", "8/8/8/8/K2B3N/8/4k3/8 w - - 0 1", 194),
+            ("R+P vs R", "5r2/5P2/8/6k1/8/6KP/5R2/8 w - - 0 1", 0),
+            (
+                "Middlegame1",
+                "r1bqk1nr/ppp2ppp/1b1p4/n5B1/2BPP3/2N2N2/P4PPP/R2Q1RK1 b kq - 0 1",
+                -12,
+            ),
+            (
+                "Middlegame2",
+                "rn2kbnr/ppp1pppp/q7/1R6/6b1/2N2N2/P1PP1PPP/2BQKB1R w Kkq - 0 1",
+                97,
+            ),
+            (
+                "Middlegame3",
+                "r1b2rk1/2q3pp/pb1p1pn1/1ppP4/4P1n1/P4NB1/1PBN1PPP/R2QR1K1 w - - 0 1",
+                -29,
+            ),
+            (
+                "Tactical",
+                "1r5k/p1p3pp/8/8/4p3/P1P2q2/1P1Q1Pr1/2KRR3 w - - 0 1",
+                -110,
+            ),
+            (
+                "Middlegame4",
+                "r6r/p3pk1p/1n1p1npQ/q1p5/4P3/1Pp2P2/P1P3PP/K2R1BNR b - - 0 1",
+                -38,
+            ),
+            (
+                "Middlegame5",
+                "3r1rk1/pp1qnpb1/4n1pp/2pp4/4P1P1/P1NP4/1PPB2QP/1R2NR1K w - - 0 1",
+                -45,
+            ),
+            (
+                "Middlegame6",
+                "r2q1r2/pR2ppkp/2n3p1/8/4P3/5B2/P4PPP/3Q1RK1 b - - 0 1",
+                -16,
+            ),
+            (
+                "Middlegame7",
+                "r1bq1r1k/p3nn1p/3p2pb/2pPpp2/2P1P3/P1N2P2/3NBBPP/1R1Q1RK1 b - - 0 1",
+                -15,
+            ),
         ];
 
         for (label, fen, sf_cp) in positions {
             let board = Board::from_fen(fen).unwrap();
             let bd = evaluate_impl(&board, &EvalParams::default(), false, true);
             let delta = bd.final_score - sf_cp;
-            eprintln!("\n{label}: eval={:+} SF={sf_cp:+} Δ={delta:+} phase={} scale={}/128",
-                bd.final_score, bd.phase, bd.scale);
+            eprintln!(
+                "\n{label}: eval={:+} SF={sf_cp:+} Δ={delta:+} phase={} scale={}/128",
+                bd.final_score, bd.phase, bd.scale
+            );
             for t in &bd.terms {
                 if t.mg != 0 || t.eg != 0 {
                     eprintln!("  {:30} mg={:+5} eg={:+5}", t.name, t.mg, t.eg);
                 }
             }
-            eprintln!("  {:30} mg={:+5} eg={:+5} → interp={:+} → final={:+}",
-                "TOTAL", bd.mg_total, bd.eg_total, bd.interpolated, bd.final_score);
+            eprintln!(
+                "  {:30} mg={:+5} eg={:+5} → interp={:+} → final={:+}",
+                "TOTAL", bd.mg_total, bd.eg_total, bd.interpolated, bd.final_score
+            );
         }
     }
 
@@ -2842,5 +3129,4 @@ mod tests {
             );
         }
     }
-
 }

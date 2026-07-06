@@ -31,7 +31,11 @@ fn real_main() {
     }
 
     let syzygy_path = args.windows(2).find_map(|w| {
-        if w[0] == "--syzygy" { Some(w[1].as_str()) } else { None }
+        if w[0] == "--syzygy" {
+            Some(w[1].as_str())
+        } else {
+            None
+        }
     });
 
     match syzygy_path {
@@ -62,7 +66,11 @@ fn run_bench(depth: u8) {
     use chess_common::Board;
     use chess_engine::{Engine, SearchParams};
 
-    println!("Running bench: depth {} across {} positions", depth, BENCH_FENS.len());
+    println!(
+        "Running bench: depth {} across {} positions",
+        depth,
+        BENCH_FENS.len()
+    );
 
     let mut engine = Engine::with_hash(16);
     engine.set_threads(1);

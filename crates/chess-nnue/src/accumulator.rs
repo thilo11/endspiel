@@ -1,8 +1,8 @@
 use chess_common::{Board, Color, PieceKind, Square};
 
+use crate::HIDDEN_SIZE;
 use crate::features::feature_index;
 use crate::network::NnueNetwork;
-use crate::HIDDEN_SIZE;
 
 /// NNUE accumulator holding feature-transformed values for both perspectives.
 ///
@@ -156,8 +156,22 @@ mod tests {
         let original_black = acc.black;
 
         // Add then subtract a piece — should return to original
-        acc.add_piece(&net, white_king, black_king, Color::White, PieceKind::Queen, Square::new(3, 3));
-        acc.sub_piece(&net, white_king, black_king, Color::White, PieceKind::Queen, Square::new(3, 3));
+        acc.add_piece(
+            &net,
+            white_king,
+            black_king,
+            Color::White,
+            PieceKind::Queen,
+            Square::new(3, 3),
+        );
+        acc.sub_piece(
+            &net,
+            white_king,
+            black_king,
+            Color::White,
+            PieceKind::Queen,
+            Square::new(3, 3),
+        );
 
         assert_eq!(acc.white, original_white);
         assert_eq!(acc.black, original_black);

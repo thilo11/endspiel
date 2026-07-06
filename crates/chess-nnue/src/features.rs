@@ -54,7 +54,11 @@ pub fn feature_index(
     //   Friendly non-king pieces use offset 0:   [0, 320).
     //   Enemy non-king pieces use offset 384:    [384, 704).
     let is_friendly = perspective == piece_color;
-    let color_offset = if piece_kind == PieceKind::King || is_friendly { 0 } else { 384 };
+    let color_offset = if piece_kind == PieceKind::King || is_friendly {
+        0
+    } else {
+        384
+    };
     let base = color_offset + piece_kind.index() * 64 + (sq_idx ^ h_flip);
 
     bucket * 704 + base
@@ -108,7 +112,11 @@ mod tests {
             pawn_sq,
         );
         // Same bucket, but file mirrored: d4 (file 3) → e4 (file 4) when king on h1
-        assert_eq!(idx_q / 704, idx_k / 704, "bucket should match for symmetric king positions");
+        assert_eq!(
+            idx_q / 704,
+            idx_k / 704,
+            "bucket should match for symmetric king positions"
+        );
         assert_ne!(idx_q, idx_k, "piece square should be mirrored");
     }
 
@@ -121,8 +129,7 @@ mod tests {
 
         let friendly_king_idx =
             feature_index(Color::White, wk, bk, Color::White, PieceKind::King, sq);
-        let enemy_king_idx =
-            feature_index(Color::White, wk, bk, Color::Black, PieceKind::King, sq);
+        let enemy_king_idx = feature_index(Color::White, wk, bk, Color::Black, PieceKind::King, sq);
 
         assert_eq!(
             friendly_king_idx, enemy_king_idx,

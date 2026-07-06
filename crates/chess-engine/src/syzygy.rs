@@ -19,34 +19,50 @@ pub struct ChessAdapter;
 
 impl EngineAdapter for ChessAdapter {
     fn pawn_attacks(color: pyrrhic_rs::Color, square: u64) -> u64 {
-        if square >= 64 { return 0; }
+        if square >= 64 {
+            return 0;
+        }
         let sq = Square(square as u8);
-        let c = if color == pyrrhic_rs::Color::White { Color::White } else { Color::Black };
+        let c = if color == pyrrhic_rs::Color::White {
+            Color::White
+        } else {
+            Color::Black
+        };
         chess_core::attacks::pawn_attacks(sq, c).0
     }
 
     fn knight_attacks(square: u64) -> u64 {
-        if square >= 64 { return 0; }
+        if square >= 64 {
+            return 0;
+        }
         chess_core::attacks::knight_attacks(Square(square as u8)).0
     }
 
     fn bishop_attacks(square: u64, occupied: u64) -> u64 {
-        if square >= 64 { return 0; }
+        if square >= 64 {
+            return 0;
+        }
         chess_core::attacks::bishop_attacks(Square(square as u8), Bitboard(occupied)).0
     }
 
     fn rook_attacks(square: u64, occupied: u64) -> u64 {
-        if square >= 64 { return 0; }
+        if square >= 64 {
+            return 0;
+        }
         chess_core::attacks::rook_attacks(Square(square as u8), Bitboard(occupied)).0
     }
 
     fn queen_attacks(square: u64, occupied: u64) -> u64 {
-        if square >= 64 { return 0; }
+        if square >= 64 {
+            return 0;
+        }
         chess_core::attacks::queen_attacks(Square(square as u8), Bitboard(occupied)).0
     }
 
     fn king_attacks(square: u64) -> u64 {
-        if square >= 64 { return 0; }
+        if square >= 64 {
+            return 0;
+        }
         chess_core::attacks::king_attacks(Square(square as u8)).0
     }
 }
@@ -160,8 +176,14 @@ pub fn probe_wdl(tb: &SyzygyTB, board: &Board) -> Option<WdlProbeResult> {
     // sq=127 at BINOMIAL index k=4 with skips=4 → index 123 → OOB panic.
     //
     // Fix: sum of per-type piece counts must equal occupancy count for each side.
-    let w_sum: u32 = board.pieces[Color::White.index()].iter().map(|bb| bb.0.count_ones()).sum();
-    let b_sum: u32 = board.pieces[Color::Black.index()].iter().map(|bb| bb.0.count_ones()).sum();
+    let w_sum: u32 = board.pieces[Color::White.index()]
+        .iter()
+        .map(|bb| bb.0.count_ones())
+        .sum();
+    let b_sum: u32 = board.pieces[Color::Black.index()]
+        .iter()
+        .map(|bb| bb.0.count_ones())
+        .sum();
     if w_sum != white.count_ones() || b_sum != black.count_ones() {
         return None;
     }
@@ -212,7 +234,10 @@ pub fn probe_wdl(tb: &SyzygyTB, board: &Board) -> Option<WdlProbeResult> {
     };
     let turn = board.side_to_move == Color::White;
 
-    tb.probe_wdl(white, black, kings, queens, rooks, bishops, knights, pawns, ep, turn).ok()
+    tb.probe_wdl(
+        white, black, kings, queens, rooks, bishops, knights, pawns, ep, turn,
+    )
+    .ok()
 }
 
 fn validated_probe_inputs(tb: &SyzygyTB, board: &Board) -> Option<ProbeInputs> {
@@ -232,8 +257,14 @@ fn validated_probe_inputs(tb: &SyzygyTB, board: &Board) -> Option<ProbeInputs> {
         return None;
     }
 
-    let w_sum: u32 = board.pieces[Color::White.index()].iter().map(|bb| bb.0.count_ones()).sum();
-    let b_sum: u32 = board.pieces[Color::Black.index()].iter().map(|bb| bb.0.count_ones()).sum();
+    let w_sum: u32 = board.pieces[Color::White.index()]
+        .iter()
+        .map(|bb| bb.0.count_ones())
+        .sum();
+    let b_sum: u32 = board.pieces[Color::Black.index()]
+        .iter()
+        .map(|bb| bb.0.count_ones())
+        .sum();
     if w_sum != white.count_ones() || b_sum != black.count_ones() {
         return None;
     }
@@ -264,7 +295,9 @@ fn validated_probe_inputs(tb: &SyzygyTB, board: &Board) -> Option<ProbeInputs> {
     };
 
     let turn = board.side_to_move == Color::White;
-    Some((white, black, kings, queens, rooks, bishops, knights, pawns, ep, turn))
+    Some((
+        white, black, kings, queens, rooks, bishops, knights, pawns, ep, turn,
+    ))
 }
 
 #[cfg(test)]
@@ -292,10 +325,16 @@ pub fn probe_root(tb: &SyzygyTB, board: &Board) -> Option<pyrrhic_rs::DtzProbeRe
         board.halfmove_clock as u32,
         ep,
         turn,
-    ).ok()
+    )
+    .ok()
 }
 
-fn decode_root_move(board: &Board, from_square: u8, to_square: u8, promotion: Piece) -> Option<Move> {
+fn decode_root_move(
+    board: &Board,
+    from_square: u8,
+    to_square: u8,
+    promotion: Piece,
+) -> Option<Move> {
     let promo_kind = match promotion {
         Piece::Queen => Some(PieceKind::Queen),
         Piece::Rook => Some(PieceKind::Rook),
@@ -389,12 +428,16 @@ pub fn rank_root_moves(tb: &SyzygyTB, board: &Board) -> Option<RootTbRanking> {
         winning_moves = scored.into_iter().map(|(mv, _)| mv).collect();
     }
 
-    Some(RootTbRanking { score, best_wdl, winning_moves })
+    Some(RootTbRanking {
+        score,
+        best_wdl,
+        winning_moves,
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{rank_root_moves, syzygy_test_lock, SyzygyTB, TB_WIN_SCORE};
+    use super::{SyzygyTB, TB_WIN_SCORE, rank_root_moves, syzygy_test_lock};
     use chess_common::Board;
     use pyrrhic_rs::WdlProbeResult;
     use std::path::PathBuf;
@@ -418,10 +461,25 @@ mod tests {
         let board = Board::from_fen("8/8/P1b5/6p1/3K1k2/8/8/8 w - - 0 54").expect("valid FEN");
         let ranking = rank_root_moves(&tb, &board).expect("root TB ranking");
 
-        assert!(matches!(ranking.best_wdl, WdlProbeResult::Loss), "expected Loss, got {:?}", ranking.best_wdl);
-        assert!(ranking.score.0 < 0, "expected negative score, got {}", ranking.score.0);
-        assert!(!ranking.score.is_mate(), "DTZ must not mint a mate score, got {}", ranking.score);
-        assert!(ranking.winning_moves.is_empty(), "a losing root has no winning moves");
+        assert!(
+            matches!(ranking.best_wdl, WdlProbeResult::Loss),
+            "expected Loss, got {:?}",
+            ranking.best_wdl
+        );
+        assert!(
+            ranking.score.0 < 0,
+            "expected negative score, got {}",
+            ranking.score.0
+        );
+        assert!(
+            !ranking.score.is_mate(),
+            "DTZ must not mint a mate score, got {}",
+            ranking.score
+        );
+        assert!(
+            ranking.winning_moves.is_empty(),
+            "a losing root has no winning moves"
+        );
     }
 
     #[test]
@@ -438,11 +496,25 @@ mod tests {
         let board = Board::from_fen("b7/8/P1P5/6p1/3K1k2/8/8/8 b - - 0 53").expect("valid FEN");
         let ranking = rank_root_moves(&tb, &board).expect("root TB ranking");
 
-        assert!(matches!(ranking.best_wdl, WdlProbeResult::Win), "expected Win, got {:?}", ranking.best_wdl);
-        assert!(!ranking.score.is_mate(), "DTZ must not mint a mate score, got {}", ranking.score);
-        assert!(ranking.score.0 > TB_WIN_SCORE - 1_000 && ranking.score.0 <= TB_WIN_SCORE,
-            "expected TB-win-band score, got {}", ranking.score.0);
-        assert_eq!(ranking.winning_moves.first().map(|m| m.to_uci()), Some("a8c6".to_string()));
+        assert!(
+            matches!(ranking.best_wdl, WdlProbeResult::Win),
+            "expected Win, got {:?}",
+            ranking.best_wdl
+        );
+        assert!(
+            !ranking.score.is_mate(),
+            "DTZ must not mint a mate score, got {}",
+            ranking.score
+        );
+        assert!(
+            ranking.score.0 > TB_WIN_SCORE - 1_000 && ranking.score.0 <= TB_WIN_SCORE,
+            "expected TB-win-band score, got {}",
+            ranking.score.0
+        );
+        assert_eq!(
+            ranking.winning_moves.first().map(|m| m.to_uci()),
+            Some("a8c6".to_string())
+        );
     }
 
     #[test]
@@ -461,7 +533,13 @@ mod tests {
         assert!(
             result.is_none(),
             "32-piece root must not yield a TB-backed ranking, got {:?}",
-            result.as_ref().map(|r| (r.score.0, r.winning_moves.iter().map(|m| m.to_uci()).collect::<Vec<_>>()))
+            result.as_ref().map(|r| (
+                r.score.0,
+                r.winning_moves
+                    .iter()
+                    .map(|m| m.to_uci())
+                    .collect::<Vec<_>>()
+            ))
         );
     }
 }

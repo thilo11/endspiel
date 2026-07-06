@@ -208,7 +208,8 @@ impl Board {
                         Color::White => Square::new(to.file(), to.rank() - 1),
                         Color::Black => Square::new(to.file(), to.rank() + 1),
                     };
-                    self.hash ^= z.piece_sq[them.index()][PieceKind::Pawn.index()][ep_cap_sq.index()];
+                    self.hash ^=
+                        z.piece_sq[them.index()][PieceKind::Pawn.index()][ep_cap_sq.index()];
                 } else {
                     self.hash ^= z.piece_sq[them.index()][cap.kind.index()][to.index()];
                 }
@@ -289,7 +290,8 @@ impl Board {
                 None => {
                     log::error!(
                         "unmake_move: no piece at to square {} for move {}, recovering",
-                        to, m
+                        to,
+                        m
                     );
                     // Best-effort recovery: restore state and return.
                     self.side_to_move = us;
@@ -554,8 +556,10 @@ static ZOBRIST: LazyLock<ZobristKeys> = LazyLock::new(|| {
 
     let mut s: u64 = 0x246C_CB2A_3B12_4D05; // fixed seed — must never change
 
-    let mut piece_sq: Box<[[[u64; 64]; 6]; 2]> =
-        vec![[[0u64; 64]; 6]; 2].into_boxed_slice().try_into().unwrap();
+    let mut piece_sq: Box<[[[u64; 64]; 6]; 2]> = vec![[[0u64; 64]; 6]; 2]
+        .into_boxed_slice()
+        .try_into()
+        .unwrap();
     for color in 0..2 {
         for kind in 0..6 {
             for sq in 0..64 {
@@ -576,5 +580,10 @@ static ZOBRIST: LazyLock<ZobristKeys> = LazyLock::new(|| {
 
     let side = splitmix(&mut s);
 
-    ZobristKeys { piece_sq, castling, ep_file, side }
+    ZobristKeys {
+        piece_sq,
+        castling,
+        ep_file,
+        side,
+    }
 });

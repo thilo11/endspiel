@@ -4,8 +4,8 @@
 //! gain at or above a given threshold, accounting for X-ray attacks through
 //! captured pieces.
 
-use chess_common::{Board, Color, Move, PieceKind, Square, Bitboard};
 use chess_common::moves::MoveFlag;
+use chess_common::{Bitboard, Board, Color, Move, PieceKind, Square};
 
 /// SEE piece values (must be consistent with eval, but king gets a large sentinel).
 const SEE_VALUES: [i32; 6] = [
@@ -36,17 +36,11 @@ pub fn see_ge(board: &Board, m: Move, threshold: i32) -> bool {
         SEE_VALUES[PieceKind::Pawn.index()]
     } else if flag.is_promotion() {
         let promo_val = see_value(flag.promotion_piece().unwrap());
-        let victim_val = board
-            .piece_at(to)
-            .map(|p| see_value(p.kind))
-            .unwrap_or(0);
+        let victim_val = board.piece_at(to).map(|p| see_value(p.kind)).unwrap_or(0);
         // Gain = victim + (promoted piece - pawn)
         victim_val + promo_val - SEE_VALUES[PieceKind::Pawn.index()]
     } else {
-        board
-            .piece_at(to)
-            .map(|p| see_value(p.kind))
-            .unwrap_or(0)
+        board.piece_at(to).map(|p| see_value(p.kind)).unwrap_or(0)
     };
 
     // Quick test: can we meet the threshold even in the best case?
@@ -59,10 +53,7 @@ pub fn see_ge(board: &Board, m: Move, threshold: i32) -> bool {
     let next_victim = if flag.is_promotion() {
         see_value(flag.promotion_piece().unwrap())
     } else {
-        board
-            .piece_at(from)
-            .map(|p| see_value(p.kind))
-            .unwrap_or(0)
+        board.piece_at(from).map(|p| see_value(p.kind)).unwrap_or(0)
     };
 
     // Even if we lose our piece, are we still above threshold?
@@ -188,8 +179,8 @@ mod tests {
         // Knight takes knight defended by knight: NxN NxN → SEE = 0
         let b = board("4k3/8/5n2/3n4/8/4N3/8/4K3 w - - 0 1");
         let m = uci_move(&b, "e3d5");
-        assert!(see_ge(&b, m, 0));   // NxN NxN = 0, which is >= 0
-        assert!(!see_ge(&b, m, 1));  // NxN NxN = 0, which is NOT >= 1
+        assert!(see_ge(&b, m, 0)); // NxN NxN = 0, which is >= 0
+        assert!(!see_ge(&b, m, 1)); // NxN NxN = 0, which is NOT >= 1
     }
 
     #[test]

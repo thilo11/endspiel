@@ -5,8 +5,8 @@ use std::fs::File;
 use std::io::Read as _;
 use std::path::Path;
 
-use chess_common::{Board, Color, Move, PieceKind, Square};
 use chess_common::moves::MoveFlag;
+use chess_common::{Board, Color, Move, PieceKind, Square};
 
 // ---------------------------------------------------------------------------
 // Polyglot Zobrist keys (781 standard values)
@@ -249,11 +249,19 @@ pub fn polyglot_hash(board: &Board) -> u64 {
 
     // Pieces: square index = rank * 8 + file (same as our Square encoding)
     for color_idx in 0..2usize {
-        let color = if color_idx == 0 { Color::White } else { Color::Black };
+        let color = if color_idx == 0 {
+            Color::White
+        } else {
+            Color::Black
+        };
         for kind_idx in 0..6usize {
             let kind = [
-                PieceKind::Pawn, PieceKind::Knight, PieceKind::Bishop,
-                PieceKind::Rook, PieceKind::Queen, PieceKind::King,
+                PieceKind::Pawn,
+                PieceKind::Knight,
+                PieceKind::Bishop,
+                PieceKind::Rook,
+                PieceKind::Queen,
+                PieceKind::King,
             ][kind_idx];
             let bb = board.pieces[color_idx][kind_idx];
             for sq in bb.iter() {
@@ -265,16 +273,28 @@ pub fn polyglot_hash(board: &Board) -> u64 {
     }
 
     // Castling
-    if board.castling.has(chess_common::CastlingRights::WHITE_KINGSIDE) {
+    if board
+        .castling
+        .has(chess_common::CastlingRights::WHITE_KINGSIDE)
+    {
         hash ^= POLYGLOT_KEYS[RANDOM_CASTLE];
     }
-    if board.castling.has(chess_common::CastlingRights::WHITE_QUEENSIDE) {
+    if board
+        .castling
+        .has(chess_common::CastlingRights::WHITE_QUEENSIDE)
+    {
         hash ^= POLYGLOT_KEYS[RANDOM_CASTLE + 1];
     }
-    if board.castling.has(chess_common::CastlingRights::BLACK_KINGSIDE) {
+    if board
+        .castling
+        .has(chess_common::CastlingRights::BLACK_KINGSIDE)
+    {
         hash ^= POLYGLOT_KEYS[RANDOM_CASTLE + 2];
     }
-    if board.castling.has(chess_common::CastlingRights::BLACK_QUEENSIDE) {
+    if board
+        .castling
+        .has(chess_common::CastlingRights::BLACK_QUEENSIDE)
+    {
         hash ^= POLYGLOT_KEYS[RANDOM_CASTLE + 3];
     }
 
@@ -306,15 +326,21 @@ fn has_pawn_for_ep(board: &Board, ep_sq: Square) -> bool {
         Color::White => ep_rank.wrapping_sub(1),
         Color::Black => ep_rank + 1,
     };
-    if pawn_rank >= 8 { return false; }
+    if pawn_rank >= 8 {
+        return false;
+    }
 
     if ep_file > 0 {
         let left = Square::new(ep_file - 1, pawn_rank);
-        if pawns.is_set(left) { return true; }
+        if pawns.is_set(left) {
+            return true;
+        }
     }
     if ep_file < 7 {
         let right = Square::new(ep_file + 1, pawn_rank);
-        if pawns.is_set(right) { return true; }
+        if pawns.is_set(right) {
+            return true;
+        }
     }
     false
 }
@@ -332,7 +358,9 @@ struct BookEntry {
 impl BookEntry {
     fn from_bytes(data: &[u8; 16]) -> Self {
         Self {
-            key: u64::from_be_bytes([data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]]),
+            key: u64::from_be_bytes([
+                data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+            ]),
             raw_move: u16::from_be_bytes([data[8], data[9]]),
             weight: u16::from_be_bytes([data[10], data[11]]),
             // learn bytes [12..15] ignored
@@ -352,10 +380,18 @@ impl BookEntry {
         let mut to = Square::new(to_file, to_rank);
 
         // Polyglot encodes castling as king-to-rook, convert to king destination
-        if from == Square::E1 && to == Square::H1 { to = Square::G1; }
-        if from == Square::E1 && to == Square::A1 { to = Square::C1; }
-        if from == Square::E8 && to == Square::H8 { to = Square::G8; }
-        if from == Square::E8 && to == Square::A8 { to = Square::C8; }
+        if from == Square::E1 && to == Square::H1 {
+            to = Square::G1;
+        }
+        if from == Square::E1 && to == Square::A1 {
+            to = Square::C1;
+        }
+        if from == Square::E8 && to == Square::H8 {
+            to = Square::G8;
+        }
+        if from == Square::E8 && to == Square::A8 {
+            to = Square::C8;
+        }
 
         let promotion = match promo {
             1 => Some(PieceKind::Knight),
@@ -384,7 +420,9 @@ impl PolyglotBook {
         if !data.len().is_multiple_of(16) || data.is_empty() {
             return None;
         }
-        Some(Self { data: data.to_vec() })
+        Some(Self {
+            data: data.to_vec(),
+        })
     }
 
     /// Try to load a Polyglot book from a file path.
@@ -396,7 +434,11 @@ impl PolyglotBook {
             log::warn!("polyglot book has invalid size: {} bytes", data.len());
             return None;
         }
-        log::info!("loaded polyglot book: {} ({} entries)", path.display(), data.len() / 16);
+        log::info!(
+            "loaded polyglot book: {} ({} entries)",
+            path.display(),
+            data.len() / 16
+        );
         Some(Self { data })
     }
 
@@ -414,8 +456,14 @@ impl PolyglotBook {
     fn key_at(&self, index: usize) -> u64 {
         let offset = index * 16;
         u64::from_be_bytes([
-            self.data[offset], self.data[offset+1], self.data[offset+2], self.data[offset+3],
-            self.data[offset+4], self.data[offset+5], self.data[offset+6], self.data[offset+7],
+            self.data[offset],
+            self.data[offset + 1],
+            self.data[offset + 2],
+            self.data[offset + 3],
+            self.data[offset + 4],
+            self.data[offset + 5],
+            self.data[offset + 6],
+            self.data[offset + 7],
         ])
     }
 
@@ -451,8 +499,12 @@ impl PolyglotBook {
         let n = self.num_entries();
         for i in first..n {
             let entry = self.entry_at(i);
-            if entry.key != key { break; }
-            if entry.weight == 0 { continue; } // deleted entry
+            if entry.key != key {
+                break;
+            }
+            if entry.weight == 0 {
+                continue;
+            } // deleted entry
 
             let (from, to, promo) = entry.decode_move();
             let flag = match promo {
@@ -482,7 +534,9 @@ impl PolyglotBook {
     /// weight so that less-popular-but-still-good moves get a fair chance.
     pub fn pick_move(&self, board: &Board) -> Option<Move> {
         let entries = self.probe(board);
-        if entries.is_empty() { return None; }
+        if entries.is_empty() {
+            return None;
+        }
 
         // Soften weights: sqrt keeps the ranking but compresses the ratio.
         // e.g. weights 4900:400:100 → 70:20:10 → probabilities 70%:20%:10%
@@ -491,14 +545,21 @@ impl PolyglotBook {
             .map(|(_, w)| (*w as f64).sqrt() as u32)
             .collect();
         let total: u32 = softened.iter().sum();
-        if total == 0 { return None; }
+        if total == 0 {
+            return None;
+        }
 
         let pick = ((board.hash ^ nanos_entropy()) % total as u64) as u32;
         let mut cumulative = 0u32;
         for (i, (m, orig_w)) in entries.iter().enumerate() {
             cumulative += softened[i];
             if pick < cumulative {
-                log::info!("polyglot book move: {} (weight {}/{})", m.to_uci(), orig_w, total);
+                log::info!(
+                    "polyglot book move: {} (weight {}/{})",
+                    m.to_uci(),
+                    orig_w,
+                    total
+                );
                 return Some(*m);
             }
         }
@@ -660,8 +721,7 @@ impl PgnBook {
         let positions: HashMap<u64, Vec<(Move, u16)>> = positions
             .into_iter()
             .map(|(hash, map)| {
-                let mut v: Vec<(Move, u16)> =
-                    map.into_iter().map(|(m, c)| (Move(m), c)).collect();
+                let mut v: Vec<(Move, u16)> = map.into_iter().map(|(m, c)| (Move(m), c)).collect();
                 v.sort_by_key(|b| std::cmp::Reverse(b.1));
                 (hash, v)
             })
@@ -678,10 +738,7 @@ impl PgnBook {
     }
 
     pub fn probe(&self, board: &Board) -> Vec<(Move, u16)> {
-        self.positions
-            .get(&board.hash)
-            .cloned()
-            .unwrap_or_default()
+        self.positions.get(&board.hash).cloned().unwrap_or_default()
     }
 
     pub fn pick_move(&self, board: &Board) -> Option<Move> {
@@ -690,7 +747,10 @@ impl PgnBook {
             return None;
         }
         // Soften weights with sqrt (same as Polyglot)
-        let softened: Vec<u32> = entries.iter().map(|(_, w)| (*w as f64).sqrt() as u32).collect();
+        let softened: Vec<u32> = entries
+            .iter()
+            .map(|(_, w)| (*w as f64).sqrt() as u32)
+            .collect();
         let total: u32 = softened.iter().sum();
         if total == 0 {
             return None;
@@ -759,7 +819,11 @@ impl OpeningBook {
     /// Load a book from `path`, auto-detecting format by extension.
     /// Returns `None` if the file cannot be loaded.
     pub fn open(path: &Path) -> Option<Self> {
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
         match ext.as_str() {
             "bin" => PolyglotBook::open(path).map(OpeningBook::Polyglot),
             "epd" => EpdBook::open(path).map(OpeningBook::Epd),
@@ -810,15 +874,24 @@ mod tests {
     fn test_starting_position_hash() {
         let board = Board::starting_position();
         let hash = polyglot_hash(&board);
-        assert_eq!(hash, 0x463B96181691FC9C, "starting position hash mismatch: got {:#018X}", hash);
+        assert_eq!(
+            hash, 0x463B96181691FC9C,
+            "starting position hash mismatch: got {:#018X}",
+            hash
+        );
     }
 
     #[test]
     fn test_after_e4_hash() {
-        let board = Board::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1").unwrap();
+        let board =
+            Board::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1").unwrap();
         let hash = polyglot_hash(&board);
         // Known hash for position after 1.e4 (with en passant, but no pawn can capture)
         // En passant should NOT be included because no black pawn is on d4 or f4
-        assert_eq!(hash, 0x823C9B50FD114196, "after e4 hash mismatch: got {:#018X}", hash);
+        assert_eq!(
+            hash, 0x823C9B50FD114196,
+            "after e4 hash mismatch: got {:#018X}",
+            hash
+        );
     }
 }

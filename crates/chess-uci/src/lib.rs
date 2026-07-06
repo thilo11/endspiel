@@ -1,5 +1,5 @@
-pub mod protocol;
 pub mod handler;
+pub mod protocol;
 
 /// Run the UCI protocol loop.
 pub fn run() {

@@ -21,18 +21,16 @@ pub struct NnueNetwork {
 }
 
 /// Expected size of the network file in bytes (bucketed format).
-pub const NET_FILE_SIZE: usize =
-    INPUT_SIZE * HIDDEN_SIZE * 2               // ft_weights (i16)
+pub const NET_FILE_SIZE: usize = INPUT_SIZE * HIDDEN_SIZE * 2               // ft_weights (i16)
     + HIDDEN_SIZE * 2                          // ft_biases (i16)
     + OUTPUT_BUCKETS * HIDDEN_SIZE * 2         // output_weights (i8)
-    + OUTPUT_BUCKETS * 2;                      // output_bias (i16)
+    + OUTPUT_BUCKETS * 2; // output_bias (i16)
 
 /// Size of the legacy single-output-bucket format.
-pub const LEGACY_NET_FILE_SIZE: usize =
-    INPUT_SIZE * HIDDEN_SIZE * 2   // ft_weights (i16)
+pub const LEGACY_NET_FILE_SIZE: usize = INPUT_SIZE * HIDDEN_SIZE * 2   // ft_weights (i16)
     + HIDDEN_SIZE * 2              // ft_biases (i16)
     + HIDDEN_SIZE * 2              // output_weights (i8)
-    + 2;                           // output_bias (i16)
+    + 2; // output_bias (i16)
 
 impl NnueNetwork {
     /// Parse a network from raw bytes (little-endian sequential format).
@@ -127,7 +125,8 @@ impl NnueNetwork {
             return Ok(Self::embedded());
         }
         let data = std::fs::read(path).map_err(|e| format!("failed to read '{path}': {e}"))?;
-        let net = Self::from_bytes(&data).map_err(|e| format!("invalid NNUE file '{path}': {e}"))?;
+        let net =
+            Self::from_bytes(&data).map_err(|e| format!("invalid NNUE file '{path}': {e}"))?;
         Ok(Arc::new(net))
     }
 }

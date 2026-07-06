@@ -4,8 +4,8 @@ pub mod movegen;
 pub mod san;
 pub mod validate;
 
-use chess_common::{Board, Move};
 use chess_common::moves::MoveList;
+use chess_common::{Board, Move};
 
 /// Generate all legal moves for the current position.
 pub fn generate_legal_moves(board: &Board) -> MoveList {

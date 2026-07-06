@@ -1,9 +1,9 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
-use chess_common::{Board, Color, Move, PieceKind, Score, Square};
 use chess_common::moves::MoveFlag;
+use chess_common::{Board, Color, Move, PieceKind, Score, Square};
 
 use chess_nnue::{Accumulator, NnueNetwork, nnue_evaluate};
 
@@ -20,13 +20,12 @@ use crate::{InfoCallback, SearchInfo, SearchParams, SearchResult, TuneParams};
 
 fn build_lmr_table(base_x100: i32, div_x100: i32) -> [[u8; 64]; 64] {
     let base = base_x100 as f64 / 100.0;
-    let div  = div_x100  as f64 / 100.0;
+    let div = div_x100 as f64 / 100.0;
     let mut table = [[0u8; 64]; 64];
     #[allow(clippy::needless_range_loop)]
     for depth in 1..64 {
         for moves in 1..64 {
-            table[depth][moves] =
-                (base + (depth as f64).ln() * (moves as f64).ln() / div) as u8;
+            table[depth][moves] = (base + (depth as f64).ln() * (moves as f64).ln() / div) as u8;
         }
     }
     table
@@ -77,11 +76,14 @@ fn new_cont_history() -> ContHistory {
 /// Per-ply move context for continuation history lookback.
 #[derive(Clone, Copy)]
 struct PlyContext {
-    piece_kind: usize,  // PieceKind index of the moved piece
-    to_sq: usize,       // destination square index
+    piece_kind: usize, // PieceKind index of the moved piece
+    to_sq: usize,      // destination square index
 }
 
-const NULL_PLY_CONTEXT: PlyContext = PlyContext { piece_kind: 0, to_sq: 0 };
+const NULL_PLY_CONTEXT: PlyContext = PlyContext {
+    piece_kind: 0,
+    to_sq: 0,
+};
 
 /// Capture history: indexed by [moving_piece][to_sq][captured_piece].
 type CaptureHistory = Box<[[[i32; 6]; 64]; 6]>;
@@ -194,13 +196,28 @@ struct SearchState {
 
 impl SearchState {
     #[allow(clippy::too_many_arguments)]
-    fn new(time_limit_ms: Option<u64>, use_soft_limit: bool, inc_ms: u64, time_remaining_ms: u64, max_nodes: Option<u64>, game_ply: usize, contempt: i32, singular_ext_mode: u8, tt: &Arc<SharedTT>, use_nnue: bool, net: Arc<NnueNetwork>, syzygy_tb: Option<SyzygyTB>, tune: TuneParams) -> Self {
+    fn new(
+        time_limit_ms: Option<u64>,
+        use_soft_limit: bool,
+        inc_ms: u64,
+        time_remaining_ms: u64,
+        max_nodes: Option<u64>,
+        game_ply: usize,
+        contempt: i32,
+        singular_ext_mode: u8,
+        tt: &Arc<SharedTT>,
+        use_nnue: bool,
+        net: Arc<NnueNetwork>,
+        syzygy_tb: Option<SyzygyTB>,
+        tune: TuneParams,
+    ) -> Self {
         // Use a Vec to avoid stack allocation of the large accumulator array
         let mut acc_vec: Vec<Accumulator> = Vec::with_capacity(MAX_PLY);
         for _ in 0..MAX_PLY {
             acc_vec.push(Accumulator::new());
         }
-        let accumulators: Box<[Accumulator; MAX_PLY]> = acc_vec.into_boxed_slice().try_into().ok().unwrap();
+        let accumulators: Box<[Accumulator; MAX_PLY]> =
+            acc_vec.into_boxed_slice().try_into().ok().unwrap();
 
         let lmr_table = build_lmr_table(tune.lmr_base, tune.lmr_div);
 
@@ -336,7 +353,11 @@ impl SearchState {
     /// (side-to-move perspective). Sums all corrhist facets, caps the total,
     /// then scales by the tunable `corrhist_mult` (×100).
     fn correction(&self, board: &Board, ply: u8) -> i32 {
-        let stm = if board.side_to_move == Color::White { 0 } else { 1 };
+        let stm = if board.side_to_move == Color::White {
+            0
+        } else {
+            1
+        };
         let k = crate::eval::corr_keys(board);
         let mut sum = self.pawn_corrhist[stm][k.pawn as usize & CORR_MASK]
             + self.white_corrhist[stm][k.white as usize & CORR_MASK]
@@ -354,7 +375,11 @@ impl SearchState {
     /// Update every corrhist facet from the residual `diff = search_score -
     /// static_eval`. Deeper searches are trusted more (larger weight).
     fn update_corrhist(&mut self, board: &Board, depth: u8, diff: i32, ply: u8) {
-        let stm = if board.side_to_move == Color::White { 0 } else { 1 };
+        let stm = if board.side_to_move == Color::White {
+            0
+        } else {
+            1
+        };
         let k = crate::eval::corr_keys(board);
         let scaled = (diff * CORRHIST_GRAIN).clamp(-CORRHIST_LIMIT, CORRHIST_LIMIT);
         let weight = (depth as i32 + 1).min(16);
@@ -448,7 +473,8 @@ impl SearchState {
         };
         let bonus = depth as i32 * depth as i32;
         let max_val = 16384;
-        let entry = &mut self.capture_history[piece.kind.index()][m.to_sq().index()][captured.kind.index()];
+        let entry =
+            &mut self.capture_history[piece.kind.index()][m.to_sq().index()][captured.kind.index()];
         *entry += bonus - *entry * bonus.abs() / max_val;
         *entry = (*entry).clamp(-max_val, max_val);
     }
@@ -464,7 +490,8 @@ impl SearchState {
         };
         let malus = depth as i32 * depth as i32;
         let max_val = 16384;
-        let entry = &mut self.capture_history[piece.kind.index()][m.to_sq().index()][captured.kind.index()];
+        let entry =
+            &mut self.capture_history[piece.kind.index()][m.to_sq().index()][captured.kind.index()];
         *entry += -malus - *entry * malus.abs() / max_val;
         *entry = (*entry).clamp(-max_val, max_val);
     }
@@ -541,10 +568,10 @@ fn compute_time_limit(params: &SearchParams, board: &Board) -> (Option<u64>, boo
             // Game phase-aware estimate based on piece count
             let total_pieces = (board.occupancy[0] | board.occupancy[1]).count();
             let base_moves = match total_pieces {
-                28.. => 32, // opening
+                28.. => 32,    // opening
                 22..=27 => 26, // middlegame
                 16..=21 => 20, // late middlegame
-                _ => 16,  // endgame
+                _ => 16,       // endgame
             };
             // In fast time controls, use time more aggressively since
             // games tend to end sooner and deep calculation matters more
@@ -633,12 +660,15 @@ fn compute_time_limit(params: &SearchParams, board: &Board) -> (Option<u64>, boo
         // Opening throttle: avoid spending too much bank time in the first
         // few moves when there is no opening book. Apply to all time controls.
         let opening_bank_scale_permille = if game_ply < 6 {
-            if time <= 15_000 { 600u64 }
-            else { 350u64 }
+            if time <= 15_000 { 600u64 } else { 350u64 }
         } else if game_ply < 12 {
-            if time <= 15_000 { 700u64 }
-            else if time <= 300_000 { 550u64 }
-            else { 600u64 }
+            if time <= 15_000 {
+                700u64
+            } else if time <= 300_000 {
+                550u64
+            } else {
+                600u64
+            }
         } else if game_ply < 20 {
             if time <= 300_000 { 800u64 } else { 900u64 }
         } else {
@@ -689,7 +719,11 @@ fn compute_time_limit(params: &SearchParams, board: &Board) -> (Option<u64>, boo
         } else {
             // Ultra-low time (bullet flag): use increment if available,
             // otherwise a tiny amount to avoid instant moves.
-            if inc > overhead { inc.saturating_sub(overhead) } else { 10 }
+            if inc > overhead {
+                inc.saturating_sub(overhead)
+            } else {
+                10
+            }
         };
 
         let allocated = target.min(max).max(min);
@@ -760,25 +794,29 @@ struct MovePicker {
     stage: MpStage,
     tt_move: Move,
 
-    moves:  [Move; MAX_PICKER_MOVES],
+    moves: [Move; MAX_PICKER_MOVES],
     scores: [i32; MAX_PICKER_MOVES],
-    count:  usize,
-    idx:    usize,
+    count: usize,
+    idx: usize,
 
     bad_captures: [Move; MAX_BAD_CAPTURES],
-    num_bad:      usize,
-    bad_idx:      usize,
+    num_bad: usize,
+    bad_idx: usize,
 }
 
 impl MovePicker {
     fn new(tt_move: Move) -> Self {
         Self {
-            stage: if !tt_move.is_null() { MpStage::TtMove } else { MpStage::InitCaptures },
+            stage: if !tt_move.is_null() {
+                MpStage::TtMove
+            } else {
+                MpStage::InitCaptures
+            },
             tt_move,
-            moves:  [Move::NULL; MAX_PICKER_MOVES],
+            moves: [Move::NULL; MAX_PICKER_MOVES],
             scores: [0; MAX_PICKER_MOVES],
-            count:  0,
-            idx:    0,
+            count: 0,
+            idx: 0,
             bad_captures: [Move::NULL; MAX_BAD_CAPTURES],
             num_bad: 0,
             bad_idx: 0,
@@ -809,7 +847,9 @@ impl MovePicker {
                     let captures = chess_core::generate_pseudo_legal_captures(board);
                     self.count = 0;
                     for &m in captures.iter() {
-                        if m == self.tt_move { continue; }
+                        if m == self.tt_move {
+                            continue;
+                        }
                         let mvv = mvv_lva_score(board, m);
                         let cap_hist = state.get_capture_history(m, board);
                         let score = mvv * 16 + cap_hist / 64;
@@ -844,7 +884,9 @@ impl MovePicker {
                     let quiets = chess_core::generate_pseudo_legal_quiets(board);
                     self.count = 0;
                     for &m in quiets.iter() {
-                        if m == self.tt_move { continue; }
+                        if m == self.tt_move {
+                            continue;
+                        }
                         let hist = state.history[m.from_sq().index()][m.to_sq().index()];
                         let cont = state.get_cont_history_bonus(m, board, ply);
                         let score = if m == killers[0] {
@@ -898,7 +940,9 @@ impl MovePicker {
 /// so we check piece presence, color, self-capture, and flag sanity.
 #[inline]
 fn is_move_safe(board: &Board, m: Move) -> bool {
-    if m.is_null() { return false; }
+    if m.is_null() {
+        return false;
+    }
     let from = m.from_sq();
     let to = m.to_sq();
     let flag = m.flag();
@@ -910,7 +954,8 @@ fn is_move_safe(board: &Board, m: Move) -> bool {
     };
 
     // Must not capture own piece (castling excluded — king "captures" rook square).
-    if flag != MoveFlag::KingsideCastle && flag != MoveFlag::QueensideCastle
+    if flag != MoveFlag::KingsideCastle
+        && flag != MoveFlag::QueensideCastle
         && let Some(p) = board.piece_at(to)
         && p.color == board.side_to_move
     {
@@ -925,54 +970,74 @@ fn is_move_safe(board: &Board, m: Move) -> bool {
         let to_occupied = board.piece_at(to).is_some();
         if flag == MoveFlag::EnPassant {
             // EP destination square is always empty.
-            if to_occupied { return false; }
+            if to_occupied {
+                return false;
+            }
         } else if flag.is_capture() {
             // A capture (non-EP) must land on an enemy piece.
-            if !to_occupied { return false; }
+            if !to_occupied {
+                return false;
+            }
         } else {
             // A quiet move must not land on an occupied square.
-            if to_occupied { return false; }
+            if to_occupied {
+                return false;
+            }
         }
     }
 
     // Castling: piece must be a king on the correct square.
     if flag == MoveFlag::KingsideCastle || flag == MoveFlag::QueensideCastle {
-        if piece.kind != PieceKind::King { return false; }
+        if piece.kind != PieceKind::King {
+            return false;
+        }
         let expected_from = match board.side_to_move {
             Color::White => Square::E1,
             Color::Black => Square::E8,
         };
-        if from != expected_from { return false; }
+        if from != expected_from {
+            return false;
+        }
     }
 
     // Promotion: piece must be a pawn on the correct rank.
     if flag.is_promotion() {
-        if piece.kind != PieceKind::Pawn { return false; }
+        if piece.kind != PieceKind::Pawn {
+            return false;
+        }
         let promo_rank = match board.side_to_move {
             Color::White => 6, // rank 7 (0-indexed)
             Color::Black => 1, // rank 2 (0-indexed)
         };
-        if from.rank() != promo_rank { return false; }
+        if from.rank() != promo_rank {
+            return false;
+        }
     }
 
     // En passant: board must have an EP square set, and it must match `to`,
     // and piece must be a pawn.
     if flag == MoveFlag::EnPassant {
-        if piece.kind != PieceKind::Pawn { return false; }
+        if piece.kind != PieceKind::Pawn {
+            return false;
+        }
         match board.en_passant {
-            Some(ep) if ep == to => {},
+            Some(ep) if ep == to => {}
             _ => return false,
         }
     }
 
     // Double pawn push: piece must be a pawn on the starting rank.
     if flag == MoveFlag::DoublePawnPush {
-        if piece.kind != PieceKind::Pawn { return false; }
+        if piece.kind != PieceKind::Pawn {
+            return false;
+        }
         let start_rank = match board.side_to_move {
             Color::White => 1, // rank 2 (0-indexed)
             Color::Black => 6, // rank 7 (0-indexed)
         };
-        if from.rank() != start_rank { return false; }
+        if from.rank() != start_rank {
+            return false;
+        }
     }
 
     true
@@ -985,9 +1050,15 @@ fn mvv_lva_score(board: &Board, m: Move) -> i32 {
     let victim = if flag == MoveFlag::EnPassant {
         PieceKind::Pawn.value()
     } else {
-        board.piece_at(m.to_sq()).map(|p| p.kind.value()).unwrap_or(0)
+        board
+            .piece_at(m.to_sq())
+            .map(|p| p.kind.value())
+            .unwrap_or(0)
     };
-    let attacker = board.piece_at(m.from_sq()).map(|p| p.kind.value()).unwrap_or(0);
+    let attacker = board
+        .piece_at(m.from_sq())
+        .map(|p| p.kind.value())
+        .unwrap_or(0);
     let promo = if flag.is_promotion() { 800 } else { 0 };
     victim * 10 - attacker + promo
 }
@@ -1051,7 +1122,9 @@ pub fn iterative_deepening(
         // book move).  Evaluating *after* the move can be misleading for
         // tactical captures.  For book UI reporting, clamp aggressively so
         // GUIs never display absurd outlier values.
-        let raw_book_eval = evaluate(board).0.clamp(-MATE_THRESHOLD + 1, MATE_THRESHOLD - 1);
+        let raw_book_eval = evaluate(board)
+            .0
+            .clamp(-MATE_THRESHOLD + 1, MATE_THRESHOLD - 1);
         let stm_eval = match board.side_to_move {
             Color::White => raw_book_eval,
             Color::Black => raw_book_eval.saturating_neg(),
@@ -1079,7 +1152,21 @@ pub fn iterative_deepening(
     }
 
     let (time_limit, use_soft_limit, inc, time_remaining) = compute_time_limit(params, board);
-    let mut state = SearchState::new(time_limit, use_soft_limit, inc, time_remaining, params.max_nodes, game_ply, params.contempt, params.singular_ext_mode, tt, params.use_nnue, Arc::clone(net), syzygy_tb, params.tune.clone());
+    let mut state = SearchState::new(
+        time_limit,
+        use_soft_limit,
+        inc,
+        time_remaining,
+        params.max_nodes,
+        game_ply,
+        params.contempt,
+        params.singular_ext_mode,
+        tt,
+        params.use_nnue,
+        Arc::clone(net),
+        syzygy_tb,
+        params.tune.clone(),
+    );
 
     // Initialize root accumulator for NNUE
     if state.use_nnue {
@@ -1090,7 +1177,11 @@ pub fn iterative_deepening(
     // Book-exit time boost: allocate extra time for the first few moves
     // of original play after exiting the opening book.
     let book_exit_bonus: u64 = if external_book.is_some() && (8..=33).contains(&game_ply) {
-        if game_ply <= 20 { 200 } else { 200 * (33 - game_ply) as u64 / 13 }
+        if game_ply <= 20 {
+            200
+        } else {
+            200 * (33 - game_ply) as u64 / 13
+        }
     } else {
         0
     };
@@ -1127,15 +1218,37 @@ pub fn iterative_deepening(
         let captured = board_copy.make_move(only_move);
         // Quick fixed-depth search to evaluate the resulting position
         let quick_depth = 10u8;
-        let mut quick_state = SearchState::new(Some(2000), false, 0, 0, None, game_ply, params.contempt, params.singular_ext_mode, tt, params.use_nnue, Arc::clone(net), state.syzygy_tb.clone(), params.tune.clone());
+        let mut quick_state = SearchState::new(
+            Some(2000),
+            false,
+            0,
+            0,
+            None,
+            game_ply,
+            params.contempt,
+            params.singular_ext_mode,
+            tt,
+            params.use_nnue,
+            Arc::clone(net),
+            state.syzygy_tb.clone(),
+            params.tune.clone(),
+        );
         if quick_state.use_nnue {
             quick_state.accumulators[0].refresh(board, &quick_state.net);
             update_accumulator_for_move(&mut quick_state, &board_copy, only_move, captured, 0, 1);
         }
         let mut quick_pv = Vec::new();
         let child_score = -alpha_beta(
-            &mut board_copy, quick_depth, 1, Score::NEG_INF.0, Score::INF.0,
-            &mut quick_pv, &mut quick_state, stop, only_move, Move::NULL,
+            &mut board_copy,
+            quick_depth,
+            1,
+            Score::NEG_INF.0,
+            Score::INF.0,
+            &mut quick_pv,
+            &mut quick_state,
+            stop,
+            only_move,
+            Move::NULL,
         );
         board_copy.unmake_move(only_move, captured, prev_castling, prev_ep, prev_halfmove);
         let score = Score(child_score);
@@ -1178,7 +1291,10 @@ pub fn iterative_deepening(
     // Pre-order root moves using TT so the 0-nodes fallback (stop before any
     // evaluation) picks the TT move rather than an arbitrary first generated move.
     {
-        let tt_best = tt.probe(board.hash).map(|e| e.best_move).unwrap_or(Move::NULL);
+        let tt_best = tt
+            .probe(board.hash)
+            .map(|e| e.best_move)
+            .unwrap_or(Move::NULL);
         if !tt_best.is_null()
             && let Some(pos) = root_move_scores.iter().position(|(m, _)| *m == tt_best)
             && pos > 0
@@ -1232,7 +1348,6 @@ pub fn iterative_deepening(
     let mut stable_move = Move::NULL;
     let mut stable_move_stability = 0u32;
 
-
     for base_depth in 1..=max_depth {
         // Apply depth offset for helper threads (Lazy SMP depth diversity)
         let depth = (base_depth as i16 + offset as i16).clamp(1, max_depth as i16) as u8;
@@ -1270,7 +1385,13 @@ pub fn iterative_deepening(
             // Build working_scores: excluded moves are pushed to the back with i32::MIN
             let mut working_scores: Vec<(Move, i32)> = root_move_scores
                 .iter()
-                .map(|&(m, s)| if excluded_moves.contains(&m) { (m, i32::MIN) } else { (m, s) })
+                .map(|&(m, s)| {
+                    if excluded_moves.contains(&m) {
+                        (m, i32::MIN)
+                    } else {
+                        (m, s)
+                    }
+                })
                 .collect();
             working_scores.sort_by_key(|b| std::cmp::Reverse(b.1));
 
@@ -1354,7 +1475,11 @@ pub fn iterative_deepening(
                 break;
             }
 
-            let line_best = if !pv.is_empty() { pv[0] } else { working_scores[0].0 };
+            let line_best = if !pv.is_empty() {
+                pv[0]
+            } else {
+                working_scores[0].0
+            };
             excluded_moves.push(line_best);
             line_results.push((score, sanitize_pv(board, &pv), state.seldepth));
         }
@@ -1377,7 +1502,11 @@ pub fn iterative_deepening(
         // R2KlN7mg perpetual trap, see the regression test).
 
         let score = line_results[0].0;
-        let score_drop = if base_depth > 1 { (prev_score - score).max(0) } else { 0 };
+        let score_drop = if base_depth > 1 {
+            (prev_score - score).max(0)
+        } else {
+            0
+        };
         if base_depth > 1 {
             max_score_swing = max_score_swing.max((prev_score - score).abs());
         }
@@ -1386,7 +1515,10 @@ pub fn iterative_deepening(
         let new_best = if !line0_pv.is_empty() {
             line0_pv[0]
         } else {
-            let tt_best = tt.probe(board.hash).map(|e| e.best_move).unwrap_or(Move::NULL);
+            let tt_best = tt
+                .probe(board.hash)
+                .map(|e| e.best_move)
+                .unwrap_or(Move::NULL);
             if !tt_best.is_null() && root_move_scores.iter().any(|(m, _)| *m == tt_best) {
                 tt_best
             } else {
@@ -1413,7 +1545,8 @@ pub fn iterative_deepening(
         {
             let alpha_coeff = if ewma_initialized { 0.2 } else { 1.0 };
             for (ewma_move, ewma_val) in root_move_ewma.iter_mut() {
-                if let Some(&(_, score_val)) = root_move_scores.iter().find(|(m, _)| m == ewma_move) {
+                if let Some(&(_, score_val)) = root_move_scores.iter().find(|(m, _)| m == ewma_move)
+                {
                     *ewma_val = alpha_coeff * score_val as f64 + (1.0 - alpha_coeff) * *ewma_val;
                 }
             }
@@ -1422,7 +1555,8 @@ pub fn iterative_deepening(
 
         if let Some(ref cb) = info_callback {
             let elapsed = state.elapsed_ms();
-            for (line_idx, (line_score, line_pv, line_seldepth)) in line_results.iter().enumerate() {
+            for (line_idx, (line_score, line_pv, line_seldepth)) in line_results.iter().enumerate()
+            {
                 cb(&SearchInfo {
                     depth,
                     seldepth: *line_seldepth,
@@ -1442,8 +1576,15 @@ pub fn iterative_deepening(
 
         log::info!(
             "depth {} score {} nodes {} time {}ms pv {}",
-            depth, best_score, state.nodes, state.elapsed_ms(),
-            best_pv.iter().map(|m| m.to_uci()).collect::<Vec<_>>().join(" ")
+            depth,
+            best_score,
+            state.nodes,
+            state.elapsed_ms(),
+            best_pv
+                .iter()
+                .map(|m| m.to_uci())
+                .collect::<Vec<_>>()
+                .join(" ")
         );
 
         // When we find a forced mate for us, keep searching for shorter mates
@@ -1453,7 +1594,8 @@ pub fn iterative_deepening(
         // mated we must keep searching to find the best defence.
         if best_score.is_mate() && best_score.0 > 0 {
             let mate_distance = (Score::MATE.0 - best_score.0) as u32;
-            if mate_distance <= 6 { // mate in 3 or fewer full moves
+            if mate_distance <= 6 {
+                // mate in 3 or fewer full moves
                 break;
             }
             if let Some(limit) = state.time_limit_ms
@@ -1472,7 +1614,8 @@ pub fn iterative_deepening(
         {
             // Dynamic soft time limit based on multiple factors:
             // Base: increase in increment controls to avoid under-spending.
-            let inc_ratio_permille = state.inc_ms
+            let inc_ratio_permille = state
+                .inc_ms
                 .saturating_mul(1000)
                 .checked_div(limit)
                 .unwrap_or(0)
@@ -1506,7 +1649,8 @@ pub fn iterative_deepening(
             // Increment safety net: when increment is significant relative
             // to allocated time, we can afford to spend more since it
             // replenishes. +0-15% based on inc/allocated ratio.
-            let inc_bonus = state.inc_ms
+            let inc_bonus = state
+                .inc_ms
                 .saturating_mul(150)
                 .checked_div(limit)
                 .unwrap_or(0)
@@ -1581,20 +1725,40 @@ pub fn iterative_deepening(
             // Early opening brake: keep first moves snappier and save heavy
             // spending for richer middlegame positions. Apply to all time controls.
             let opening_adjust: i64 = if game_ply < 6 {
-                if state.time_remaining_ms <= 300_000 { -240 } else { -160 }
+                if state.time_remaining_ms <= 300_000 {
+                    -240
+                } else {
+                    -160
+                }
             } else if game_ply < 12 {
-                if state.time_remaining_ms <= 300_000 { -140 } else { -90 }
+                if state.time_remaining_ms <= 300_000 {
+                    -140
+                } else {
+                    -90
+                }
             } else if game_ply < 20 {
-                if state.time_remaining_ms <= 300_000 { -60 } else { -30 }
+                if state.time_remaining_ms <= 300_000 {
+                    -60
+                } else {
+                    -30
+                }
             } else {
                 0
             };
 
-            let soft_frac = (base_frac + instability_bonus + drop_bonus
-                + volatility_bonus + aspiration_bonus + complexity_bonus
-                + inc_bonus + surplus_bonus + book_exit_bonus)
+            let soft_frac = (base_frac
+                + instability_bonus
+                + drop_bonus
+                + volatility_bonus
+                + aspiration_bonus
+                + complexity_bonus
+                + inc_bonus
+                + surplus_bonus
+                + book_exit_bonus)
                 .saturating_sub(stability_discount);
-            let soft_frac = (soft_frac as i64 + node_frac_adj + eval_adjust + opening_adjust + blitz_adjust).max(0) as u64;
+            let soft_frac =
+                (soft_frac as i64 + node_frac_adj + eval_adjust + opening_adjust + blitz_adjust)
+                    .max(0) as u64;
             // Safer range: 35%-180% of allocated time
             let soft_frac = soft_frac.clamp(350, 1800);
             let soft_limit = limit * soft_frac / 1000;
@@ -1620,7 +1784,8 @@ pub fn iterative_deepening(
                 900u64
             };
             if depth >= 6
-                && elapsed + predicted_next > soft_limit.saturating_mul(prediction_margin_permille) / 1000
+                && elapsed + predicted_next
+                    > soft_limit.saturating_mul(prediction_margin_permille) / 1000
             {
                 break;
             }
@@ -1633,14 +1798,24 @@ pub fn iterative_deepening(
     // This handles search instability where a tactically complex move
     // scores well for many depths but then drops at the final depth.
     if !stable_move.is_null() && best_move != stable_move && stable_move_stability >= 6 {
-        let stable_ewma = root_move_ewma.iter().find(|(m, _)| *m == stable_move).map(|(_, e)| *e);
-        let best_ewma = root_move_ewma.iter().find(|(m, _)| *m == best_move).map(|(_, e)| *e);
+        let stable_ewma = root_move_ewma
+            .iter()
+            .find(|(m, _)| *m == stable_move)
+            .map(|(_, e)| *e);
+        let best_ewma = root_move_ewma
+            .iter()
+            .find(|(m, _)| *m == best_move)
+            .map(|(_, e)| *e);
         if let (Some(se), Some(be)) = (stable_ewma, best_ewma)
             && se > be + 50.0
         {
             log::info!(
                 "EWMA persistence: {} (ewma {:.0}) over {} (ewma {:.0}), stability was {}",
-                stable_move.to_uci(), se, best_move.to_uci(), be, stable_move_stability
+                stable_move.to_uci(),
+                se,
+                best_move.to_uci(),
+                be,
+                stable_move_stability
             );
             best_move = stable_move;
             // Report the EWMA as the score (better reflects the move's value)
@@ -1755,8 +1930,16 @@ fn alpha_beta_root(
 
         let score = if moves_searched == 0 {
             -alpha_beta(
-                board, search_depth, 1, -beta, -alpha,
-                &mut child_pv, state, stop, m, Move::NULL,
+                board,
+                search_depth,
+                1,
+                -beta,
+                -alpha,
+                &mut child_pv,
+                state,
+                stop,
+                m,
+                Move::NULL,
             )
         } else {
             let mut do_full_search = true;
@@ -1772,13 +1955,22 @@ fn alpha_beta_root(
             {
                 let d = (depth as usize).min(63);
                 let ms = (moves_searched as usize).min(63);
-                let reduction = (state.lmr_table[d][ms] as i8).clamp(0, (search_depth as i8 - 1).max(0));
+                let reduction =
+                    (state.lmr_table[d][ms] as i8).clamp(0, (search_depth as i8 - 1).max(0));
 
                 let reduced_depth = search_depth.saturating_sub(reduction as u8);
                 tmp_pv.clear();
                 reduced_score = -alpha_beta(
-                    board, reduced_depth, 1, -alpha - 1, -alpha,
-                    &mut tmp_pv, state, stop, m, Move::NULL,
+                    board,
+                    reduced_depth,
+                    1,
+                    -alpha - 1,
+                    -alpha,
+                    &mut tmp_pv,
+                    state,
+                    stop,
+                    m,
+                    Move::NULL,
                 );
 
                 if reduced_score <= alpha {
@@ -1790,14 +1982,30 @@ fn alpha_beta_root(
             if do_full_search {
                 tmp_pv.clear();
                 let nw_score = -alpha_beta(
-                    board, search_depth, 1, -alpha - 1, -alpha,
-                    &mut tmp_pv, state, stop, m, Move::NULL,
+                    board,
+                    search_depth,
+                    1,
+                    -alpha - 1,
+                    -alpha,
+                    &mut tmp_pv,
+                    state,
+                    stop,
+                    m,
+                    Move::NULL,
                 );
 
                 if nw_score > alpha && nw_score < beta {
                     -alpha_beta(
-                        board, search_depth, 1, -beta, -alpha,
-                        &mut child_pv, state, stop, m, Move::NULL,
+                        board,
+                        search_depth,
+                        1,
+                        -beta,
+                        -alpha,
+                        &mut child_pv,
+                        state,
+                        stop,
+                        m,
+                        Move::NULL,
                     )
                 } else {
                     std::mem::swap(&mut child_pv, &mut tmp_pv);
@@ -1846,7 +2054,13 @@ fn alpha_beta_root(
         *best_node_fraction = best_move_nodes as f32 / total_nodes as f32;
     }
 
-    state.tt.store(board.hash, effective_depth, score_to_tt(best_score, 0), tt_store_flag, best_move);
+    state.tt.store(
+        board.hash,
+        effective_depth,
+        score_to_tt(best_score, 0),
+        tt_store_flag,
+        best_move,
+    );
 
     best_score
 }
@@ -1966,7 +2180,13 @@ fn alpha_beta(
                 WdlProbeResult::Loss | WdlProbeResult::BlessedLoss => TTFlag::UpperBound,
                 WdlProbeResult::Draw => TTFlag::Exact,
             };
-            state.tt.store(board.hash, effective_depth, score_to_tt(tb_score, ply), flag, Move::NULL);
+            state.tt.store(
+                board.hash,
+                effective_depth,
+                score_to_tt(tb_score, ply),
+                flag,
+                Move::NULL,
+            );
             match flag {
                 TTFlag::LowerBound => {
                     if tb_score >= beta {
@@ -1987,24 +2207,27 @@ fn alpha_beta(
 
     // TT probe
     let tt_entry = state.tt.probe(board.hash);
-    let (tt_move, tt_score, tt_depth, tt_flag) =
-        if let Some(entry) = tt_entry {
-            let adj_score = score_from_tt(entry.score, ply);
-            if !is_pv && !is_root && entry.depth >= effective_depth && excluded_move.is_null() {
-                match entry.flag {
-                    TTFlag::Exact => return adj_score,
-                    TTFlag::LowerBound => {
-                        if adj_score >= beta { return adj_score; }
+    let (tt_move, tt_score, tt_depth, tt_flag) = if let Some(entry) = tt_entry {
+        let adj_score = score_from_tt(entry.score, ply);
+        if !is_pv && !is_root && entry.depth >= effective_depth && excluded_move.is_null() {
+            match entry.flag {
+                TTFlag::Exact => return adj_score,
+                TTFlag::LowerBound => {
+                    if adj_score >= beta {
+                        return adj_score;
                     }
-                    TTFlag::UpperBound => {
-                        if adj_score <= alpha { return adj_score; }
+                }
+                TTFlag::UpperBound => {
+                    if adj_score <= alpha {
+                        return adj_score;
                     }
                 }
             }
-            (entry.best_move, adj_score, entry.depth, entry.flag)
-        } else {
-            (Move::NULL, 0, 0, TTFlag::UpperBound)
-        };
+        }
+        (entry.best_move, adj_score, entry.depth, entry.flag)
+    } else {
+        (Move::NULL, 0, 0, TTFlag::UpperBound)
+    };
 
     // In check: static eval is unreliable and all eval-based pruning is
     // skipped. Use a sentinel so `improving` is true after escaping check
@@ -2048,17 +2271,18 @@ fn alpha_beta(
     if !is_pv && !in_check && !is_root && excluded_move.is_null() && !searching_for_mate {
         // Reverse futility pruning
         if depth <= 6 {
-            let margin = (if improving { state.tune.rfp_margin_imp } else { state.tune.rfp_margin_noimp }) * depth as i32;
+            let margin = (if improving {
+                state.tune.rfp_margin_imp
+            } else {
+                state.tune.rfp_margin_noimp
+            }) * depth as i32;
             if static_eval - margin >= beta {
                 return static_eval - margin;
             }
         }
 
         // Null move pruning
-        if depth >= 3
-            && static_eval >= beta
-            && has_non_pawn_material(board, board.side_to_move)
-        {
+        if depth >= 3 && static_eval >= beta && has_non_pawn_material(board, board.side_to_move) {
             let null_r = 3 + depth as u32 / 4 + ((static_eval - beta) as u32 / 200).min(3);
             let null_depth = depth.saturating_sub(1 + null_r as u8);
 
@@ -2077,8 +2301,16 @@ fn alpha_beta(
 
             let mut null_pv = Vec::new();
             let null_score = -alpha_beta(
-                board, null_depth, ply + 1, -beta, -beta + 1,
-                &mut null_pv, state, stop, Move::NULL, Move::NULL,
+                board,
+                null_depth,
+                ply + 1,
+                -beta,
+                -beta + 1,
+                &mut null_pv,
+                state,
+                stop,
+                Move::NULL,
+                Move::NULL,
             );
 
             board.side_to_move = board.side_to_move.opposite();
@@ -2121,20 +2353,41 @@ fn alpha_beta(
 
                     // Incremental accumulator update for probcut
                     if state.use_nnue {
-                        update_accumulator_for_move(state, board, m, captured, ply as usize, ply as usize + 1);
+                        update_accumulator_for_move(
+                            state,
+                            board,
+                            m,
+                            captured,
+                            ply as usize,
+                            ply as usize + 1,
+                        );
                     }
 
                     state.nodes += 1;
                     let mut pc_pv = Vec::new();
                     let score = -quiescence(
-                        board, ply + 1, -probcut_beta, -probcut_beta + 1,
-                        &mut pc_pv, state, stop, true,
+                        board,
+                        ply + 1,
+                        -probcut_beta,
+                        -probcut_beta + 1,
+                        &mut pc_pv,
+                        state,
+                        stop,
+                        true,
                     );
 
                     let score = if score >= probcut_beta {
                         -alpha_beta(
-                            board, probcut_depth, ply + 1, -probcut_beta, -probcut_beta + 1,
-                            &mut pc_pv, state, stop, m, Move::NULL,
+                            board,
+                            probcut_depth,
+                            ply + 1,
+                            -probcut_beta,
+                            -probcut_beta + 1,
+                            &mut pc_pv,
+                            state,
+                            stop,
+                            m,
+                            Move::NULL,
                         )
                     } else {
                         score
@@ -2144,8 +2397,11 @@ fn alpha_beta(
 
                     if score >= probcut_beta {
                         state.tt.store(
-                            board.hash, depth, score_to_tt(score, ply),
-                            TTFlag::LowerBound, m,
+                            board.hash,
+                            depth,
+                            score_to_tt(score, ply),
+                            TTFlag::LowerBound,
+                            m,
                         );
                         return score;
                     }
@@ -2240,8 +2496,16 @@ fn alpha_beta(
 
             let mut se_pv = Vec::new();
             let se_score = alpha_beta(
-                board, se_depth, ply, se_beta - 1, se_beta,
-                &mut se_pv, state, stop, prev_move, m,
+                board,
+                se_depth,
+                ply,
+                se_beta - 1,
+                se_beta,
+                &mut se_pv,
+                state,
+                stop,
+                prev_move,
+                m,
             );
 
             if se_score < se_beta {
@@ -2293,7 +2557,9 @@ fn alpha_beta(
 
             // SEE pruning for quiet moves: prune moves that lose material
             // (e.g., moving a piece to a square attacked by a pawn)
-            if depth <= 5 && !m.is_capture() && !m.is_promotion()
+            if depth <= 5
+                && !m.is_capture()
+                && !m.is_promotion()
                 && !see::see_ge(board, m, -state.tune.see_quiet_margin * depth as i32)
             {
                 continue;
@@ -2324,10 +2590,18 @@ fn alpha_beta(
         // -------------------------------------------------------------------
         if moves_searched > 0 && !is_pv && !in_check {
             // Futility pruning for quiet moves (extended to depth 5)
-            if !gives_check && depth <= 5 && !m.is_capture() && !m.is_promotion()
+            if !gives_check
+                && depth <= 5
+                && !m.is_capture()
+                && !m.is_promotion()
                 && !searching_for_mate
             {
-                let futility_margin = (if improving { state.tune.fut_margin_imp } else { state.tune.fut_margin_noimp }) * depth as i32 + 50;
+                let futility_margin = (if improving {
+                    state.tune.fut_margin_imp
+                } else {
+                    state.tune.fut_margin_noimp
+                }) * depth as i32
+                    + 50;
                 if static_eval + futility_margin <= alpha {
                     board.unmake_move(m, captured, prev_castling, prev_ep, prev_halfmove);
                     continue;
@@ -2335,7 +2609,10 @@ fn alpha_beta(
             }
 
             // Late move pruning (extended to depth 6)
-            if !gives_check && depth <= 6 && !m.is_capture() && !m.is_promotion()
+            if !gives_check
+                && depth <= 6
+                && !m.is_capture()
+                && !m.is_promotion()
                 && !searching_for_mate
             {
                 let lmp_threshold = if improving {
@@ -2350,7 +2627,10 @@ fn alpha_beta(
             }
 
             // History pruning: prune quiet moves with consistently terrible history
-            if !gives_check && depth <= 4 && !m.is_capture() && !m.is_promotion()
+            if !gives_check
+                && depth <= 4
+                && !m.is_capture()
+                && !m.is_promotion()
                 && !searching_for_mate
             {
                 let hist = state.history[m.from_sq().index()][m.to_sq().index()];
@@ -2376,8 +2656,16 @@ fn alpha_beta(
         let score = if moves_searched == 0 {
             // First move: full window
             -alpha_beta(
-                board, search_depth, ply + 1, -beta, -alpha,
-                &mut child_pv, state, stop, m, Move::NULL,
+                board,
+                search_depth,
+                ply + 1,
+                -beta,
+                -alpha,
+                &mut child_pv,
+                state,
+                stop,
+                m,
+                Move::NULL,
             )
         } else {
             let mut do_full_search = true;
@@ -2396,32 +2684,50 @@ fn alpha_beta(
                 let mut reduction = state.lmr_table[d][ms] as i8;
 
                 // Reduce less at PV nodes
-                if is_pv { reduction -= 1; }
+                if is_pv {
+                    reduction -= 1;
+                }
                 // Reduce more at non-PV (likely cut) nodes
-                if !is_pv { reduction += 1; }
+                if !is_pv {
+                    reduction += 1;
+                }
                 // Reduce less for killers/counter-moves
                 if m == killers[0] || m == killers[1] || m == counter_move {
                     reduction -= 1;
                 }
                 // Reduce more when not improving
-                if !improving { reduction += 1; }
+                if !improving {
+                    reduction += 1;
+                }
                 // Continuous history-based reduction with continuation history:
                 // good history → less reduction, bad history → more reduction.
                 let hist = state.history[m.from_sq().index()][m.to_sq().index()];
                 let cont = state.get_cont_history_bonus(m, board, ply);
                 reduction -= ((hist + cont / 2) / state.tune.hist_lmr_div) as i8;
                 // Extra reduction for very negative history
-                if hist < -4000 { reduction += 1; }
+                if hist < -4000 {
+                    reduction += 1;
+                }
                 // Reduce more when eval is below alpha (position looks bad)
-                if !is_pv && static_eval + 150 < alpha { reduction += 1; }
+                if !is_pv && static_eval + 150 < alpha {
+                    reduction += 1;
+                }
 
                 reduction = reduction.clamp(0, (search_depth as i8 - 1).max(0));
 
                 let reduced_depth = search_depth.saturating_sub(reduction as u8);
                 tmp_pv.clear();
                 reduced_score = -alpha_beta(
-                    board, reduced_depth, ply + 1, -alpha - 1, -alpha,
-                    &mut tmp_pv, state, stop, m, Move::NULL,
+                    board,
+                    reduced_depth,
+                    ply + 1,
+                    -alpha - 1,
+                    -alpha,
+                    &mut tmp_pv,
+                    state,
+                    stop,
+                    m,
+                    Move::NULL,
                 );
 
                 if reduced_score <= alpha {
@@ -2434,14 +2740,30 @@ fn alpha_beta(
                 // Null window search
                 tmp_pv.clear();
                 let nw_score = -alpha_beta(
-                    board, search_depth, ply + 1, -alpha - 1, -alpha,
-                    &mut tmp_pv, state, stop, m, Move::NULL,
+                    board,
+                    search_depth,
+                    ply + 1,
+                    -alpha - 1,
+                    -alpha,
+                    &mut tmp_pv,
+                    state,
+                    stop,
+                    m,
+                    Move::NULL,
                 );
 
                 if nw_score > alpha && nw_score < beta {
                     -alpha_beta(
-                        board, search_depth, ply + 1, -beta, -alpha,
-                        &mut child_pv, state, stop, m, Move::NULL,
+                        board,
+                        search_depth,
+                        ply + 1,
+                        -beta,
+                        -alpha,
+                        &mut child_pv,
+                        state,
+                        stop,
+                        m,
+                        Move::NULL,
                     )
                 } else {
                     std::mem::swap(&mut child_pv, &mut tmp_pv);
@@ -2542,7 +2864,13 @@ fn alpha_beta(
         {
             state.update_corrhist(board, depth, best_score - static_eval, ply);
         }
-        state.tt.store(board.hash, effective_depth, score_to_tt(best_score, ply), tt_store_flag, best_move);
+        state.tt.store(
+            board.hash,
+            effective_depth,
+            score_to_tt(best_score, ply),
+            tt_store_flag,
+            best_move,
+        );
     }
 
     best_score
@@ -2615,10 +2943,14 @@ fn quiescence(
         match entry.flag {
             TTFlag::Exact => return adj_score,
             TTFlag::LowerBound => {
-                if adj_score >= beta { return adj_score; }
+                if adj_score >= beta {
+                    return adj_score;
+                }
             }
             TTFlag::UpperBound => {
-                if adj_score <= alpha { return adj_score; }
+                if adj_score <= alpha {
+                    return adj_score;
+                }
             }
         }
     }
@@ -2653,10 +2985,26 @@ fn quiescence(
             any_legal = true;
 
             if state.use_nnue && ply as usize + 1 < MAX_PLY {
-                update_accumulator_for_move(state, board, m, captured, ply as usize, ply as usize + 1);
+                update_accumulator_for_move(
+                    state,
+                    board,
+                    m,
+                    captured,
+                    ply as usize,
+                    ply as usize + 1,
+                );
             }
 
-            let score = -quiescence(board, ply + 1, -beta, -alpha, &mut child_pv, state, stop, false);
+            let score = -quiescence(
+                board,
+                ply + 1,
+                -beta,
+                -alpha,
+                &mut child_pv,
+                state,
+                stop,
+                false,
+            );
 
             board.unmake_move(m, captured, prev_castling, prev_ep, prev_halfmove);
 
@@ -2675,7 +3023,13 @@ fn quiescence(
                     pv.extend_from_slice(&child_pv);
 
                     if score >= beta {
-                        state.tt.store(board.hash, 0, score_to_tt(best_score, ply), TTFlag::LowerBound, best_move);
+                        state.tt.store(
+                            board.hash,
+                            0,
+                            score_to_tt(best_score, ply),
+                            TTFlag::LowerBound,
+                            best_move,
+                        );
                         return beta;
                     }
                 }
@@ -2687,8 +3041,14 @@ fn quiescence(
             return -Score::MATE.0 + ply as i32;
         }
 
-        let flag = if best_score > alpha { TTFlag::Exact } else { TTFlag::UpperBound };
-        state.tt.store(board.hash, 0, score_to_tt(best_score, ply), flag, best_move);
+        let flag = if best_score > alpha {
+            TTFlag::Exact
+        } else {
+            TTFlag::UpperBound
+        };
+        state
+            .tt
+            .store(board.hash, 0, score_to_tt(best_score, ply), flag, best_move);
         return alpha;
     }
 
@@ -2696,7 +3056,13 @@ fn quiescence(
     let stand_pat = evaluate_for_side(board, state, ply);
 
     if stand_pat >= beta {
-        state.tt.store(board.hash, 0, score_to_tt(stand_pat, ply), TTFlag::LowerBound, Move::NULL);
+        state.tt.store(
+            board.hash,
+            0,
+            score_to_tt(stand_pat, ply),
+            TTFlag::LowerBound,
+            Move::NULL,
+        );
         return beta;
     }
     if stand_pat > alpha {
@@ -2723,11 +3089,17 @@ fn quiescence(
     let mut cap_scores = [0i32; 128];
     let mut cap_count = 0usize;
     for &m in captures_list.iter() {
-        let score = if m == tt_move && !tt_move.is_null() { 10_000_000 } else { capture_value(board, m) };
+        let score = if m == tt_move && !tt_move.is_null() {
+            10_000_000
+        } else {
+            capture_value(board, m)
+        };
         cap_moves[cap_count] = m;
         cap_scores[cap_count] = score;
         cap_count += 1;
-        if cap_count >= 128 { break; }
+        if cap_count >= 128 {
+            break;
+        }
     }
 
     let mut best_score = stand_pat;
@@ -2736,7 +3108,11 @@ fn quiescence(
 
     let mut idx = 0;
     while idx < cap_count {
-        pick_next_move(&mut cap_moves[..cap_count], &mut cap_scores[..cap_count], idx);
+        pick_next_move(
+            &mut cap_moves[..cap_count],
+            &mut cap_scores[..cap_count],
+            idx,
+        );
         let m = cap_moves[idx];
         idx += 1;
 
@@ -2764,7 +3140,16 @@ fn quiescence(
             update_accumulator_for_move(state, board, m, captured, ply as usize, ply as usize + 1);
         }
 
-        let score = -quiescence(board, ply + 1, -beta, -alpha, &mut child_pv, state, stop, false);
+        let score = -quiescence(
+            board,
+            ply + 1,
+            -beta,
+            -alpha,
+            &mut child_pv,
+            state,
+            stop,
+            false,
+        );
 
         board.unmake_move(m, captured, prev_castling, prev_ep, prev_halfmove);
 
@@ -2778,7 +3163,13 @@ fn quiescence(
         }
 
         if score >= beta {
-            state.tt.store(board.hash, 0, score_to_tt(best_score, ply), TTFlag::LowerBound, best_move);
+            state.tt.store(
+                board.hash,
+                0,
+                score_to_tt(best_score, ply),
+                TTFlag::LowerBound,
+                best_move,
+            );
             return beta;
         }
         if score > alpha {
@@ -2817,10 +3208,26 @@ fn quiescence(
             }
 
             if state.use_nnue && ply as usize + 1 < MAX_PLY {
-                update_accumulator_for_move(state, board, m, captured, ply as usize, ply as usize + 1);
+                update_accumulator_for_move(
+                    state,
+                    board,
+                    m,
+                    captured,
+                    ply as usize,
+                    ply as usize + 1,
+                );
             }
 
-            let score = -quiescence(board, ply + 1, -beta, -alpha, &mut child_pv, state, stop, false);
+            let score = -quiescence(
+                board,
+                ply + 1,
+                -beta,
+                -alpha,
+                &mut child_pv,
+                state,
+                stop,
+                false,
+            );
 
             board.unmake_move(m, captured, prev_castling, prev_ep, prev_halfmove);
 
@@ -2834,7 +3241,13 @@ fn quiescence(
             }
 
             if score >= beta {
-                state.tt.store(board.hash, 0, score_to_tt(best_score, ply), TTFlag::LowerBound, best_move);
+                state.tt.store(
+                    board.hash,
+                    0,
+                    score_to_tt(best_score, ply),
+                    TTFlag::LowerBound,
+                    best_move,
+                );
                 return beta;
             }
             if score > alpha {
@@ -2847,8 +3260,14 @@ fn quiescence(
     }
 
     if !best_move.is_null() {
-        let flag = if best_score > stand_pat { TTFlag::Exact } else { TTFlag::UpperBound };
-        state.tt.store(board.hash, 0, score_to_tt(best_score, ply), flag, best_move);
+        let flag = if best_score > stand_pat {
+            TTFlag::Exact
+        } else {
+            TTFlag::UpperBound
+        };
+        state
+            .tt
+            .store(board.hash, 0, score_to_tt(best_score, ply), flag, best_move);
     }
 
     alpha
@@ -2859,9 +3278,15 @@ fn capture_value(board: &Board, m: Move) -> i32 {
     let victim = if flag == MoveFlag::EnPassant {
         PieceKind::Pawn.value()
     } else {
-        board.piece_at(m.to_sq()).map(|p| p.kind.value()).unwrap_or(0)
+        board
+            .piece_at(m.to_sq())
+            .map(|p| p.kind.value())
+            .unwrap_or(0)
     };
-    let attacker = board.piece_at(m.from_sq()).map(|p| p.kind.value()).unwrap_or(0);
+    let attacker = board
+        .piece_at(m.from_sq())
+        .map(|p| p.kind.value())
+        .unwrap_or(0);
     victim * 10 - attacker
 }
 
@@ -2886,7 +3311,11 @@ fn evaluate_for_side(board: &Board, state: &mut SearchState, ply: u8) -> i32 {
             &state.net,
             piece_count,
         );
-        let sign = if board.side_to_move == Color::White { 1 } else { -1 };
+        let sign = if board.side_to_move == Color::White {
+            1
+        } else {
+            -1
+        };
         crate::eval::scale_for_endgame(board, raw * sign) * sign
     } else {
         let e = evaluate(board).0;
@@ -2924,7 +3353,10 @@ fn update_accumulator_for_move(
     } else if flag == MoveFlag::KingsideCastle || flag == MoveFlag::QueensideCastle {
         PieceKind::King
     } else {
-        board.piece_at(to).map(|p| p.kind).unwrap_or(PieceKind::Pawn)
+        board
+            .piece_at(to)
+            .map(|p| p.kind)
+            .unwrap_or(PieceKind::Pawn)
     };
 
     // King moves change the king bucket and require a full refresh.
@@ -3005,10 +3437,10 @@ fn has_non_pawn_material(board: &Board, color: Color) -> bool {
 mod tests {
     use super::*;
     use crate::syzygy::SyzygyTB;
+    use crate::tt::SharedTT;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
-    use std::path::PathBuf;
-    use crate::tt::SharedTT;
 
     #[test]
     fn sudden_death_cap_bounds_blitz_and_rapid_no_increment() {
@@ -3043,7 +3475,10 @@ mod tests {
         };
         let alloc = allocated_move_time_ms(&params, &board).expect("timed search");
         assert!(alloc > 0);
-        assert!(alloc <= 180_000 / 30, "allocated {alloc} too high for 180+0");
+        assert!(
+            alloc <= 180_000 / 30,
+            "allocated {alloc} too high for 180+0"
+        );
     }
 
     /// Helper: run a fixed-depth search and return the result.
@@ -3066,7 +3501,20 @@ mod tests {
                     use_nnue: false, // use HCE for tests (zeroed net is useless)
                     ..Default::default()
                 };
-                iterative_deepening(&board, &params, &stop, &tt, None, 0, &NnueNetwork::embedded(), None, None, None, None, None)
+                iterative_deepening(
+                    &board,
+                    &params,
+                    &stop,
+                    &tt,
+                    None,
+                    0,
+                    &NnueNetwork::embedded(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
             })
             .expect("failed to spawn search thread")
             .join()
@@ -3088,7 +3536,20 @@ mod tests {
                     contempt,
                     ..Default::default()
                 };
-                iterative_deepening(&board, &params, &stop, &tt, None, 0, &NnueNetwork::embedded(), None, None, None, None, None)
+                iterative_deepening(
+                    &board,
+                    &params,
+                    &stop,
+                    &tt,
+                    None,
+                    0,
+                    &NnueNetwork::embedded(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
             })
             .expect("failed to spawn search thread")
             .join()
@@ -3099,7 +3560,11 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/syzygy")
     }
 
-    fn search_position_with_syzygy(fen: &str, max_depth: u8, syzygy_tb: Option<SyzygyTB>) -> SearchResult {
+    fn search_position_with_syzygy(
+        fen: &str,
+        max_depth: u8,
+        syzygy_tb: Option<SyzygyTB>,
+    ) -> SearchResult {
         let fen = fen.to_owned();
         std::thread::Builder::new()
             .stack_size(64 * 1024 * 1024)
@@ -3112,8 +3577,23 @@ mod tests {
                     use_nnue: false,
                     ..Default::default()
                 };
-                let root_tb_ranking = syzygy_tb.as_ref().and_then(|tb| crate::syzygy::rank_root_moves(tb, &board));
-                iterative_deepening(&board, &params, &stop, &tt, None, 0, &NnueNetwork::embedded(), None, syzygy_tb, root_tb_ranking, None, None)
+                let root_tb_ranking = syzygy_tb
+                    .as_ref()
+                    .and_then(|tb| crate::syzygy::rank_root_moves(tb, &board));
+                iterative_deepening(
+                    &board,
+                    &params,
+                    &stop,
+                    &tt,
+                    None,
+                    0,
+                    &NnueNetwork::embedded(),
+                    None,
+                    syzygy_tb,
+                    root_tb_ranking,
+                    None,
+                    None,
+                )
             })
             .expect("failed to spawn search thread")
             .join()
@@ -3124,7 +3604,11 @@ mod tests {
     fn mate_in_one() {
         // White: Kg6, Re1. Black: Kg8. Re8# is mate in 1.
         let result = search_position("6k1/8/6K1/8/8/8/8/4R3 w - - 0 1", 4);
-        assert!(result.score.is_mate(), "should detect mate, got {}", result.score);
+        assert!(
+            result.score.is_mate(),
+            "should detect mate, got {}",
+            result.score
+        );
         assert_eq!(result.best_move.to_uci(), "e1e8");
     }
 
@@ -3132,7 +3616,11 @@ mod tests {
     fn mate_in_two() {
         // White: Kf5, Ra1. Black: Kh8. Mate in 2: Kg6 Kg8 Ra8#
         let result = search_position("7k/8/8/5K2/8/8/8/R7 w - - 0 1", 8);
-        assert!(result.score.is_mate(), "should detect mate, got {}", result.score);
+        assert!(
+            result.score.is_mate(),
+            "should detect mate, got {}",
+            result.score
+        );
         // Optimal first move is Kg6 (approaching the king)
         assert_eq!(result.best_move.to_uci(), "f5g6");
     }
@@ -3145,18 +3633,28 @@ mod tests {
         // and reach high depths rapidly because all non-mating branches
         // are pruned once the short mate is known.
         let result = search_position("1k6/8/1K6/8/8/8/8/7R w - - 0 1", 12);
-        assert!(result.score.is_mate(), "should detect mate, got {}", result.score);
+        assert!(
+            result.score.is_mate(),
+            "should detect mate, got {}",
+            result.score
+        );
         assert_eq!(result.best_move.to_uci(), "h1h8");
         // With MDP, the search should have broken early (iterative deepening
         // exits on finding mate). Depth should be low (≤ 3).
-        assert!(result.depth <= 3, "should break early on mate, searched to depth {}", result.depth);
+        assert!(
+            result.depth <= 3,
+            "should break early on mate, searched to depth {}",
+            result.depth
+        );
     }
 
     #[test]
     fn avoids_perpetual_trap_from_lichess_r2kln7mg() {
         // lichess.org/R2KlN7mg: Q+K vs K+a4 after 68...Ke5 — must not play Qe7+
         // into a threefold repetition while believing it is mating.
-        let _guard = crate::syzygy::syzygy_test_lock().lock().expect("lock syzygy test mutex");
+        let _guard = crate::syzygy::syzygy_test_lock()
+            .lock()
+            .expect("lock syzygy test mutex");
         let path = syzygy_path();
         if !path.exists() {
             return;
@@ -3189,10 +3687,18 @@ mod tests {
         assert_eq!(board.king_square(Color::Black), Square::new(3, 6));
         // Search should find a strong advantage for Black (negative score = Black winning)
         let result = search_position(fen, 10);
-        eprintln!("move35: score={} best={} depth={} nodes={}",
-            result.score, result.best_move.to_uci(), result.depth, result.nodes);
-        assert!(result.score.0 < -100,
-            "Black should be clearly winning, got score {}", result.score);
+        eprintln!(
+            "move35: score={} best={} depth={} nodes={}",
+            result.score,
+            result.best_move.to_uci(),
+            result.depth,
+            result.nodes
+        );
+        assert!(
+            result.score.0 < -100,
+            "Black should be clearly winning, got score {}",
+            result.score
+        );
     }
 
     /// Contempt: draws at ply > 0 should be scored as -contempt from the side-to-move's
@@ -3206,7 +3712,7 @@ mod tests {
         let fen = "8/8/8/8/8/8/1K6/7k w - - 99 1";
 
         let with_contempt = search_with_contempt(fen, 1, 20);
-        let no_contempt   = search_with_contempt(fen, 1, 0);
+        let no_contempt = search_with_contempt(fen, 1, 0);
 
         // All moves lead to a 50-move draw at ply=1.  Each draw scores -contempt from
         // Black's perspective; the root (White) negates → +contempt.
@@ -3236,7 +3742,10 @@ mod tests {
         let fen = "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/3P1N2/PPP2PPP/RNBQK2R w KQkq - 0 5";
         // Must complete without panic; score and move are irrelevant.
         let result = search_with_contempt(fen, 20, 50);
-        assert!(!result.best_move.is_null(), "engine must return a legal move");
+        assert!(
+            !result.best_move.is_null(),
+            "engine must return a legal move"
+        );
     }
 
     /// Performance test: engine must find Nf6+ (g4f6) in a complex tactical position.
@@ -3254,16 +3763,23 @@ mod tests {
 
     #[test]
     fn syzygy_guides_precapture_transition_to_bxc6() {
-        let _guard = crate::syzygy::syzygy_test_lock().lock().expect("lock syzygy test mutex");
+        let _guard = crate::syzygy::syzygy_test_lock()
+            .lock()
+            .expect("lock syzygy test mutex");
         let path = syzygy_path();
         if !path.exists() {
             return;
         }
 
         let tb = SyzygyTB::new(path.to_string_lossy().as_ref()).expect("load syzygy tables");
-        let result = search_position_with_syzygy("b7/8/P1P5/6p1/3K1k2/8/8/8 b - - 0 53", 8, Some(tb));
+        let result =
+            search_position_with_syzygy("b7/8/P1P5/6p1/3K1k2/8/8/8 b - - 0 53", 8, Some(tb));
 
         assert_eq!(result.best_move.to_uci(), "a8c6");
-        assert!(result.score.0 >= crate::syzygy::TB_WIN_SCORE, "expected immediate TB win score, got {}", result.score.0);
+        assert!(
+            result.score.0 >= crate::syzygy::TB_WIN_SCORE,
+            "expected immediate TB win score, got {}",
+            result.score.0
+        );
     }
 }
