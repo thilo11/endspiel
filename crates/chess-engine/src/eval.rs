@@ -2702,9 +2702,15 @@ fn endgame_scale_factor(board: &Board, params: &EvalParams, eval: i32, phase: i3
         let b_light = (b_bishop_sq.file() + b_bishop_sq.rank()) % 2 == 1;
 
         if w_light != b_light {
-            // Opposite-colored bishops — very drawish
-            // Scale factor from params (default 60 means scale to ~47%)
-            return params.ocb_scale_factor.clamp(20, 128);
+            // Opposite-colored bishops are very drawish, but only while the
+            // stronger side is short of pawns: a lone pawn is usually
+            // blockaded for good, while a broad front (3+) overloads the
+            // single defending bishop. Anchor the tunable at the classic
+            // 2-pawn case and give back ~quarter eval per pawn either way;
+            // a flat scale here underestimated won OCB positions by ~400cp
+            // (same flaw family as the R+minor-vs-R rule, lichess xGKDKesn).
+            let strong_pawns = if eval > 0 { wp } else { bp };
+            return (params.ocb_scale_factor + 27 * (strong_pawns - 2)).clamp(16, 128);
         }
     }
 
@@ -2964,6 +2970,25 @@ mod tests {
         // ...and bare R+minor vs R remains a theoretical draw (scale 12 path).
         let bare = Board::from_fen("4k3/8/6N1/8/1R6/2r5/7K/8 b - - 0 1").unwrap();
         assert!(scale_for_endgame(&bare, 300) < 50);
+    }
+
+    #[test]
+    fn ocb_scale_respects_pawn_count() {
+        // Pure OCB with a broad pawn front is winnable — near-full eval.
+        // White: Kc3 Bd4(dark) Pb4 c4 g2 h2 vs Black: Ke7 Bd5(light) Ph6.
+        // strong_pawns=4 -> scale 71 + 27*2 = 125.
+        let broad = Board::from_fen("8/4k3/7p/3b4/1PPB4/2K5/6PP/8 w - - 0 1").unwrap();
+        assert_eq!(scale_for_endgame(&broad, 400), 400 * 125 / 128);
+
+        // A single extra pawn is the classic dead-draw blockade — heavy damping.
+        // strong_pawns=1 -> scale 71 - 27 = 44.
+        let lone = Board::from_fen("8/8/4k3/8/6b1/8/5BPK/8 w - - 0 1").unwrap();
+        assert_eq!(scale_for_endgame(&lone, 300), 300 * 44 / 128);
+
+        // Pawnless OCB is a trivial draw; the old flat rule still returned 71.
+        // strong_pawns=0 -> scale clamped at 71 - 54 = 17.
+        let bare = Board::from_fen("8/8/4k3/8/6b1/8/5B1K/8 w - - 0 1").unwrap();
+        assert_eq!(scale_for_endgame(&bare, 300), 300 * 17 / 128);
     }
 
     #[test]
