@@ -181,7 +181,10 @@ struct SearchState {
     nodes: u64,
     seldepth: u8,
     start_time: Instant,
+    /// Hard ceiling: the search is aborted here, whatever the position.
     time_limit_ms: Option<u64>,
+    /// What a typical position is worth; the soft limit is a multiple of this.
+    soft_target_ms: Option<u64>,
     use_soft_limit: bool,
     inc_ms: u64,
     time_remaining_ms: u64,
@@ -198,6 +201,7 @@ impl SearchState {
     #[allow(clippy::too_many_arguments)]
     fn new(
         time_limit_ms: Option<u64>,
+        soft_target_ms: Option<u64>,
         use_soft_limit: bool,
         inc_ms: u64,
         time_remaining_ms: u64,
@@ -245,6 +249,7 @@ impl SearchState {
             seldepth: 0,
             start_time: Instant::now(),
             time_limit_ms,
+            soft_target_ms,
             use_soft_limit,
             inc_ms,
             time_remaining_ms,
@@ -562,24 +567,46 @@ fn long_game_time_cap(target_ms: u64, inc_ms: u64, time_ms: u64) -> u64 {
     target_ms.min(inc_ms.saturating_add(time_ms / n))
 }
 
-/// Returns (time_limit_ms, use_soft_limit, inc_ms, time_remaining_ms).
-/// `use_soft_limit` is true for clock-based time controls (wtime/btime)
-/// where we must save time for future moves, false for fixed movetime.
+/// How much longer than the soft target a difficult position may run. The soft
+/// limit itself can reach 1.8x (see `soft_frac`), so this only has to leave room
+/// for that plus the fail-low extension; it is not a spending target.
+const HARD_LIMIT_SOFT_MULT: u64 = 3;
+
+/// Returns (soft_target_ms, hard_limit_ms, use_soft_limit, inc_ms, time_remaining_ms).
+///
+/// Two budgets, not one. `soft_target` is what a *typical* position is worth;
+/// `hard_limit` is the ceiling the search may never cross. The iterative-deepening
+/// loop scores how hard the position actually is — PV instability, a dropping score,
+/// aspiration failures, how concentrated the nodes are on the best move — and stops
+/// anywhere between ~0.35x and ~1.8x of `soft_target`, bounded by `hard_limit`.
+///
+/// They used to be the same number, which quietly disabled half the machinery: the
+/// difficulty *bonuses* could never fire, because the hard stop killed the search at
+/// 1.0x before any of them could buy a millisecond. The engine could play an obvious
+/// position fast but was structurally unable to think longer about a hard one.
+///
+/// `use_soft_limit` is true for clock-based time controls (wtime/btime) where we must
+/// save time for future moves, false for fixed movetime.
 ///
 /// Supports typical tournament time controls:
 ///   - FIDE/DSB Classical: 40 moves / 90 min + 30s inc, then 15-30 min + 30s
 ///   - FIDE/DSB Rapid:     15 min + 10s inc
 ///   - FIDE/DSB Blitz:     3-5 min + 2-3s inc
 ///   - Bullet:             1 min + 0-1s inc
-fn compute_time_limit(params: &SearchParams, board: &Board) -> (Option<u64>, bool, u64, u64) {
+fn compute_time_limit(
+    params: &SearchParams,
+    board: &Board,
+) -> (Option<u64>, Option<u64>, bool, u64, u64) {
     if params.infinite {
-        return (None, false, 0, 0);
+        return (None, None, false, 0, 0);
     }
 
     let overhead = params.move_overhead_ms;
 
     if let Some(mt) = params.move_time_ms {
-        return (Some(mt.saturating_sub(overhead)), false, 0, 0);
+        // Fixed movetime: the caller dictated the budget, so soft == hard.
+        let mt = mt.saturating_sub(overhead);
+        return (Some(mt), Some(mt), false, 0, 0);
     }
 
     let side = board.side_to_move;
@@ -758,16 +785,48 @@ fn compute_time_limit(params: &SearchParams, board: &Board) -> (Option<u64>, boo
             }
         };
 
-        let allocated = target.min(max).max(min);
-        (Some(allocated.saturating_sub(overhead)), true, inc, time)
+        let soft = target.min(max).max(min);
+
+        // Hard ceiling: the most a genuinely difficult position may take. Bounded
+        // by `max` (the flag-safety limit) and by a multiple of the soft target, so
+        // a single position can never eat an unbounded slice of the clock.
+        //
+        // Leave headroom below `max` for the fail-low extension further down, which
+        // may overrun the hard limit by 1/5 — 5/6 * 6/5 == 1, so even a search that
+        // takes the extension stays inside `max`.
+        //
+        // Then bound it by the clock itself. `max` is NOT a safe spend: its low-time
+        // branch is `time/8 + inc*2`, and with a fat increment that `inc*2` alone can
+        // exceed the clock (5s inc, 6s left => `max` ~10.7s). That never mattered
+        // while `max` was only a ceiling on an allocation that stayed far below it —
+        // but a hard limit is a number the search will actually spend, and spending
+        // it flags. Measured: 3 losses on time in 21 blitz games before this bound.
+        let clock_cap = time.saturating_sub(overhead).saturating_mul(4) / 5;
+        let hard = soft
+            .saturating_mul(HARD_LIMIT_SOFT_MULT)
+            .min(max.saturating_mul(5) / 6)
+            .min(clock_cap)
+            .max(soft.min(clock_cap));
+
+        (
+            Some(soft.saturating_sub(overhead)),
+            Some(hard.saturating_sub(overhead)),
+            true,
+            inc,
+            time,
+        )
     } else {
-        (None, false, 0, 0)
+        (None, None, false, 0, 0)
     }
 }
 
-/// Move-time budget (ms) the engine would allocate for `params` at `board`,
+/// Soft move-time budget (ms) the engine would allocate for `params` at `board`,
 /// or `None` for an infinite/untimed search. Used by the UCI layer to convert
 /// a pondering (infinite) search into a timed one when `ponderhit` arrives.
+///
+/// This is the *soft target*, not the hard ceiling: a pondered move gets the budget
+/// a typical position is worth. The difficulty-aware widening only applies to
+/// searches that run under the soft limit, which a ponder search does not.
 pub fn allocated_move_time_ms(params: &SearchParams, board: &Board) -> Option<u64> {
     compute_time_limit(params, board).0
 }
@@ -1183,9 +1242,11 @@ pub fn iterative_deepening(
         };
     }
 
-    let (time_limit, use_soft_limit, inc, time_remaining) = compute_time_limit(params, board);
+    let (soft_target, hard_limit, use_soft_limit, inc, time_remaining) =
+        compute_time_limit(params, board);
     let mut state = SearchState::new(
-        time_limit,
+        hard_limit,
+        soft_target,
         use_soft_limit,
         inc,
         time_remaining,
@@ -1251,6 +1312,7 @@ pub fn iterative_deepening(
         // Quick fixed-depth search to evaluate the resulting position
         let quick_depth = 10u8;
         let mut quick_state = SearchState::new(
+            Some(2000),
             Some(2000),
             false,
             0,
@@ -1394,6 +1456,12 @@ pub fn iterative_deepening(
     // its historical strength.
     let mut root_move_ewma: Vec<(Move, f64)> = root_moves.iter().map(|&m| (m, 0.0f64)).collect();
     let mut ewma_initialized = false;
+
+    // Set ENDSPIEL_TM_DEBUG=1 to dump the time manager's per-iteration reasoning
+    // (which difficulty terms fired, and the soft/hard budgets). Probing a position
+    // by bare FEN gives `game_ply == 0`, which silently trips the early-opening cap
+    // and shrinks `max` — always probe with the real move history, or the numbers lie.
+    let tm_debug = std::env::var("ENDSPIEL_TM_DEBUG").is_ok();
 
     // PV instability: track best move changes for time management
     let mut pv_changes = 0u32;
@@ -1678,7 +1746,7 @@ pub fn iterative_deepening(
                 // mate in 3 or fewer full moves
                 break;
             }
-            if let Some(limit) = state.time_limit_ms
+            if let Some(limit) = state.soft_target_ms
                 && state.elapsed_ms() > limit / 5
             {
                 break;
@@ -1689,8 +1757,11 @@ pub fn iterative_deepening(
             break;
         }
 
+        // Everything below scales the *soft target*, not the hard ceiling: this is
+        // the block that decides how hard the position is and therefore what this
+        // move is worth. `should_stop` above enforces the ceiling.
         if state.use_soft_limit
-            && let Some(limit) = state.time_limit_ms
+            && let Some(limit) = state.soft_target_ms
         {
             // Dynamic soft time limit based on multiple factors:
             // Base: increase in increment controls to avoid under-spending.
@@ -1839,10 +1910,25 @@ pub fn iterative_deepening(
             let soft_frac =
                 (soft_frac as i64 + node_frac_adj + eval_adjust + opening_adjust + blitz_adjust)
                     .max(0) as u64;
-            // Safer range: 35%-180% of allocated time
-            let soft_frac = soft_frac.clamp(350, 1800);
+            // Range: 35% of the soft target for an obvious position, up to the hard
+            // ceiling for a genuinely difficult one. The old 180% ceiling was set
+            // when soft == hard, so everything above 100% was unreachable and it was
+            // never a real knob; the hard limit (and `should_stop`) is the true bound
+            // now, so let the difficulty bonuses run all the way up to it.
+            let soft_frac = soft_frac.clamp(350, HARD_LIMIT_SOFT_MULT * 1000);
             let soft_limit = limit * soft_frac / 1000;
             let elapsed = state.elapsed_ms();
+            if tm_debug {
+                println!(
+                    "info string tm d={depth} frac={soft_frac} soft={limit} soft_lim={soft_limit} \
+                     hard={:?} elapsed={elapsed} | inst={instability_bonus} drop={drop_bonus} \
+                     vol={volatility_bonus} asp={aspiration_bonus} cplx={complexity_bonus} \
+                     surp={surplus_bonus} stab=-{stability_discount} nodefrac={node_frac_adj} \
+                     eval={eval_adjust} pvch={pv_changes} swing={max_score_swing} \
+                     bnf={best_node_fraction:.2}",
+                    state.time_limit_ms
+                );
+            }
             if elapsed > soft_limit {
                 break;
             }
@@ -3595,6 +3681,63 @@ mod tests {
         assert!(
             alloc <= 180_000 / 30,
             "allocated {alloc} too high for 180+0"
+        );
+    }
+
+    #[test]
+    fn hard_limit_never_authorises_spending_more_clock_than_we_have() {
+        // A hard limit is a number the search will actually spend, so it must be
+        // bounded by the clock. `max`'s low-time branch (time/8 + inc*2) is not:
+        // with 6s left and a 5s increment it reaches ~10.7s. Spending that flags,
+        // and it did — 3 losses on time in 21 blitz games.
+        let board = Board::starting_position();
+        for time in [3_000u64, 6_000, 12_000, 30_000, 90_000, 180_000] {
+            let params = SearchParams {
+                white_time_ms: Some(time),
+                black_time_ms: Some(time),
+                white_inc_ms: Some(5_000),
+                black_inc_ms: Some(5_000),
+                ..Default::default()
+            };
+            let (_, hard, _, _, _) = compute_time_limit(&params, &board);
+            let hard = hard.expect("timed");
+            assert!(
+                hard < time,
+                "with {time}ms on the clock the hard limit is {hard}ms — that flags"
+            );
+        }
+    }
+
+    #[test]
+    fn hard_limit_leaves_room_to_think_longer_than_the_soft_target() {
+        // A difficult position must be able to outspend a typical one. Before the
+        // soft/hard split these were the same number, so the search was killed at
+        // 1.0x and every difficulty bonus in the ID loop was dead code.
+        let board = Board::starting_position();
+        let params = SearchParams {
+            white_time_ms: Some(180_000),
+            black_time_ms: Some(180_000),
+            white_inc_ms: Some(5_000),
+            black_inc_ms: Some(5_000),
+            ..Default::default()
+        };
+        let (soft, hard, use_soft, _, _) = compute_time_limit(&params, &board);
+        let (soft, hard) = (soft.expect("timed"), hard.expect("timed"));
+        assert!(use_soft);
+        assert!(
+            hard > soft,
+            "hard {hard} must exceed soft {soft} or difficulty bonuses cannot fire"
+        );
+        // ...but a single move may not eat the clock: the ceiling stays bounded by
+        // the flag-safety max, with headroom for the 1.2x fail-low extension.
+        assert!(
+            hard <= soft * HARD_LIMIT_SOFT_MULT,
+            "hard {hard} exceeds {HARD_LIMIT_SOFT_MULT}x soft {soft}"
+        );
+        let max = 180_000 / 6 + 5_000; // the `max` branch for 30s < time < 120s.. see fn
+        assert!(
+            hard.saturating_mul(6) / 5 <= max.max(hard),
+            "fail-low extension off hard {hard} must stay within the safety max"
         );
     }
 
