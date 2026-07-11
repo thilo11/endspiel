@@ -526,19 +526,37 @@ impl SearchState {
 /// survive a long endgame conversion. With `inc == 0` this reduces to the
 /// original sudden-death `time/N` cap.
 ///
-/// The reserve is *not* free: it buys shallower search now against clock later,
-/// and below the `< 2 min` bullet tier that trade loses. Such a game never
-/// reaches the long endgame the reserve pays for. Measured, same net, engine vs
-/// engine: `10+0.1` −28.3 ±22.1 Elo (320 games), `180+2` +4.8 ±27.6 (144). So
-/// increment controls take the cap only from blitz upward; bullet keeps the
-/// tuned allocation. Sudden death is capped at every clock — there a flag is
-/// fatal, not merely expensive.
+/// The reserve is *not* free. `time/N` is a sudden-death constant — sized so the
+/// clock survives ~90 moves with no refund — and as a general per-move budget it
+/// forbids ever investing more than ~3% of the clock in a critical position. Below
+/// a long clock that trade loses badly: an increment control refunds every move,
+/// so the drain is slow and the game ends long before the reserve pays for itself.
+///
+/// Applying it everywhere was a mistake, caught in live play (2026-07-11): capped
+/// at every clock, the bot finished a 180+5 game having used **1 second of its
+/// 180-second bank** — peak spend pinned to the cap on every move, the rest of its
+/// thinking donated to ponder hits. Blitz went 22s/move → 10s, rapid 55s → 21s.
+/// A 144-game `180+2` A/B had called that "parity" (+4.8 ±27.6): the interval was
+/// far too wide to resolve it, and fastchess does not ponder, so the gate was blind
+/// to the interaction that makes it bite. Bullet said so outright: −28.3 ±22.1 Elo
+/// over 320 games at `10+0.1`.
+///
+/// So the reserve is charged only from the blitz ceiling up. The threshold is on the
+/// *remaining* clock, which is all `wtime` gives us — the engine cannot tell "10 min
+/// left in a classical game" from "a 10-minute rapid game". It must therefore sit
+/// BELOW the range a long clock drains through, or the cap switches itself off
+/// mid-game and the drain returns: gating at 15 min would have left 60rqL48Y capped
+/// only until move ~15, then uncapped for the rest. At 5 min a classical game stays
+/// capped all the way down, and blitz is exempt from move one.
+///
+/// Sudden death keeps its cap at *every* clock: there a flag is fatal, not merely
+/// expensive.
 fn long_game_time_cap(target_ms: u64, inc_ms: u64, time_ms: u64) -> u64 {
     let n: u64 = if time_ms > 300_000 { 38 } else { 34 };
     if inc_ms == 0 {
         return target_ms.min(time_ms / n);
     }
-    if time_ms < 120_000 {
+    if time_ms < 300_000 {
         return target_ms;
     }
     target_ms.min(inc_ms.saturating_add(time_ms / n))
@@ -3535,19 +3553,28 @@ mod tests {
     }
 
     #[test]
-    fn long_game_cap_exempts_bullet_but_not_bullet_sudden_death() {
-        // Below the 2-min bullet tier an increment control keeps the tuned
-        // allocation: capping it cost -28.3 Elo at 10+0.1 (see fn docs).
-        assert_eq!(long_game_time_cap(610, 100, 10_000), 610);
-        assert_eq!(long_game_time_cap(9_000, 2_000, 119_999), 9_000);
-        // At and above the tier the reserve applies (blitz measured at parity).
+    fn long_game_cap_charges_the_reserve_only_above_the_blitz_ceiling() {
+        // Bullet and blitz with an increment keep the tuned allocation. Capping
+        // them starved the bot in live play: a 180+5 game ended with 179 of its
+        // 180 seconds unspent, and 10+0.1 measured -28.3 Elo (see fn docs).
+        assert_eq!(long_game_time_cap(610, 100, 10_000), 610); // 10+0.1 bullet
+        assert_eq!(long_game_time_cap(22_500, 5_000, 180_000), 22_500); // 3+5 blitz
+        assert_eq!(long_game_time_cap(30_000, 5_000, 299_999), 30_000); // just under
+        // Above the blitz ceiling the reserve applies. Crucially it must STAY
+        // applied as a long clock drains: gating any higher (say 15 min) would
+        // uncap 60rqL48Y from move ~15 on and restore the very drain it fixes.
         assert_eq!(
-            long_game_time_cap(9_000, 2_000, 180_000),
-            2_000 + 180_000 / 34
+            long_game_time_cap(72_000, 5_000, 628_000), // 10:28 left, move 30
+            5_000 + 628_000 / 38
+        );
+        assert_eq!(
+            long_game_time_cap(72_000, 5_000, 1_800_000),
+            5_000 + 1_800_000 / 38
         );
         // Sudden death is capped at ANY clock — a flag there is fatal, and the
         // 180+0 mate-at-move-90 flag is what the cap originally fixed.
         assert_eq!(long_game_time_cap(610, 0, 10_000), 10_000 / 34);
+        assert_eq!(long_game_time_cap(15_000, 0, 180_000), 180_000 / 34);
     }
 
     #[test]
