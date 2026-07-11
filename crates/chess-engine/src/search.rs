@@ -512,22 +512,36 @@ impl SearchState {
 // Time management
 // ---------------------------------------------------------------------------
 
-/// Per-move time cap (ms) for sudden-death (no-increment) time controls.
+/// Per-move time cap (ms): never spend more than the clock can sustain.
 ///
-/// With no increment the clock must last the whole game with no refund, yet the
-/// piece-count `moves_left` estimate in `compute_time_limit` spends *faster* as
-/// pieces come off — so a long endgame conversion can flag even from a winning
-/// position (observed: a 180+0 game flagged ~move 90 while mating). Bound the
-/// slice to `time/N` (large `N`) so enough clock stays in reserve for a long
-/// game. Only pure sudden death is affected: any increment refunds the clock
-/// and is left to the standard tuning, so increment controls — including the
-/// `10+0.1` bench/SF-test path — are unchanged.
-fn sudden_death_time_cap(target_ms: u64, inc_ms: u64, time_ms: u64) -> u64 {
-    if inc_ms != 0 {
+/// The piece-count `moves_left` estimate in `compute_time_limit` spends *faster*
+/// as pieces come off, so the raw target is roughly a tenth of the remaining
+/// clock every move. That decays the clock geometrically toward `~10 * inc`,
+/// however long the game actually runs: a 180+0 game flagged ~move 90 while
+/// mating, and a 1800+5 game (60rqL48Y) reached move 57 with 1:00 left, having
+/// burned 29 of its 30 minutes and played the endgame on the increment.
+///
+/// Bound the slice to what is refundable — the increment, which is free — plus
+/// `time/N` of the bank (large `N`), so the clock decays slowly enough to
+/// survive a long endgame conversion. With `inc == 0` this reduces to the
+/// original sudden-death `time/N` cap.
+///
+/// The reserve is *not* free: it buys shallower search now against clock later,
+/// and below the `< 2 min` bullet tier that trade loses. Such a game never
+/// reaches the long endgame the reserve pays for. Measured, same net, engine vs
+/// engine: `10+0.1` −28.3 ±22.1 Elo (320 games), `180+2` +4.8 ±27.6 (144). So
+/// increment controls take the cap only from blitz upward; bullet keeps the
+/// tuned allocation. Sudden death is capped at every clock — there a flag is
+/// fatal, not merely expensive.
+fn long_game_time_cap(target_ms: u64, inc_ms: u64, time_ms: u64) -> u64 {
+    let n: u64 = if time_ms > 300_000 { 38 } else { 34 };
+    if inc_ms == 0 {
+        return target_ms.min(time_ms / n);
+    }
+    if time_ms < 120_000 {
         return target_ms;
     }
-    let n: u64 = if time_ms > 300_000 { 38 } else { 34 };
-    target_ms.min(time_ms / n)
+    target_ms.min(inc_ms.saturating_add(time_ms / n))
 }
 
 /// Returns (time_limit_ms, use_soft_limit, inc_ms, time_remaining_ms).
@@ -683,9 +697,9 @@ fn compute_time_limit(params: &SearchParams, board: &Board) -> (Option<u64>, boo
         // Apply slow mover scaling factor
         let target = target * params.slow_mover / 100;
 
-        // Sudden-death (no-increment) safety: keep enough clock in reserve for
-        // a long game (incl. long endgame conversions). See fn docs.
-        let target = sudden_death_time_cap(target, inc, time);
+        // Long-game safety: keep enough clock in reserve for a long game (incl.
+        // long endgame conversions) on every clock control. See fn docs.
+        let target = long_game_time_cap(target, inc, time);
 
         // Hard maximum with stronger low-time safety to reduce flags.
         let mut max = if time <= 30_000 {
@@ -3501,26 +3515,44 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     #[test]
-    fn sudden_death_cap_bounds_blitz_and_rapid_no_increment() {
+    fn long_game_cap_bounds_blitz_and_rapid_no_increment() {
         // 180+0: an over-large target is capped to time/34.
-        assert_eq!(sudden_death_time_cap(15_000, 0, 180_000), 180_000 / 34);
+        assert_eq!(long_game_time_cap(15_000, 0, 180_000), 180_000 / 34);
         // 10+0 rapid uses the gentler time/38 divisor.
-        assert_eq!(sudden_death_time_cap(40_000, 0, 600_000), 600_000 / 38);
+        assert_eq!(long_game_time_cap(40_000, 0, 600_000), 600_000 / 38);
     }
 
     #[test]
-    fn sudden_death_cap_noop_when_small_target_or_any_increment() {
+    fn long_game_cap_refunds_the_increment_on_top_of_the_bank_slice() {
+        // The increment is free, so it is spendable above the bank slice.
+        assert_eq!(
+            long_game_time_cap(60_000, 5_000, 1_800_000),
+            5_000 + 1_800_000 / 38
+        );
         // Target already under the cap is returned unchanged.
-        assert_eq!(sudden_death_time_cap(1_000, 0, 180_000), 1_000);
-        // ANY increment disables the cap (only pure sudden death is at risk),
-        // so the 10+0.1 (inc=100) bench/SF-test path is left unchanged.
-        assert_eq!(sudden_death_time_cap(15_000, 100, 180_000), 15_000);
-        assert_eq!(sudden_death_time_cap(15_000, 2_000, 180_000), 15_000);
+        assert_eq!(long_game_time_cap(1_000, 0, 180_000), 1_000);
+        assert_eq!(long_game_time_cap(3_000, 2_000, 180_000), 3_000);
+    }
+
+    #[test]
+    fn long_game_cap_exempts_bullet_but_not_bullet_sudden_death() {
+        // Below the 2-min bullet tier an increment control keeps the tuned
+        // allocation: capping it cost -28.3 Elo at 10+0.1 (see fn docs).
+        assert_eq!(long_game_time_cap(610, 100, 10_000), 610);
+        assert_eq!(long_game_time_cap(9_000, 2_000, 119_999), 9_000);
+        // At and above the tier the reserve applies (blitz measured at parity).
+        assert_eq!(
+            long_game_time_cap(9_000, 2_000, 180_000),
+            2_000 + 180_000 / 34
+        );
+        // Sudden death is capped at ANY clock — a flag there is fatal, and the
+        // 180+0 mate-at-move-90 flag is what the cap originally fixed.
+        assert_eq!(long_game_time_cap(610, 0, 10_000), 10_000 / 34);
     }
 
     #[test]
     fn allocated_time_reserves_clock_in_no_increment_blitz() {
-        // 180+0 opening: the sudden-death cap keeps the per-move slice well
+        // 180+0 opening: the long-game cap keeps the per-move slice well
         // below the old piece-count allocation (~time/24 + bank ≈ 9.4s),
         // leaving enough clock for a long game.
         let board = Board::starting_position();
@@ -3536,6 +3568,29 @@ mod tests {
         assert!(
             alloc <= 180_000 / 30,
             "allocated {alloc} too high for 180+0"
+        );
+    }
+
+    #[test]
+    fn allocated_time_survives_a_long_endgame_on_a_small_increment() {
+        // 1800+5 (60rqL48Y): a R+B+N endgame with 10:28 left used to allocate
+        // ~72s — 11% of the clock every move, which drained 30:00 down to 1:00
+        // by move 57. The clock must instead sustain a long conversion: spend
+        // no more than the increment plus a small slice of the bank.
+        let board =
+            Board::from_fen("3r4/1pk1b1p1/2b2p2/2P5/3P1KP1/P7/1P6/2R5 b - - 1 30").expect("valid");
+        let params = SearchParams {
+            white_time_ms: Some(628_000),
+            black_time_ms: Some(628_000),
+            white_inc_ms: Some(5_000),
+            black_inc_ms: Some(5_000),
+            ..Default::default()
+        };
+        let alloc = allocated_move_time_ms(&params, &board).expect("timed search");
+        assert!(alloc >= 5_000, "allocated {alloc} below the free increment");
+        assert!(
+            alloc <= 5_000 + 628_000 / 38,
+            "allocated {alloc} drains the clock faster than the increment refunds it"
         );
     }
 
