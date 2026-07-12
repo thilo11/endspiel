@@ -39,6 +39,15 @@ const MAX_PLY: usize = 128;
 const MAX_KILLERS: usize = 2;
 const MATE_THRESHOLD: i32 = 29_000;
 
+/// Iterations worth running once the root is confined to the tablebase's
+/// win-preserving moves. Syzygy has already chosen the move — the DTZ order is
+/// sticky and cp scores cannot displace it — so the search is only still here to
+/// promote a proven shorter mate and to demote a move whose child repeats (the
+/// 45geMoUz fix). Both act within a few plies; beyond that the search re-derives
+/// a decision it is not allowed to change, at full price (KQvKR: 6.4s of a 60s
+/// clock). Deep enough to keep those two mechanisms, cheap enough to be free.
+const TB_RESTRICTED_MAX_DEPTH: u8 = 12;
+
 /// Adjust a mate score from root-relative to position-relative before TT store.
 /// Non-mate scores pass through unchanged.
 #[inline]
@@ -1751,6 +1760,15 @@ pub fn iterative_deepening(
             {
                 break;
             }
+        }
+
+        // Root confined to tablebase wins: stop once the two things the search
+        // can still contribute have had their chance. `best_score > 0` is the
+        // guard — a top move scored draw-or-worse means the search found a
+        // repetition and the bucketed sort is mid-demotion, so keep going until
+        // a move that actually preserves the win leads.
+        if tb_restricted && base_depth >= TB_RESTRICTED_MAX_DEPTH && best_score.0 > 0 {
+            break;
         }
 
         if state.should_stop(stop) {
