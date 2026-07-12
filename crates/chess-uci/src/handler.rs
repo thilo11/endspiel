@@ -534,6 +534,11 @@ impl UciHandler {
     /// almost at once and banks the saved clock for harder positions. With no
     /// budget known (e.g. `go ponder infinite`), play the pondered result
     /// immediately.
+    ///
+    /// A position with a single legal move is settled here rather than by the
+    /// search's forced-move fast path: that path is gated on `!infinite`, and a
+    /// ponder search runs `infinite` by construction, so it never fires on this
+    /// route (lichess hXLfiVIo, 32.Bxd1 — the only legal move — spent 14s).
     fn handle_ponderhit(&mut self) {
         if !self.ponder_active {
             return;
@@ -541,15 +546,16 @@ impl UciHandler {
         self.ponder_active = false;
         let stop = Arc::clone(&self.stop_handle);
         let alloc = self.ponder_alloc_ms;
-        if alloc == 0 {
-            stop.store(true, Ordering::SeqCst);
-            return;
-        }
+        let forced = chess_core::generate_legal_moves(&self.board).len() == 1;
         let elapsed = self
             .ponder_start
             .map(|t| t.elapsed().as_millis() as u64)
             .unwrap_or(0);
-        let wait = ponderhit_think_ms(alloc, elapsed);
+        let wait = ponderhit_think_ms(alloc, elapsed, forced);
+        if wait == 0 {
+            stop.store(true, Ordering::SeqCst);
+            return;
+        }
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(wait));
             stop.store(true, Ordering::SeqCst);
@@ -804,7 +810,14 @@ const MIN_PONDERHIT_THINK_MS: u64 = 20;
 /// minus the `elapsed_ms` already spent pondering (the search has been running
 /// since `go ponder`), floored at `MIN_PONDERHIT_THINK_MS`. When pondering has
 /// already consumed the whole budget the move plays almost immediately.
-fn ponderhit_think_ms(alloc_ms: u64, elapsed_ms: u64) -> u64 {
+///
+/// `forced` (a single legal move) and a zero budget both return 0: play at once
+/// and bank the whole allocation. There is nothing to think about, so not even
+/// `MIN_PONDERHIT_THINK_MS` is owed.
+fn ponderhit_think_ms(alloc_ms: u64, elapsed_ms: u64, forced: bool) -> u64 {
+    if forced || alloc_ms == 0 {
+        return 0;
+    }
     alloc_ms
         .saturating_sub(elapsed_ms)
         .max(MIN_PONDERHIT_THINK_MS)
@@ -854,14 +867,31 @@ mod tests {
     #[test]
     fn ponderhit_credits_elapsed_ponder_time() {
         // Budget 1000 ms, already pondered 300 ms -> 700 ms remaining.
-        assert_eq!(ponderhit_think_ms(1000, 300), 700);
+        assert_eq!(ponderhit_think_ms(1000, 300, false), 700);
     }
 
     #[test]
     fn ponderhit_plays_promptly_when_budget_already_spent() {
         // Pondered past the whole budget -> floor, not zero, and never negative.
-        assert_eq!(ponderhit_think_ms(1000, 1000), MIN_PONDERHIT_THINK_MS);
-        assert_eq!(ponderhit_think_ms(1000, 5000), MIN_PONDERHIT_THINK_MS);
+        assert_eq!(
+            ponderhit_think_ms(1000, 1000, false),
+            MIN_PONDERHIT_THINK_MS
+        );
+        assert_eq!(
+            ponderhit_think_ms(1000, 5000, false),
+            MIN_PONDERHIT_THINK_MS
+        );
+    }
+
+    #[test]
+    fn ponderhit_spends_no_clock_on_a_forced_move() {
+        // A single legal move is worth zero clock however much budget is left.
+        // The search's own forced-move fast path cannot fire here: it is gated
+        // on !infinite and a ponder search is infinite by construction, so
+        // without this the engine sleeps out the entire remaining allocation
+        // (lichess hXLfiVIo 32.Bxd1, the only legal move, cost 14s).
+        assert_eq!(ponderhit_think_ms(20_000, 0, true), 0);
+        assert_eq!(ponderhit_think_ms(20_000, 9_000, true), 0);
     }
 
     #[test]
