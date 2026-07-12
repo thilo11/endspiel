@@ -83,11 +83,13 @@ fn ponderhit_on_a_forced_move_plays_at_once() {
     writeln!(stdin, "ponderhit").unwrap();
     stdin.flush().unwrap();
 
-    // Generous vs. the ~15-20s budget the bug burned, tight enough that only an
-    // immediate stop passes. Measured from `ponderhit`, so it does not depend on
-    // engine startup or on search speed in a debug build.
-    let budget = Duration::from_secs(3);
-    let best = bestmove_within(stdout, budget + Duration::from_secs(2));
+    // The bug sleeps out `alloc - elapsed`, which at this clock is ~19s — a wall
+    // time it would take on any machine, since it is a sleep and not work. So the
+    // threshold only has to sit well below that while clearing a release engine's
+    // spin-up on a slow 2-core CI runner (0.2s here). 5s leaves ~4x margin both
+    // ways. Measured from `ponderhit`, so process startup is not counted.
+    let budget = Duration::from_secs(5);
+    let best = bestmove_within(stdout, budget + Duration::from_secs(3));
     let elapsed = hit.elapsed();
 
     let _ = engine.kill();

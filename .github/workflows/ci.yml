@@ -28,3 +28,20 @@ jobs:
       - run: cargo clippy --workspace -- -D warnings
 
       - run: cargo test --workspace
+
+  # The debug tests above cannot cover behaviour that depends on the engine
+  # actually being fast: a debug build spends ~8s in search spin-up before its
+  # first node, so it never observes a stop flag promptly. Tests gated on
+  # `#[cfg_attr(debug_assertions, ignore)]` — currently the forced-move ponderhit
+  # guard — only run here. One OS is enough; the behaviour is not platform-specific.
+  release-tests:
+    name: release tests (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@1.97.0
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo test --release --workspace
