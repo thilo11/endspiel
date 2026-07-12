@@ -545,13 +545,11 @@ impl UciHandler {
         }
         self.ponder_active = false;
         let stop = Arc::clone(&self.stop_handle);
-        let alloc = self.ponder_alloc_ms;
-        let forced = chess_core::generate_legal_moves(&self.board).len() == 1;
         let elapsed = self
             .ponder_start
             .map(|t| t.elapsed().as_millis() as u64)
             .unwrap_or(0);
-        let wait = ponderhit_think_ms(alloc, elapsed, forced);
+        let wait = ponderhit_think_ms(&self.board, self.ponder_alloc_ms, elapsed);
         if wait == 0 {
             stop.store(true, Ordering::SeqCst);
             return;
@@ -811,11 +809,18 @@ const MIN_PONDERHIT_THINK_MS: u64 = 20;
 /// since `go ponder`), floored at `MIN_PONDERHIT_THINK_MS`. When pondering has
 /// already consumed the whole budget the move plays almost immediately.
 ///
-/// `forced` (a single legal move) and a zero budget both return 0: play at once
+/// A forced move (one legal move) and a zero budget both return 0: play at once
 /// and bank the whole allocation. There is nothing to think about, so not even
 /// `MIN_PONDERHIT_THINK_MS` is owed.
-fn ponderhit_think_ms(alloc_ms: u64, elapsed_ms: u64, forced: bool) -> u64 {
-    if forced || alloc_ms == 0 {
+///
+/// The forced check lives here, taking the board, rather than in the search: the
+/// search's own single-move fast path is gated on `!infinite`, and a ponder search
+/// is `infinite` by construction, so it can never fire on this route. Keeping the
+/// whole decision in one pure function is also what makes it testable in a debug
+/// build — a process-level test cannot be, because a debug engine spends ~8s in
+/// search spin-up before its first node.
+fn ponderhit_think_ms(board: &Board, alloc_ms: u64, elapsed_ms: u64) -> u64 {
+    if alloc_ms == 0 || chess_core::generate_legal_moves(board).len() == 1 {
         return 0;
     }
     alloc_ms
@@ -864,34 +869,51 @@ mod tests {
         Move::from_uci(uci).unwrap()
     }
 
+    /// lichess hXLfiVIo after 31...Rxd1+. Bxd1 is the ONLY legal move.
+    const FORCED_FEN: &str = "2b3k1/5ppp/2n2n2/2N1p3/2P1P3/4B3/2B2PPP/3r2K1 w - - 0 32";
+
+    fn board(fen: &str) -> Board {
+        Board::from_fen(fen).expect("valid fen")
+    }
+
     #[test]
     fn ponderhit_credits_elapsed_ponder_time() {
         // Budget 1000 ms, already pondered 300 ms -> 700 ms remaining.
-        assert_eq!(ponderhit_think_ms(1000, 300, false), 700);
+        assert_eq!(
+            ponderhit_think_ms(&Board::starting_position(), 1000, 300),
+            700
+        );
     }
 
     #[test]
     fn ponderhit_plays_promptly_when_budget_already_spent() {
         // Pondered past the whole budget -> floor, not zero, and never negative.
-        assert_eq!(
-            ponderhit_think_ms(1000, 1000, false),
-            MIN_PONDERHIT_THINK_MS
-        );
-        assert_eq!(
-            ponderhit_think_ms(1000, 5000, false),
-            MIN_PONDERHIT_THINK_MS
-        );
+        let b = Board::starting_position();
+        assert_eq!(ponderhit_think_ms(&b, 1000, 1000), MIN_PONDERHIT_THINK_MS);
+        assert_eq!(ponderhit_think_ms(&b, 1000, 5000), MIN_PONDERHIT_THINK_MS);
     }
 
     #[test]
     fn ponderhit_spends_no_clock_on_a_forced_move() {
         // A single legal move is worth zero clock however much budget is left.
-        // The search's own forced-move fast path cannot fire here: it is gated
-        // on !infinite and a ponder search is infinite by construction, so
-        // without this the engine sleeps out the entire remaining allocation
-        // (lichess hXLfiVIo 32.Bxd1, the only legal move, cost 14s).
-        assert_eq!(ponderhit_think_ms(20_000, 0, true), 0);
-        assert_eq!(ponderhit_think_ms(20_000, 9_000, true), 0);
+        // The search's own forced-move fast path cannot fire on the ponder route
+        // (it is gated on !infinite; a ponder search is infinite by construction),
+        // so without this the engine sleeps out the whole remaining allocation:
+        // hXLfiVIo 32.Bxd1, the only legal move, cost 14s in a game it finished
+        // on 1:08. Asserted on the real position, so the movegen path is exercised.
+        let forced = board(FORCED_FEN);
+        assert_eq!(chess_core::generate_legal_moves(&forced).len(), 1);
+        assert_eq!(ponderhit_think_ms(&forced, 20_000, 0), 0);
+        assert_eq!(ponderhit_think_ms(&forced, 20_000, 9_000), 0);
+    }
+
+    #[test]
+    fn ponderhit_still_thinks_when_there_is_a_choice() {
+        // The other side of the branch: the forced check must not swallow ordinary
+        // positions. Same game, move 28 (Rxd6) — 38 legal moves, a full budget.
+        let open = board("r1b3k1/3n1ppp/2nq1b2/4p3/2P1P1N1/1N2B3/2B2PPP/3R2K1 w - - 0 28");
+        assert!(chess_core::generate_legal_moves(&open).len() > 1);
+        assert_eq!(ponderhit_think_ms(&open, 20_000, 5_000), 15_000);
     }
 
     #[test]

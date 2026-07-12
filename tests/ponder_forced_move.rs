@@ -7,10 +7,19 @@
 //! can be held back until `ponderhit`. Nothing re-checked on the way out, so the
 //! engine sleeps out its whole remaining allocation on a move it cannot choose.
 //!
-//! This drives the real UCI route rather than the time-management helper: the
-//! bug was structural (which code path is taken), not arithmetic, so a unit test
-//! on the budget maths would have stayed green. It is also invisible to the h2h
-//! gate, because fastchess does not ponder.
+//! This drives the real UCI route end-to-end, which the unit tests in
+//! `chess-uci` cannot: they check the decision, this checks that a live engine
+//! process actually plays the move at once. It is invisible to the h2h gate,
+//! because fastchess does not ponder.
+//!
+//! RELEASE ONLY. A debug engine spends ~8 seconds in search spin-up (zeroing the
+//! history/correction tables) before it searches its first node, so it cannot
+//! observe the stop flag promptly and any wall-clock assertion here is meaningless
+//! — measured: 0.00s to answer `ponderhit` in release, 9-14s in debug, and the
+//! debug figure does not scale with the clock, proving it is spin-up and not the
+//! budget. CI runs `cargo test --workspace` in debug, so this is ignored there;
+//! the debug-safe guard is `ponderhit_spends_no_clock_on_a_forced_move` in
+//! `chess-uci`. Run it with `cargo test --release`.
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdout, Command, Stdio};
@@ -50,6 +59,10 @@ fn spawn_engine() -> Child {
 }
 
 #[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "debug builds spend ~8s in search spin-up; run with --release"
+)]
 fn ponderhit_on_a_forced_move_plays_at_once() {
     let mut engine = spawn_engine();
     let mut stdin = engine.stdin.take().expect("stdin");
