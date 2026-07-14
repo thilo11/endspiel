@@ -1411,8 +1411,9 @@ pub fn iterative_deepening(
     // conversion first). This is the one thing the search cannot do on its
     // own: interior WDL probes fire only at halfmove_clock == 0, so inside a
     // conversion the search sees no tablebase gradient at all and would drift
-    // toward the 50-move or repetition draw. While restricted, the iteration
-    // re-sort keeps this order sticky (see the bucketed sort in the ID loop):
+    // toward the 50-move or repetition draw. While restricted, the order is
+    // sticky end to end: the bucketed sort in the ID loop, the unsorted
+    // working list, and the post-iteration head selection all preserve it, so
     // cp noise cannot displace the progress move; only a proven mate promotes
     // a move and only a draw-or-worse score (a repetition the search actually
     // saw) demotes one. Single-PV play only; multi-PV keeps the full list.
@@ -1519,8 +1520,10 @@ pub fn iterative_deepening(
         // If the best move has been highly stable, ensure it is searched first
         // at root regardless of TT or score ordering. In PVS, the first move
         // gets a full window while others get null windows — this ensures a
-        // long-stable move isn't displaced by SMP TT noise.
-        if best_move_stability >= 4 && !best_move.is_null() {
+        // long-stable move isn't displaced by SMP TT noise. Not in
+        // TB-restricted mode: there the master order IS the choice and must
+        // stay in tablebase order.
+        if !tb_restricted && best_move_stability >= 4 && !best_move.is_null() {
             for i in 1..root_move_scores.len() {
                 if root_move_scores[i].0 == best_move {
                     root_move_scores.swap(0, i);
@@ -1550,7 +1553,14 @@ pub fn iterative_deepening(
                     }
                 })
                 .collect();
-            working_scores.sort_by_key(|b| std::cmp::Reverse(b.1));
+            // In TB-restricted mode the master list is already in the bucketed
+            // tablebase order; a cp re-sort here would hand the full-window
+            // slot to whichever shuffle move scored highest last iteration and
+            // defeat the whole restriction (lichess xp85KNLq: 28 moves of
+            // queen checks in a TB-won KQvKR, halfmove clock at 95).
+            if !tb_restricted {
+                working_scores.sort_by_key(|b| std::cmp::Reverse(b.1));
+            }
 
             let mut pv = Vec::new();
             let score;
@@ -1657,6 +1667,36 @@ pub fn iterative_deepening(
         // PV with a DTZ "mate in N" line — that line assumes optimal defence and
         // breaks into a repetition the moment the defender deviates (lichess
         // R2KlN7mg perpetual trap, see the regression test).
+        //
+        // ...with one exception: in TB-restricted mode the searched argmax must
+        // not pick the move either. Every listed move preserves the win, so cp
+        // differences between them are noise, and inside a conversion with no
+        // zeroing move in horizon (pawnless KQvKR) the subtree never sees a
+        // tablebase score — the argmax is then a random shuffle check (lichess
+        // xp85KNLq drifted to halfmove clock 95 that way). Re-derive the choice
+        // from the freshly propagated root scores: shortest proven mate first,
+        // else the first move in tablebase order that still scores as winning.
+        // If everything scores draw-or-worse the searched line stands — the
+        // bucketed sort is mid-demotion and the next iteration re-sorts.
+        if tb_restricted {
+            let mut mate_pick: Option<(Move, i32)> = None;
+            let mut win_pick: Option<(Move, i32)> = None;
+            for &(m, s) in root_move_scores.iter() {
+                if Score(s).is_mate() && s > 0 {
+                    if mate_pick.is_none_or(|(_, best)| s > best) {
+                        mate_pick = Some((m, s));
+                    }
+                } else if s > 0 && win_pick.is_none() {
+                    win_pick = Some((m, s));
+                }
+            }
+            if let Some((m, s)) = mate_pick.or(win_pick)
+                && line_results[0].1.first() != Some(&m)
+            {
+                let seldepth = line_results[0].2;
+                line_results[0] = (s, sanitize_pv(board, &[m]), seldepth);
+            }
+        }
 
         let score = line_results[0].0;
         let score_drop = if base_depth > 1 {
@@ -1981,7 +2021,13 @@ pub fn iterative_deepening(
     // significantly higher than the current best move's EWMA, revert.
     // This handles search instability where a tactically complex move
     // scores well for many depths but then drops at the final depth.
-    if !stable_move.is_null() && best_move != stable_move && stable_move_stability >= 6 {
+    // Not in TB-restricted mode: a displacement there is a deliberate
+    // demotion/promotion, and cp EWMAs must not resurrect a demoted move.
+    if !tb_restricted
+        && !stable_move.is_null()
+        && best_move != stable_move
+        && stable_move_stability >= 6
+    {
         let stable_ewma = root_move_ewma
             .iter()
             .find(|(m, _)| *m == stable_move)
@@ -3983,6 +4029,7 @@ mod tests {
         moves_uci: &str,
         max_depth: u8,
         syzygy_tb: Option<SyzygyTB>,
+        use_nnue: bool,
     ) -> SearchResult {
         let moves_uci = moves_uci.to_owned();
         std::thread::Builder::new()
@@ -4007,7 +4054,7 @@ mod tests {
                 let tt = Arc::new(SharedTT::new(16));
                 let params = SearchParams {
                     max_depth,
-                    use_nnue: false,
+                    use_nnue,
                     ..Default::default()
                 };
                 let root_tb_ranking = syzygy_tb
@@ -4066,7 +4113,7 @@ mod tests {
                      f4g6 e5e6 g6f4 e6e5 g3g4 f5g4 f3g4 e5e4 f4h5 a4d1 h5g3 e4e3 g3f5 e3f2 f5h4 \
                      f2g3 h4f5 g3f2 g2g3 f2f3 g5h4 f3e4 f5d6 e4e5 d6c4 e5f6 g4g5 f6g7 c4e3 d1a4 \
                      e3d5 g7h7 h4g4 a4d7 g4h5 d7e8 h5g4 e8d7 g4h4 d7a4";
-        let result = search_game_with_syzygy(moves, 16, Some(tb));
+        let result = search_game_with_syzygy(moves, 16, Some(tb), false);
         assert_ne!(
             result.best_move.to_uci(),
             "h4h5",
@@ -4077,6 +4124,45 @@ mod tests {
             result.best_move.to_uci(),
             "d5f4",
             "must play the DTZ-progress move Nf4 instead of shuffling, score={}",
+            result.score
+        );
+    }
+
+    #[test]
+    fn tb_order_beats_cp_argmax_from_lichess_xp85knlq() {
+        // lichess.org/xp85KNLq: TB-won KQvKR, converted only after the
+        // halfmove clock hit 95/100. Every root move here preserves the win,
+        // so their cp scores are pure noise — but the searched argmax (a
+        // queen check) was displacing the DTZ head, and with no zeroing move
+        // in a pawnless ending the subtree never sees a tablebase score, so
+        // the engine shuffle-checked for 28 moves without progress. At move
+        // 81 the DTZ head is Kf4 (dtz 43, fresh child, the probe's own
+        // recommendation); the game played Qa7+ (dtz 49). The choice must
+        // follow the tablebase order, not the cp ordering.
+        let _guard = crate::syzygy::syzygy_test_lock()
+            .lock()
+            .expect("lock syzygy test mutex");
+        let path = syzygy_path();
+        if !path.exists() {
+            return;
+        }
+        let tb = SyzygyTB::new(path.to_string_lossy().as_ref()).expect("load syzygy tables");
+        // Full game up to and including 80...Rd5 (White to move 81).
+        let moves = "d2d4 d7d5 c2c4 d5c4 e2e3 e7e6 f1c4 g8f6 g1f3 c7c5 e1g1 c5d4 e3d4 f8e7 b1c3 e8g8 f1e1 \
+                     b8c6 a2a3 d8c7 c4a2 f8d8 c1e3 c8d7 d1c2 d7e8 a1d1 c7a5 d4d5 e6d5 a2b1 g7g6 h2h3 d8d6 \
+                     b1a2 a8c8 d1d3 d6d7 c2d2 c8d8 b2b4 a5a3 c3d5 a3d3 d2d3 f6d5 e3g5 e7g5 f3g5 c6b4 d3a3 \
+                     b4a2 a3a2 d7d6 a2a7 e8c6 e1d1 h7h6 g5e4 d6e6 f2f3 b7b5 a7d4 b5b4 d4d2 g8h7 d1c1 c6a8 \
+                     h3h4 e6b6 h4h5 b4b3 e4c5 d8e8 c1a1 b3b2 a1b1 g6h5 b1b2 b6g6 d2d4 h5h4 g1h2 a8c6 d4h4 \
+                     d5e3 h4f4 h7g7 f4d4 g7g8 c5d3 g6g5 d4a7 e3c4 b2b8 c4e5 b8e8 c6e8 d3f4 e8c6 f4e2 g5h5 \
+                     h2g1 h5g5 g1f1 e5g6 e2c3 g6f8 f1f2 g5g6 a7e7 f8e6 c3e2 g6g5 e7f6 g5g6 f6e5 g6g5 e5b8 \
+                     g8g7 b8d6 c6a4 f3f4 g5g4 g2g3 h6h5 e2d4 g7h7 d4e6 f7e6 d6e6 a4c2 f4f5 g4g7 f5f6 g7a7 \
+                     f6f7 h7g7 f7f8q g7f8 e6c8 f8f7 c8c2 a7d7 g3g4 h5g4 c2c4 f7e7 c4g4 d7d6 g4b4 e7d7 b4b7 \
+                     d7d8 f2f3 d6d1 b7b6 d8d7 f3g4 d1d5";
+        let result = search_game_with_syzygy(moves, 16, Some(tb), true);
+        assert_eq!(
+            result.best_move.to_uci(),
+            "g4f4",
+            "must play the DTZ head Kf4, not the cp-argmax shuffle check, score={}",
             result.score
         );
     }

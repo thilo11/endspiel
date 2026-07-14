@@ -74,6 +74,14 @@ pub struct UciHandler {
     /// yet arrived. While set, the search runs in `infinite` mode and the
     /// resulting move is held back until `ponderhit`/`stop`.
     ponder_active: bool,
+    /// Shared with the search thread: true from `go ponder` until
+    /// `ponderhit`/`stop`. The thread's hold-back loop watches this (not just
+    /// the stop flag), so a search that finished while pondering releases its
+    /// move the moment the hit arrives instead of sleeping out the remaining
+    /// budget — after `ponderhit`, a finished search has nothing left to buy
+    /// with the clock (mate-break and TB-restricted roots finish in
+    /// milliseconds). Fresh per `go`, like `stop_handle`.
+    ponder_pending: Arc<AtomicBool>,
     /// Move-time budget (ms) to apply once `ponderhit` converts the ongoing
     /// ponder search into our real search.
     ponder_alloc_ms: u64,
@@ -105,6 +113,7 @@ impl UciHandler {
             show_wdl: false,
             multi_pv: 1,
             ponder_active: false,
+            ponder_pending: Arc::new(AtomicBool::new(false)),
             ponder_alloc_ms: 0,
             ponder_start: None,
             history: Arc::new(Mutex::new(PersistentHistory::new())),
@@ -296,19 +305,31 @@ impl UciHandler {
     }
 
     fn handle_isready(&mut self) {
-        // Wait for any pending search to finish before responding.
-        self.wait_for_search();
-        // Allocate the TT at the configured size now that all setoptions
-        // have been processed.  If the GUI never sent setoption Hash, apply
-        // the device-adaptive default here (deferred from Engine::new to avoid
-        // allocating it × concurrency at startup).
-        if !self.hash_explicitly_set {
-            let mb = chess_common::platform::default_hash_mb(self.engine.num_threads());
-            self.engine.set_hash_mb(mb);
-            log::info!(
-                "Hash defaulting to {mb} MB for {} threads (no setoption received)",
-                self.engine.num_threads()
-            );
+        // `isready` may arrive mid-search or mid-ponder and must answer
+        // `readyok` without stopping anything (UCI spec) — and a pondering
+        // thread parks until `ponderhit`/`stop`, so joining it here would
+        // deadlock. Only reap a thread that has already finished; while one
+        // is running, skip straight to the ping reply and leave the deferred
+        // TT sizing for a quiet moment (resizing under a live search is not
+        // safe).
+        let search_running = self
+            .search_thread
+            .as_ref()
+            .is_some_and(|h| !h.is_finished());
+        if !search_running {
+            self.wait_for_search();
+            // Allocate the TT at the configured size now that all setoptions
+            // have been processed.  If the GUI never sent setoption Hash, apply
+            // the device-adaptive default here (deferred from Engine::new to avoid
+            // allocating it × concurrency at startup).
+            if !self.hash_explicitly_set {
+                let mb = chess_common::platform::default_hash_mb(self.engine.num_threads());
+                self.engine.set_hash_mb(mb);
+                log::info!(
+                    "Hash defaulting to {mb} MB for {} threads (no setoption received)",
+                    self.engine.num_threads()
+                );
+            }
         }
         send_response(&UciResponse::ReadyOk);
     }
@@ -381,6 +402,8 @@ impl UciHandler {
         // its own — the move is held back until `ponderhit` (which starts the
         // clock, see handle_ponderhit) or `stop` (ponder-miss / quit).
         let is_ponder = params.ponder;
+        self.ponder_pending = Arc::new(AtomicBool::new(is_ponder));
+        let ponder_pending = Arc::clone(&self.ponder_pending);
         if is_ponder {
             self.ponder_alloc_ms =
                 chess_engine::search::allocated_move_time_ms(&search_params, &self.board)
@@ -489,12 +512,22 @@ impl UciHandler {
                 };
 
                 // Pondering: do not surrender the move until we are told to play
-                // it. `ponderhit` converts this into a timed search that trips
-                // `stop` after the allocated budget; a `stop` (ponder-miss or quit)
-                // trips it immediately. This guarantees we never emit a move
-                // mid-ponder, even if the search resolves the position early.
+                // it (`ponderhit` or `stop`, which clear `ponder_pending`). This
+                // guarantees we never emit a move mid-ponder, even if the search
+                // resolves the position early.
+                //
+                // The hold watches `ponder_pending` and deliberately NOT the
+                // shared stop flag: pool.search stores `stop = true` itself to
+                // terminate its helper threads whenever the main thread finishes
+                // early (mate break, TB-restricted root, depth cap), and a hold
+                // keyed on `stop` then leaks the bestmove mid-ponder — a UCI
+                // protocol violation the GUI answers with a desynced ponder
+                // state. Conversely, holding until `stop` alone would sit on a
+                // finished search for the whole remaining budget after
+                // `ponderhit`. Watching the handler-owned flag fixes both: the
+                // move plays the instant the GUI asks for it and never before.
                 if is_ponder {
-                    while !stop.load(Ordering::SeqCst) {
+                    while ponder_pending.load(Ordering::SeqCst) {
                         thread::sleep(Duration::from_millis(2));
                     }
                 }
@@ -520,6 +553,7 @@ impl UciHandler {
         // A `stop` ends any pondering (ponder-miss or quit): the held-back
         // move is released as soon as the stop flag is observed.
         self.ponder_active = false;
+        self.ponder_pending.store(false, Ordering::SeqCst);
         // Signal the search to stop
         self.stop_handle.store(true, Ordering::SeqCst);
         // Wait for the search thread to finish
@@ -533,7 +567,9 @@ impl UciHandler {
     /// only the *remaining* time — a well-pondered (e.g. obvious) move plays
     /// almost at once and banks the saved clock for harder positions. With no
     /// budget known (e.g. `go ponder infinite`), play the pondered result
-    /// immediately.
+    /// immediately. A search that already finished while pondering (mate
+    /// break, TB-restricted root) is released at once via `ponder_pending`,
+    /// not held for the remaining budget.
     ///
     /// A position with a single legal move is settled here rather than by the
     /// search's forced-move fast path: that path is gated on `!infinite`, and a
@@ -550,6 +586,10 @@ impl UciHandler {
             .map(|t| t.elapsed().as_millis() as u64)
             .unwrap_or(0);
         let wait = ponderhit_think_ms(&self.board, self.ponder_alloc_ms, elapsed);
+        // Release the hold-back loop: a search that already resolved the
+        // position while pondering plays its move now, regardless of `wait` —
+        // the timer below only limits a search that is still running.
+        self.ponder_pending.store(false, Ordering::SeqCst);
         if wait == 0 {
             stop.store(true, Ordering::SeqCst);
             return;

@@ -34,9 +34,10 @@ const FORCED_FEN: &str = "2b3k1/5ppp/2n2n2/2N1p3/2P1P3/4B3/2B2PPP/3r2K1 w - - 0 
 /// the order of 15-20s, which is what the bug spent.
 const GO_PONDER: &str = "go ponder wtime 137000 btime 246000 winc 5000 binc 5000";
 
-/// Read `bestmove ...` off the engine's stdout, with a hard timeout so a
-/// regression fails the test instead of hanging it.
-fn bestmove_within(stdout: ChildStdout, timeout: Duration) -> Option<String> {
+/// Spawn a reader that forwards the first `bestmove ...` line off the engine's
+/// stdout into a channel, so tests can both assert its absence (held back
+/// during ponder) and await it with a timeout.
+fn bestmove_channel(stdout: ChildStdout) -> mpsc::Receiver<String> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
@@ -46,7 +47,13 @@ fn bestmove_within(stdout: ChildStdout, timeout: Duration) -> Option<String> {
             }
         }
     });
-    rx.recv_timeout(timeout).ok()
+    rx
+}
+
+/// Read `bestmove ...` off the engine's stdout, with a hard timeout so a
+/// regression fails the test instead of hanging it.
+fn bestmove_within(stdout: ChildStdout, timeout: Duration) -> Option<String> {
+    bestmove_channel(stdout).recv_timeout(timeout).ok()
 }
 
 fn spawn_engine() -> Child {
@@ -104,5 +111,69 @@ fn ponderhit_on_a_forced_move_plays_at_once() {
         elapsed < budget,
         "forced move took {elapsed:?} after ponderhit; a single legal move must \
          cost no clock (the search's fast path is disabled while pondering)"
+    );
+}
+
+/// White mates in 1 (Qg7#): the iterative-deepening loop breaks as soon as a
+/// mate within 3 moves is proven, so the ponder search finishes in
+/// milliseconds and the thread parks in the hold-back loop.
+const MATE_IN_ONE_FEN: &str = "7k/8/5K2/8/8/8/8/6Q1 w - - 0 1";
+
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "debug builds spend ~8s in search spin-up; run with --release"
+)]
+fn ponderhit_after_search_completed_plays_at_once() {
+    // Regression for the hold-back loop watching the shared stop flag: when a
+    // ponder search resolves the position early (mate break here;
+    // TB-restricted roots behave the same), pool.search stores `stop = true`
+    // itself to shut down its helper threads — and a hold keyed on `stop`
+    // then leaks the bestmove MID-PONDER, a UCI protocol violation. The move
+    // must stay held until `ponderhit`, then play at once (not sleep out the
+    // remaining allocation on a search that is no longer running).
+    let mut engine = spawn_engine();
+    let mut stdin = engine.stdin.take().expect("stdin");
+    let stdout = engine.stdout.take().expect("stdout");
+
+    writeln!(stdin, "uci").unwrap();
+    writeln!(stdin, "isready").unwrap();
+    writeln!(stdin, "position fen {MATE_IN_ONE_FEN}").unwrap();
+    writeln!(stdin, "{GO_PONDER}").unwrap();
+    stdin.flush().unwrap();
+
+    let bestmove = bestmove_channel(stdout);
+
+    // Give the search ample time to prove the mate and break out of the ID
+    // loop; the move must still be held back for the whole wait.
+    thread::sleep(Duration::from_millis(1500));
+    if let Ok(early) = bestmove.try_recv() {
+        let _ = engine.kill();
+        let _ = engine.wait();
+        panic!("bestmove leaked mid-ponder ({early}); it must be held until ponderhit/stop");
+    }
+
+    let hit = Instant::now();
+    writeln!(stdin, "ponderhit").unwrap();
+    stdin.flush().unwrap();
+
+    // The budget-timer bug waits out `alloc - elapsed` (~19s at these clocks)
+    // on a search that is no longer running. Same threshold reasoning as above.
+    let budget = Duration::from_secs(5);
+    let best = bestmove.recv_timeout(budget + Duration::from_secs(3)).ok();
+    let elapsed = hit.elapsed();
+
+    let _ = engine.kill();
+    let _ = engine.wait();
+
+    let best = best.expect("engine never answered ponderhit with a bestmove");
+    assert!(
+        best.starts_with("bestmove g1g7"),
+        "Qg7# is mate in one, got: {best}"
+    );
+    assert!(
+        elapsed < budget,
+        "finished ponder search took {elapsed:?} after ponderhit; a completed \
+         search must release its move at once, not sleep out the budget"
     );
 }
