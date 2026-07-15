@@ -55,6 +55,13 @@ pub struct SearchParams {
     pub multi_pv: usize,
     /// Tunable search parameters (SPSA targets).
     pub tune: TuneParams,
+    /// Set while this is a `go ponder` search. While the flag is true every
+    /// time-based stop is suspended (the UCI layer holds the move back
+    /// anyway); `ponderhit`/`stop` clear it, which switches the running
+    /// search to normal soft/hard time management. Elapsed time is measured
+    /// from the search start, so time already pondered is credited against
+    /// the budget automatically.
+    pub ponder: Option<Arc<AtomicBool>>,
 }
 
 /// Search parameters that can be tuned via SPSA.
@@ -117,6 +124,7 @@ impl Default for SearchParams {
             singular_ext_mode: 1,
             multi_pv: 1,
             tune: TuneParams::default(),
+            ponder: None,
         }
     }
 }

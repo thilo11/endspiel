@@ -114,6 +114,113 @@ fn ponderhit_on_a_forced_move_plays_at_once() {
     );
 }
 
+/// Forward every stdout line into a channel (the bestmove-only channel above
+/// cannot observe `info string tm` lines).
+fn lines_channel(stdout: ChildStdout) -> mpsc::Receiver<String> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if tx.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    rx
+}
+
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "debug builds spend ~8s in search spin-up; run with --release"
+)]
+fn ponderhit_activates_difficulty_time_management() {
+    // A pondered search must get the same difficulty-adaptive soft-limit
+    // machinery as a plain `go` (lichess gmsfUArc: five flat ~4.75s ponderhit
+    // moves while the eval slid −0.7→−1.6 with 160s banked). The observable
+    // is the time manager's own debug line: with ENDSPIEL_TM_DEBUG=1 the
+    // soft-limit block prints `info string tm ...` once per completed
+    // iteration — it must stay silent while pondering (no budget is running)
+    // and start printing after `ponderhit`.
+    let mut engine = Command::new(env!("CARGO_BIN_EXE_endspiel"))
+        .env("ENDSPIEL_TM_DEBUG", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn the endspiel binary");
+    let mut stdin = engine.stdin.take().expect("stdin");
+    let lines = lines_channel(engine.stdout.take().expect("stdout"));
+
+    writeln!(stdin, "uci").unwrap();
+    writeln!(stdin, "isready").unwrap();
+    // Real move history: probing by bare FEN gives game_ply == 0, which trips
+    // the early-opening cap and distorts the budgets this test observes.
+    writeln!(
+        stdin,
+        "position startpos moves e2e4 e7e5 g1f3 b8c6 f1c4 g8f6 d2d3 f8c5"
+    )
+    .unwrap();
+    writeln!(stdin, "go ponder wtime 60000 btime 60000 winc 0 binc 0").unwrap();
+    stdin.flush().unwrap();
+
+    // Let the ponder search run several iterations on the opponent's clock.
+    thread::sleep(Duration::from_millis(900));
+    let mut pre_hit = Vec::new();
+    while let Ok(line) = lines.try_recv() {
+        pre_hit.push(line);
+    }
+    assert!(
+        !pre_hit.iter().any(|l| l.starts_with("bestmove")),
+        "bestmove leaked mid-ponder"
+    );
+    assert!(
+        !pre_hit.iter().any(|l| l.contains("info string tm")),
+        "time manager ran during ponder; every time-based stop must be \
+         suspended until ponderhit (got: {:?})",
+        pre_hit
+            .iter()
+            .find(|l| l.contains("info string tm"))
+            .unwrap()
+    );
+
+    writeln!(stdin, "ponderhit").unwrap();
+    stdin.flush().unwrap();
+
+    // From here the search self-manages: it must produce at least one tm
+    // decision line and then a bestmove well inside the hard limit.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut saw_tm = false;
+    let mut best = None;
+    while Instant::now() < deadline {
+        match lines.recv_timeout(Duration::from_millis(200)) {
+            Ok(line) => {
+                if line.contains("info string tm") {
+                    saw_tm = true;
+                }
+                if line.starts_with("bestmove") {
+                    best = Some(line);
+                    break;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    let _ = engine.kill();
+    let _ = engine.wait();
+
+    assert!(
+        best.is_some(),
+        "engine never answered ponderhit with a bestmove"
+    );
+    assert!(
+        saw_tm,
+        "no `info string tm` line after ponderhit: the soft-limit machinery \
+         did not take over the pondered search (flat-timer regression)"
+    );
+}
+
 /// White mates in 1 (Qg7#): the iterative-deepening loop breaks as soon as a
 /// mate within 3 moves is proven, so the ponder search finishes in
 /// milliseconds and the thread parks in the hold-back loop.

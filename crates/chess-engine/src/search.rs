@@ -204,6 +204,11 @@ struct SearchState {
     stop: bool,
     /// Syzygy tablebase handle for WDL probing (None if disabled or not loaded).
     syzygy_tb: Option<SyzygyTB>,
+    /// `go ponder` flag shared with the UCI handler. While it reads true every
+    /// time-based stop is suspended; `ponderhit`/`stop` clear it and normal
+    /// time management takes over, with elapsed measured from the search start
+    /// (time already pondered is thereby credited against the budget).
+    ponder: Option<Arc<AtomicBool>>,
 }
 
 impl SearchState {
@@ -268,11 +273,18 @@ impl SearchState {
             singular_ext_mode,
             stop: false,
             syzygy_tb,
+            ponder: None,
         }
     }
 
     fn elapsed_ms(&self) -> u64 {
         self.start_time.elapsed().as_millis() as u64
+    }
+
+    fn pondering(&self) -> bool {
+        self.ponder
+            .as_ref()
+            .is_some_and(|p| p.load(Ordering::Relaxed))
     }
 
     fn should_stop(&self, stop_flag: &AtomicBool) -> bool {
@@ -281,6 +293,7 @@ impl SearchState {
         }
         if let Some(limit) = self.time_limit_ms
             && self.elapsed_ms() >= limit
+            && !self.pondering()
         {
             return true;
         }
@@ -1269,6 +1282,7 @@ pub fn iterative_deepening(
         syzygy_tb,
         params.tune.clone(),
     );
+    state.ponder = params.ponder.clone();
 
     // Initialize root accumulator for NNUE
     if state.use_nnue {
@@ -1817,8 +1831,12 @@ pub fn iterative_deepening(
 
         // Everything below scales the *soft target*, not the hard ceiling: this is
         // the block that decides how hard the position is and therefore what this
-        // move is worth. `should_stop` above enforces the ceiling.
+        // move is worth. `should_stop` above enforces the ceiling. Skipped in
+        // full while pondering: the opponent has not moved, so no budget is
+        // running — the same block takes over the moment `ponderhit` clears
+        // the flag, with the pondered time already on the elapsed clock.
         if state.use_soft_limit
+            && !state.pondering()
             && let Some(limit) = state.soft_target_ms
         {
             // Dynamic soft time limit based on multiple factors:

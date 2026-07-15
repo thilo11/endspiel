@@ -2,7 +2,7 @@ use std::io::{self, BufRead};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use chess_common::{Board, Move, Score};
 use chess_engine::search::PersistentHistory;
@@ -82,13 +82,12 @@ pub struct UciHandler {
     /// with the clock (mate-break and TB-restricted roots finish in
     /// milliseconds). Fresh per `go`, like `stop_handle`.
     ponder_pending: Arc<AtomicBool>,
-    /// Move-time budget (ms) to apply once `ponderhit` converts the ongoing
-    /// ponder search into our real search.
+    /// Soft budget (ms) the current ponder search computed from the clocks at
+    /// `go ponder`. Only consulted at `ponderhit` to detect the no-budget case
+    /// (0 = no clock info → play the pondered result at once); a nonzero
+    /// budget is enforced by the search's own time manager, which activates
+    /// when `ponder_pending` clears.
     ponder_alloc_ms: u64,
-    /// When the current `go ponder` search started. On `ponderhit` the time
-    /// already spent pondering is credited against `ponder_alloc_ms` so a
-    /// well-pondered move plays promptly instead of burning a fresh budget.
-    ponder_start: Option<Instant>,
     /// Game-level history/correction tables, persisted across moves and shared
     /// into the per-`go` search thread. Reset on `ucinewgame`.
     history: Arc<Mutex<PersistentHistory>>,
@@ -115,7 +114,6 @@ impl UciHandler {
             ponder_active: false,
             ponder_pending: Arc::new(AtomicBool::new(false)),
             ponder_alloc_ms: 0,
-            ponder_start: None,
             history: Arc::new(Mutex::new(PersistentHistory::new())),
         }
     }
@@ -394,26 +392,31 @@ impl UciHandler {
             singular_ext_mode: self.engine.singular_ext_mode(),
             multi_pv: self.multi_pv,
             tune: self.engine.tune().clone(),
+            ponder: None,
         };
 
         // Pondering: the board is the predicted position (opponent's expected
-        // reply already applied). Compute the move-time budget we *would* spend
-        // on it, then run the search in `infinite` mode so it never returns on
-        // its own — the move is held back until `ponderhit` (which starts the
-        // clock, see handle_ponderhit) or `stop` (ponder-miss / quit).
+        // reply already applied). The search runs with its normal soft/hard
+        // budgets computed from the clocks, but the shared `ponder_pending`
+        // flag suspends every time-based stop while it is set — the search
+        // deepens freely on the opponent's clock and the move is held back
+        // until `ponderhit` (which clears the flag and hands control to the
+        // regular time manager, difficulty adaptation included) or `stop`
+        // (ponder-miss / quit). Elapsed time is measured from the search
+        // start, so time already pondered is credited against the budget.
         let is_ponder = params.ponder;
         self.ponder_pending = Arc::new(AtomicBool::new(is_ponder));
         let ponder_pending = Arc::clone(&self.ponder_pending);
         if is_ponder {
+            // Kept only to decide at `ponderhit` whether the search has any
+            // budget to manage (0 = no clock info -> play the move at once).
             self.ponder_alloc_ms =
                 chess_engine::search::allocated_move_time_ms(&search_params, &self.board)
                     .unwrap_or(0);
-            search_params.infinite = true;
+            search_params.ponder = Some(Arc::clone(&self.ponder_pending));
             self.ponder_active = true;
-            self.ponder_start = Some(Instant::now());
         } else {
             self.ponder_active = false;
-            self.ponder_start = None;
         }
 
         // Clone what we need for the search thread
@@ -561,43 +564,29 @@ impl UciHandler {
     }
 
     /// `ponderhit`: the opponent played the move we were pondering on, so the
-    /// ongoing (infinite) ponder search becomes our real search. The search has
-    /// already been running since `go ponder` (on the opponent's clock), so we
-    /// credit that elapsed time against the move budget and trip `stop` after
-    /// only the *remaining* time — a well-pondered (e.g. obvious) move plays
-    /// almost at once and banks the saved clock for harder positions. With no
-    /// budget known (e.g. `go ponder infinite`), play the pondered result
-    /// immediately. A search that already finished while pondering (mate
-    /// break, TB-restricted root) is released at once via `ponder_pending`,
-    /// not held for the remaining budget.
+    /// ongoing ponder search becomes our real search. Clearing `ponder_pending`
+    /// does two things at once: the hold-back loop releases a search that
+    /// already finished while pondering (mate break, TB-restricted root,
+    /// forced move) so it plays immediately, and a still-running search
+    /// switches to its normal soft/hard time management — difficulty
+    /// adaptation included, which the old flat `alloc - elapsed` timer
+    /// disconnected (a pondered move could never think longer on a collapsing
+    /// eval, nor shorter on a trivial one). The search's elapsed clock started
+    /// at `go ponder`, so time already pondered is credited automatically: a
+    /// well-pondered move plays almost at once and banks the saved clock.
     ///
-    /// A position with a single legal move is settled here rather than by the
-    /// search's forced-move fast path: that path is gated on `!infinite`, and a
-    /// ponder search runs `infinite` by construction, so it never fires on this
-    /// route (lichess hXLfiVIo, 32.Bxd1 — the only legal move — spent 14s).
+    /// With no budget known (e.g. `go ponder infinite` or no clock info),
+    /// there is nothing for the time manager to enforce — play the pondered
+    /// result immediately, as before.
     fn handle_ponderhit(&mut self) {
         if !self.ponder_active {
             return;
         }
         self.ponder_active = false;
-        let stop = Arc::clone(&self.stop_handle);
-        let elapsed = self
-            .ponder_start
-            .map(|t| t.elapsed().as_millis() as u64)
-            .unwrap_or(0);
-        let wait = ponderhit_think_ms(&self.board, self.ponder_alloc_ms, elapsed);
-        // Release the hold-back loop: a search that already resolved the
-        // position while pondering plays its move now, regardless of `wait` —
-        // the timer below only limits a search that is still running.
         self.ponder_pending.store(false, Ordering::SeqCst);
-        if wait == 0 {
-            stop.store(true, Ordering::SeqCst);
-            return;
+        if self.ponder_alloc_ms == 0 {
+            self.stop_handle.store(true, Ordering::SeqCst);
         }
-        thread::spawn(move || {
-            thread::sleep(Duration::from_millis(wait));
-            stop.store(true, Ordering::SeqCst);
-        });
     }
 
     fn wait_for_search(&mut self) {
@@ -839,35 +828,6 @@ fn validated_ponder_move(board: &Board, best: Move, pv: &[Move]) -> Option<Move>
     chess_core::is_legal_move(&after, reply).then_some(reply)
 }
 
-/// Minimum think time (ms) after a `ponderhit`, so a fully-pondered move still
-/// lets the in-flight search iteration settle rather than firing the instant
-/// the hit arrives.
-const MIN_PONDERHIT_THINK_MS: u64 = 20;
-
-/// Remaining think budget (ms) after a `ponderhit`: the move budget `alloc_ms`
-/// minus the `elapsed_ms` already spent pondering (the search has been running
-/// since `go ponder`), floored at `MIN_PONDERHIT_THINK_MS`. When pondering has
-/// already consumed the whole budget the move plays almost immediately.
-///
-/// A forced move (one legal move) and a zero budget both return 0: play at once
-/// and bank the whole allocation. There is nothing to think about, so not even
-/// `MIN_PONDERHIT_THINK_MS` is owed.
-///
-/// The forced check lives here, taking the board, rather than in the search: the
-/// search's own single-move fast path is gated on `!infinite`, and a ponder search
-/// is `infinite` by construction, so it can never fire on this route. Keeping the
-/// whole decision in one pure function is also what makes it testable in a debug
-/// build — a process-level test cannot be, because a debug engine spends ~8s in
-/// search spin-up before its first node.
-fn ponderhit_think_ms(board: &Board, alloc_ms: u64, elapsed_ms: u64) -> u64 {
-    if alloc_ms == 0 || chess_core::generate_legal_moves(board).len() == 1 {
-        return 0;
-    }
-    alloc_ms
-        .saturating_sub(elapsed_ms)
-        .max(MIN_PONDERHIT_THINK_MS)
-}
-
 fn find_legal_move(board: &Board, uci_str: &str) -> Option<Move> {
     let parsed = Move::from_uci(uci_str)?;
     let legal_moves = chess_core::generate_legal_moves(board);
@@ -899,61 +859,12 @@ fn send_response(response: &UciResponse) {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        MIN_PONDERHIT_THINK_MS, normalize_display_score, ponderhit_think_ms, validated_ponder_move,
-    };
+    use super::{normalize_display_score, validated_ponder_move};
     use chess_common::{Board, Move, Score};
     use chess_engine::syzygy::{TB_LOSS_SCORE, TB_WIN_SCORE};
 
     fn mv(uci: &str) -> Move {
         Move::from_uci(uci).unwrap()
-    }
-
-    /// lichess hXLfiVIo after 31...Rxd1+. Bxd1 is the ONLY legal move.
-    const FORCED_FEN: &str = "2b3k1/5ppp/2n2n2/2N1p3/2P1P3/4B3/2B2PPP/3r2K1 w - - 0 32";
-
-    fn board(fen: &str) -> Board {
-        Board::from_fen(fen).expect("valid fen")
-    }
-
-    #[test]
-    fn ponderhit_credits_elapsed_ponder_time() {
-        // Budget 1000 ms, already pondered 300 ms -> 700 ms remaining.
-        assert_eq!(
-            ponderhit_think_ms(&Board::starting_position(), 1000, 300),
-            700
-        );
-    }
-
-    #[test]
-    fn ponderhit_plays_promptly_when_budget_already_spent() {
-        // Pondered past the whole budget -> floor, not zero, and never negative.
-        let b = Board::starting_position();
-        assert_eq!(ponderhit_think_ms(&b, 1000, 1000), MIN_PONDERHIT_THINK_MS);
-        assert_eq!(ponderhit_think_ms(&b, 1000, 5000), MIN_PONDERHIT_THINK_MS);
-    }
-
-    #[test]
-    fn ponderhit_spends_no_clock_on_a_forced_move() {
-        // A single legal move is worth zero clock however much budget is left.
-        // The search's own forced-move fast path cannot fire on the ponder route
-        // (it is gated on !infinite; a ponder search is infinite by construction),
-        // so without this the engine sleeps out the whole remaining allocation:
-        // hXLfiVIo 32.Bxd1, the only legal move, cost 14s in a game it finished
-        // on 1:08. Asserted on the real position, so the movegen path is exercised.
-        let forced = board(FORCED_FEN);
-        assert_eq!(chess_core::generate_legal_moves(&forced).len(), 1);
-        assert_eq!(ponderhit_think_ms(&forced, 20_000, 0), 0);
-        assert_eq!(ponderhit_think_ms(&forced, 20_000, 9_000), 0);
-    }
-
-    #[test]
-    fn ponderhit_still_thinks_when_there_is_a_choice() {
-        // The other side of the branch: the forced check must not swallow ordinary
-        // positions. Same game, move 28 (Rxd6) — 38 legal moves, a full budget.
-        let open = board("r1b3k1/3n1ppp/2nq1b2/4p3/2P1P1N1/1N2B3/2B2PPP/3R2K1 w - - 0 28");
-        assert!(chess_core::generate_legal_moves(&open).len() > 1);
-        assert_eq!(ponderhit_think_ms(&open, 20_000, 5_000), 15_000);
     }
 
     #[test]
