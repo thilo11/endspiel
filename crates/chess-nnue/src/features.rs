@@ -6,14 +6,15 @@ const FILE_FOLD: [usize; 8] = [0, 1, 2, 3, 3, 2, 1, 0];
 /// Compute the feature index for a piece using king-relative (HalfKP) encoding.
 ///
 /// Uses 32 fine-grained king buckets — one per half-board king square — with a
-/// 704-feature base that merges both kings into a shared slot:
+/// 768-feature base that keeps the two king roles distinct:
 ///
 ///   [0,   320) — friendly non-king pieces  (5 types × 64 sq)
-///   [320, 384) — kings, both colors merged (64 sq)
-///   [384, 704) — enemy non-king pieces     (5 types × 64 sq)
+///   [320, 384) — friendly king              (64 sq)
+///   [384, 448) — enemy king                 (64 sq)
+///   [448, 768) — enemy non-king pieces     (5 types × 64 sq)
 ///
-/// This matches the Bullet `ChessBucketsMergedKingsMirrored` feature mapping
-/// with an identity bucket layout (bucket index = half-board king square).
+/// This is the mirrored Bullet `ChessBuckets` mapping with an identity bucket
+/// layout (bucket index = half-board king square).
 ///
 /// - `perspective`: which side's accumulator we're updating
 /// - `white_king`, `black_king`: absolute king squares (a1=0, h8=63)
@@ -49,19 +50,20 @@ pub fn feature_index(
         sq.index() ^ 56
     };
 
-    // 704-feature base encoding (merged kings):
-    //   Kings of both colors share [320, 384) — offset 0, piece_kind.index()*64 = 320.
+    // 768-feature base encoding (unmerged kings):
     //   Friendly non-king pieces use offset 0:   [0, 320).
-    //   Enemy non-king pieces use offset 384:    [384, 704).
+    //   Friendly king uses offset 0:              [320, 384).
+    //   Enemy king uses offset 64:                [384, 448).
+    //   Enemy non-king pieces use offset 128:     [448, 768).
     let is_friendly = perspective == piece_color;
-    let color_offset = if piece_kind == PieceKind::King || is_friendly {
-        0
-    } else {
-        384
+    let color_offset = match (is_friendly, piece_kind == PieceKind::King) {
+        (true, _) => 0,
+        (false, true) => 64,
+        (false, false) => 448,
     };
     let base = color_offset + piece_kind.index() * 64 + (sq_idx ^ h_flip);
 
-    bucket * 704 + base
+    bucket * 768 + base
 }
 
 #[cfg(test)]
@@ -113,16 +115,16 @@ mod tests {
         );
         // Same bucket, but file mirrored: d4 (file 3) → e4 (file 4) when king on h1
         assert_eq!(
-            idx_q / 704,
-            idx_k / 704,
+            idx_q / 768,
+            idx_k / 768,
             "bucket should match for symmetric king positions"
         );
         assert_ne!(idx_q, idx_k, "piece square should be mirrored");
     }
 
     #[test]
-    fn kings_merged() {
-        // Friendly and enemy kings at the same square should produce the same feature index
+    fn kings_use_distinct_feature_planes() {
+        // Friendly and enemy kings at the same square must be distinguishable.
         let wk = Square::new(4, 0); // e1 (white king, perspective=White)
         let bk = Square::new(4, 7); // e8
         let sq = Square::new(3, 3); // d4
@@ -131,9 +133,9 @@ mod tests {
             feature_index(Color::White, wk, bk, Color::White, PieceKind::King, sq);
         let enemy_king_idx = feature_index(Color::White, wk, bk, Color::Black, PieceKind::King, sq);
 
-        assert_eq!(
+        assert_ne!(
             friendly_king_idx, enemy_king_idx,
-            "friendly and enemy kings should map to the same feature (merged kings)"
+            "friendly and enemy kings should map to distinct feature planes"
         );
     }
 }
