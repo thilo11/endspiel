@@ -70,6 +70,9 @@ pub struct UciHandler {
     show_wdl: bool,
     /// Number of best lines to search (MultiPV). 1 = normal.
     multi_pv: usize,
+    /// Opening variety window in centipawns (0 = off). See
+    /// [`SearchParams::opening_variety`].
+    opening_variety: i32,
     /// True while a `go ponder` search is running and `ponderhit` has not
     /// yet arrived. While set, the search runs in `infinite` mode and the
     /// resulting move is held back until `ponderhit`/`stop`.
@@ -111,6 +114,7 @@ impl UciHandler {
             hash_explicitly_set: false,
             show_wdl: false,
             multi_pv: 1,
+            opening_variety: 0,
             ponder_active: false,
             ponder_pending: Arc::new(AtomicBool::new(false)),
             ponder_alloc_ms: 0,
@@ -265,6 +269,14 @@ impl UciHandler {
             },
         }));
         send_response(&UciResponse::Option(UciOptionDef {
+            name: "OpeningVariety".to_string(),
+            opt_type: UciOptionType::Spin {
+                default: 0,
+                min: 0,
+                max: 200,
+            },
+        }));
+        send_response(&UciResponse::Option(UciOptionDef {
             name: "UCI_ShowWDL".to_string(),
             opt_type: UciOptionType::Check { default: false },
         }));
@@ -375,6 +387,22 @@ impl UciHandler {
         // Stop any existing search first
         self.handle_stop();
 
+        // Opening variety: bookless play is deterministic (same eval => same
+        // game). When enabled, opening searches run with a widened MultiPV
+        // (the existing machinery) and the final move is drawn at random from
+        // the lines scoring within the window of the best. The men >= 24
+        // guard keeps this out of endgames and TB positions even for bare-FEN
+        // probes, where game_ply reads 0.
+        let opening_variety = self.opening_variety;
+        let variety_active = opening_variety > 0
+            && self.board.position_history.len() < 16
+            && self.board.all_occupancy().count() >= 24;
+        let effective_multi_pv = if variety_active {
+            self.multi_pv.max(4)
+        } else {
+            self.multi_pv
+        };
+
         let mut search_params = SearchParams {
             max_depth: params.depth.unwrap_or(64),
             max_nodes: params.nodes,
@@ -390,7 +418,7 @@ impl UciHandler {
             slow_mover: self.engine.slow_mover(),
             contempt: self.engine.contempt(),
             singular_ext_mode: self.engine.singular_ext_mode(),
-            multi_pv: self.multi_pv,
+            multi_pv: effective_multi_pv,
             tune: self.engine.tune().clone(),
             ponder: None,
         };
@@ -438,7 +466,13 @@ impl UciHandler {
         let syzygy_tb = self.engine.syzygy_tb().cloned();
         let book = self.engine.book();
         let show_wdl = self.show_wdl;
-        let multi_pv = self.multi_pv;
+        let multi_pv = effective_multi_pv;
+        // Final-depth MultiPV lines captured from the info stream for the
+        // variety draw: (depth, [(raw score, pv)]). Reset whenever a deeper
+        // iteration starts reporting.
+        let variety_lines: Arc<Mutex<(u8, Vec<(i32, Vec<Move>)>)>> =
+            Arc::new(Mutex::new((0, Vec::new())));
+        let variety_lines_cb = Arc::clone(&variety_lines);
         let stop = Arc::new(AtomicBool::new(false));
         self.stop_handle = Arc::clone(&stop);
         let history = Arc::clone(&self.history);
@@ -448,6 +482,17 @@ impl UciHandler {
             .spawn(move || {
                 let search_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let info_cb: InfoCallback = Box::new(move |info: &SearchInfo| {
+                        {
+                            let mut vl = variety_lines_cb
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner());
+                            if info.depth > vl.0 {
+                                *vl = (info.depth, Vec::new());
+                            }
+                            if info.depth == vl.0 && !info.pv.is_empty() {
+                                vl.1.push((info.score.0, info.pv.clone()));
+                            }
+                        }
                         let nps = (info.nodes * 1000).checked_div(info.time_ms);
                         // WDL uses the raw score (sigmoid formula is calibrated against it).
                         let wdl = if show_wdl && !info.score.is_mate() {
@@ -513,6 +558,49 @@ impl UciHandler {
                         }
                     }
                 };
+
+                // Opening variety draw: uniform pick among the final-depth
+                // MultiPV lines scoring within the window of the best. Mate
+                // scores are never randomized (neither giving nor defending).
+                let mut result = result;
+                if variety_active && !result.score.is_mate() && !result.best_move.is_null() {
+                    let vl = variety_lines.lock().unwrap_or_else(|p| p.into_inner());
+                    let top = vl.1.iter().map(|(s, _)| *s).max().unwrap_or(result.score.0);
+                    let eligible: Vec<&(i32, Vec<Move>)> = vl
+                        .1
+                        .iter()
+                        .filter(|(s, pv)| {
+                            !pv.is_empty()
+                                && !chess_common::Score(*s).is_mate()
+                                && *s >= top - opening_variety
+                        })
+                        .collect();
+                    if eligible.len() > 1 {
+                        let seed = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| (u64::from(d.subsec_nanos()) << 20) ^ d.as_secs())
+                            .unwrap_or(0x9E37_79B9_7F4A_7C15);
+                        let mut x = seed | 1;
+                        x ^= x << 13;
+                        x ^= x >> 7;
+                        x ^= x << 17;
+                        let pick = eligible[(x as usize) % eligible.len()];
+                        if pick.1[0] != result.best_move {
+                            log::info!(
+                                "opening variety: playing {} ({}cp) over {} ({}cp), {} candidates in {}cp window",
+                                pick.1[0].to_uci(),
+                                pick.0,
+                                result.best_move.to_uci(),
+                                result.score.0,
+                                eligible.len(),
+                                opening_variety
+                            );
+                        }
+                        result.score = chess_common::Score(pick.0);
+                        result.pv = pick.1.clone();
+                        result.best_move = pick.1[0];
+                    }
+                }
 
                 // Pondering: do not surrender the move until we are told to play
                 // it (`ponderhit` or `stop`, which clear `ponder_pending`). This
@@ -725,6 +813,14 @@ impl UciHandler {
                 {
                     self.multi_pv = n.clamp(1, 256);
                     log::info!("MultiPV set to {}", self.multi_pv);
+                }
+            }
+            "openingvariety" => {
+                if let Some(v) = value
+                    && let Ok(n) = v.trim().parse::<i32>()
+                {
+                    self.opening_variety = n.clamp(0, 200);
+                    log::info!("OpeningVariety set to {}", self.opening_variety);
                 }
             }
             "uci_showwdl" => {
