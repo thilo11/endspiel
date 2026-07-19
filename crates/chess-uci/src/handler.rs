@@ -54,6 +54,11 @@ fn engine_name_string() -> String {
     }
 }
 
+/// Final-depth MultiPV lines captured from the info stream for the opening
+/// variety draw: (depth, [(raw score, pv)]). Reset whenever a deeper
+/// iteration starts reporting.
+type VarietyLines = Arc<Mutex<(u8, Vec<(i32, Vec<Move>)>)>>;
+
 /// The main UCI protocol handler.
 pub struct UciHandler {
     board: Board,
@@ -467,11 +472,7 @@ impl UciHandler {
         let book = self.engine.book();
         let show_wdl = self.show_wdl;
         let multi_pv = effective_multi_pv;
-        // Final-depth MultiPV lines captured from the info stream for the
-        // variety draw: (depth, [(raw score, pv)]). Reset whenever a deeper
-        // iteration starts reporting.
-        let variety_lines: Arc<Mutex<(u8, Vec<(i32, Vec<Move>)>)>> =
-            Arc::new(Mutex::new((0, Vec::new())));
+        let variety_lines: VarietyLines = Arc::new(Mutex::new((0, Vec::new())));
         let variety_lines_cb = Arc::clone(&variety_lines);
         let stop = Arc::new(AtomicBool::new(false));
         self.stop_handle = Arc::clone(&stop);
