@@ -400,7 +400,7 @@ impl UciHandler {
         // probes, where game_ply reads 0.
         let opening_variety = self.opening_variety;
         let variety_active = opening_variety > 0
-            && self.board.position_history.len() < 16
+            && self.board.position_history.len() < 8
             && self.board.all_occupancy().count() >= 24;
         let effective_multi_pv = if variety_active {
             self.multi_pv.max(4)
