@@ -32,16 +32,29 @@ pub const LEGACY_NET_FILE_SIZE: usize = INPUT_SIZE * HIDDEN_SIZE * 2   // ft_wei
     + HIDDEN_SIZE * 2              // output_weights (i8)
     + 2; // output_bias (i16)
 
+/// Alignment the trainer pads the written file up to, so an on-disk net is
+/// `*_NET_FILE_SIZE` rounded up to the next multiple of this (48 bytes of
+/// padding for the current bucketed layout).
+const PAD_ALIGN: usize = 64;
+
 impl NnueNetwork {
     /// Parse a network from raw bytes (little-endian sequential format).
     /// Accepts both the bucketed and the legacy single-bucket layout.
+    ///
+    /// The size must match one of the two layouts, give or take the trailing
+    /// padding the trainer writes to align the final bias to a 64-byte
+    /// boundary. A plain `>=` here would silently accept any larger file —
+    /// notably the trainer's FP32 `raw.bin`, which is twice the size and whose
+    /// bytes reinterpreted as i16 produce a net that evaluates every position
+    /// as 0 rather than an error.
     pub fn from_bytes(data: &[u8]) -> Result<Self, &'static str> {
-        let bucketed = if data.len() >= NET_FILE_SIZE {
+        let fits = |expected: usize| (expected..expected + PAD_ALIGN).contains(&data.len());
+        let bucketed = if fits(NET_FILE_SIZE) {
             true
-        } else if data.len() >= LEGACY_NET_FILE_SIZE {
+        } else if fits(LEGACY_NET_FILE_SIZE) {
             false
         } else {
-            return Err("NNUE file too small");
+            return Err("NNUE file size matches neither the bucketed nor the legacy layout");
         };
 
         let mut offset = 0;
@@ -128,5 +141,36 @@ impl NnueNetwork {
         let net =
             Self::from_bytes(&data).map_err(|e| format!("invalid NNUE file '{path}': {e}"))?;
         Ok(Arc::new(net))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The trainer pads the written net up to a 64-byte boundary, so the real
+    /// on-disk size is larger than the computed layout size. Both must load.
+    #[test]
+    fn accepts_exact_and_padded_sizes() {
+        assert!(NnueNetwork::from_bytes(&vec![0u8; NET_FILE_SIZE]).is_ok());
+        assert!(NnueNetwork::from_bytes(&vec![0u8; NET_FILE_SIZE + 48]).is_ok());
+        assert!(NnueNetwork::from_bytes(&vec![0u8; LEGACY_NET_FILE_SIZE]).is_ok());
+    }
+
+    /// Regression: `from_bytes` used to length-check with `>=`, so the
+    /// trainer's FP32 `raw.bin` (twice the size) was accepted and reinterpreted
+    /// as i16 — yielding a net that silently evaluated every position as 0
+    /// instead of reporting the format mismatch.
+    #[test]
+    fn rejects_fp32_raw_checkpoint() {
+        let raw_fp32_len = NET_FILE_SIZE * 2;
+        assert!(NnueNetwork::from_bytes(&vec![0u8; raw_fp32_len]).is_err());
+    }
+
+    #[test]
+    fn rejects_truncated_and_overpadded() {
+        assert!(NnueNetwork::from_bytes(&vec![0u8; NET_FILE_SIZE - 1]).is_err());
+        assert!(NnueNetwork::from_bytes(&vec![0u8; NET_FILE_SIZE + PAD_ALIGN]).is_err());
+        assert!(NnueNetwork::from_bytes(&[]).is_err());
     }
 }
