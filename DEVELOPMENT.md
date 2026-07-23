@@ -99,8 +99,12 @@ main always advertises a version that is unambiguously *not* a release.
 
 1. On main, set `workspace.package.version` in `Cargo.toml` to the
    release version (drop the `-dev` suffix), e.g. `1.0.1-dev` → `1.0.1`.
-2. Commit (`chore: release 1.0.1`), tag (`git tag v1.0.1`), push tag —
-   CI builds the artifact matrix above.
+2. Commit (`chore: release 1.0.1`), tag (`git tag v1.0.1`), push tag.
+   The tag push does **not** trigger CI — `release.yml` is manual-only.
+   Dispatch it explicitly with the tag as input to build the artifact
+   matrix above and publish the release:
+   `gh workflow run release.yml -f tag=v1.0.1` (or Actions > Release >
+   Run workflow in the GitHub UI).
 3. **Immediately** bump to the next patch with a `-dev` suffix
    (`1.0.1` → `1.0.2-dev`) as a separate commit
    (`chore: bump version to 1.0.2-dev`).
