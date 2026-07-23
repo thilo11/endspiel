@@ -13,7 +13,7 @@ path = "src/main.rs"
 chess-common.workspace = true
 chess-core.workspace = true
 chess-engine.workspace = true
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 zstd = "0.13.3"
 rayon = "1.12.0"

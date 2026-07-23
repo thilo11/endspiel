@@ -6,7 +6,7 @@ resolver = "3"
 version = "1.4.1-dev"
 edition = "2024"
 license = "GPL-3.0-or-later"
-rust-version = "1.97.0"
+rust-version = "1.97.1"
 
 [workspace.dependencies]
 chess-common = { path = "crates/chess-common" }
@@ -19,7 +19,7 @@ bulletformat = "1.8.0"
 log = "0.4.33"
 env_logger = "0.11.11"
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
-thiserror = "2.0.18"
+thiserror = "2.0.19"
 
 [package]
 name = "endspiel-bin"

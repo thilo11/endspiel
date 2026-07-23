@@ -89,7 +89,7 @@ jobs:
         with:
           ref: ${{ inputs.tag }}
 
-      - uses: dtolnay/rust-toolchain@1.97.0
+      - uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: ${{ matrix.target }}
           components: ${{ matrix.pgo && 'llvm-tools-preview' || '' }}
@@ -171,7 +171,7 @@ jobs:
         with:
           ref: ${{ inputs.tag }}
 
-      - uses: dtolnay/rust-toolchain@1.97.0
+      - uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: aarch64-linux-android
 
