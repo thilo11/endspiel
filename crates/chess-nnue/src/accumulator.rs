@@ -13,7 +13,7 @@ use crate::network::NnueNetwork;
 pub struct Accumulator {
     pub white: [i16; HIDDEN_SIZE],
     pub black: [i16; HIDDEN_SIZE],
-    pub needs_refresh: bool,
+    needs_refresh: [bool; 2],
 }
 
 impl Default for Accumulator {
@@ -28,15 +28,21 @@ impl Accumulator {
         Self {
             white: [0i16; HIDDEN_SIZE],
             black: [0i16; HIDDEN_SIZE],
-            needs_refresh: true,
+            needs_refresh: [true; 2],
         }
     }
 
     /// Full recompute from scratch using the board state.
     pub fn refresh(&mut self, board: &Board, net: &NnueNetwork) {
-        self.needs_refresh = false;
-        self.white = *net.ft_biases;
-        self.black = *net.ft_biases;
+        self.refresh_perspective(board, net, Color::White);
+        self.refresh_perspective(board, net, Color::Black);
+    }
+
+    /// Recompute only one perspective. A king move changes the moving side's
+    /// feature bucket, but the opponent's bucket remains stable and can stay
+    /// incrementally updated.
+    pub fn refresh_perspective(&mut self, board: &Board, net: &NnueNetwork, perspective: Color) {
+        let mut values = *net.ft_biases;
 
         let white_king = board.king_square(Color::White);
         let black_king = board.king_square(Color::Black);
@@ -45,10 +51,30 @@ impl Accumulator {
             for &kind in &PieceKind::ALL {
                 let bb = board.pieces[color.index()][kind.index()];
                 for sq in bb.iter() {
-                    self.add_piece_inner(net, white_king, black_king, color, kind, sq);
+                    let idx = feature_index(perspective, white_king, black_king, color, kind, sq);
+                    let row = &net.ft_weights[idx];
+                    for i in 0..HIDDEN_SIZE {
+                        values[i] += row[i];
+                    }
                 }
             }
         }
+
+        match perspective {
+            Color::White => self.white = values,
+            Color::Black => self.black = values,
+        }
+        self.needs_refresh[perspective.index()] = false;
+    }
+
+    #[inline]
+    pub fn needs_refresh(&self, perspective: Color) -> bool {
+        self.needs_refresh[perspective.index()]
+    }
+
+    #[inline]
+    pub fn mark_refresh(&mut self, perspective: Color) {
+        self.needs_refresh[perspective.index()] = true;
     }
 
     /// Add a piece's feature weights to both perspectives.
@@ -76,15 +102,19 @@ impl Accumulator {
         kind: PieceKind,
         sq: Square,
     ) {
-        let w_idx = feature_index(Color::White, white_king, black_king, color, kind, sq);
-        let b_idx = feature_index(Color::Black, white_king, black_king, color, kind, sq);
-
-        let w_row = &net.ft_weights[w_idx];
-        let b_row = &net.ft_weights[b_idx];
-
-        for i in 0..HIDDEN_SIZE {
-            self.white[i] -= w_row[i];
-            self.black[i] -= b_row[i];
+        if !self.needs_refresh(Color::White) {
+            let idx = feature_index(Color::White, white_king, black_king, color, kind, sq);
+            let row = &net.ft_weights[idx];
+            for (value, &delta) in self.white.iter_mut().zip(row.iter()) {
+                *value -= delta;
+            }
+        }
+        if !self.needs_refresh(Color::Black) {
+            let idx = feature_index(Color::Black, white_king, black_king, color, kind, sq);
+            let row = &net.ft_weights[idx];
+            for (value, &delta) in self.black.iter_mut().zip(row.iter()) {
+                *value -= delta;
+            }
         }
     }
 
@@ -98,15 +128,19 @@ impl Accumulator {
         kind: PieceKind,
         sq: Square,
     ) {
-        let w_idx = feature_index(Color::White, white_king, black_king, color, kind, sq);
-        let b_idx = feature_index(Color::Black, white_king, black_king, color, kind, sq);
-
-        let w_row = &net.ft_weights[w_idx];
-        let b_row = &net.ft_weights[b_idx];
-
-        for i in 0..HIDDEN_SIZE {
-            self.white[i] += w_row[i];
-            self.black[i] += b_row[i];
+        if !self.needs_refresh(Color::White) {
+            let idx = feature_index(Color::White, white_king, black_king, color, kind, sq);
+            let row = &net.ft_weights[idx];
+            for (value, &delta) in self.white.iter_mut().zip(row.iter()) {
+                *value += delta;
+            }
+        }
+        if !self.needs_refresh(Color::Black) {
+            let idx = feature_index(Color::Black, white_king, black_king, color, kind, sq);
+            let row = &net.ft_weights[idx];
+            for (value, &delta) in self.black.iter_mut().zip(row.iter()) {
+                *value += delta;
+            }
         }
     }
 }
@@ -130,6 +164,7 @@ mod tests {
         let mut acc_inc = Accumulator::new();
         acc_inc.white = *net.ft_biases;
         acc_inc.black = *net.ft_biases;
+        acc_inc.needs_refresh = [false; 2];
         for &color in &[Color::White, Color::Black] {
             for &kind in &PieceKind::ALL {
                 let bb = board.pieces[color.index()][kind.index()];
@@ -175,5 +210,24 @@ mod tests {
 
         assert_eq!(acc.white, original_white);
         assert_eq!(acc.black, original_black);
+    }
+
+    #[test]
+    fn perspective_refresh_leaves_other_half_untouched() {
+        let net = NnueNetwork::embedded();
+        let board = Board::starting_position();
+
+        let mut expected = Accumulator::new();
+        expected.refresh(&board, &net);
+
+        let mut acc = expected.clone();
+        acc.white = [0; HIDDEN_SIZE];
+        acc.black = [123; HIDDEN_SIZE];
+        acc.mark_refresh(Color::White);
+        acc.refresh_perspective(&board, &net, Color::White);
+
+        assert_eq!(acc.white, expected.white);
+        assert_eq!(acc.black, [123; HIDDEN_SIZE]);
+        assert!(!acc.needs_refresh(Color::White));
     }
 }

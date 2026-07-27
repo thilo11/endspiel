@@ -3554,11 +3554,19 @@ fn capture_value(board: &Board, m: Move) -> i32 {
 
 fn evaluate_for_side(board: &Board, state: &mut SearchState, ply: u8) -> i32 {
     let eval = if state.use_nnue && (ply as usize) < MAX_PLY {
-        // Lazy refresh: king moves defer the accumulator recompute until here.
-        // The board is at position P_ply so refresh is always valid at this call site.
-        if state.accumulators[ply as usize].needs_refresh {
+        // Lazy per-perspective refresh: a king move changes only its own HalfKP
+        // bucket. The other perspective remains incrementally updated.
+        // The board is at position P_ply so refresh is valid at this call site.
+        let refresh_white = state.accumulators[ply as usize].needs_refresh(Color::White);
+        let refresh_black = state.accumulators[ply as usize].needs_refresh(Color::Black);
+        if refresh_white || refresh_black {
             let net = Arc::clone(&state.net);
-            state.accumulators[ply as usize].refresh(board, &net);
+            if refresh_white {
+                state.accumulators[ply as usize].refresh_perspective(board, &net, Color::White);
+            }
+            if refresh_black {
+                state.accumulators[ply as usize].refresh_perspective(board, &net, Color::Black);
+            }
         }
         // nnue_evaluate returns score from side-to-move perspective.
         // scale_for_endgame expects White's perspective, so flip for Black then flip back.
@@ -3617,21 +3625,21 @@ fn update_accumulator_for_move(
             .unwrap_or(PieceKind::Pawn)
     };
 
-    // King moves change the king bucket and require a full refresh.
-    // Non-king moves from a dirty parent also cannot be updated incrementally.
-    // In both cases: mark the destination accumulator as dirty and return —
-    // the refresh is deferred to evaluate_for_side so pruned nodes pay no cost.
-    if moving_kind == PieceKind::King || state.accumulators[src_ply].needs_refresh {
-        state.accumulators[dst_ply].needs_refresh = true;
-        return;
-    }
-
-    // Non-king move from a clean parent: incremental update.
+    // Clone the parent even when one perspective is dirty. Deltas keep the
+    // clean perspective exact; the dirty perspective is refreshed lazily if
+    // this node survives pruning and needs an evaluation.
     state.accumulators[dst_ply] = state.accumulators[src_ply].clone();
     let white_king = board.king_square(Color::White);
     let black_king = board.king_square(Color::Black);
     let net = &state.net;
     let acc = &mut state.accumulators[dst_ply];
+
+    // The moving king changes its own HalfKP bucket. Mark that perspective
+    // before applying deltas so add/sub work is performed only for the clean
+    // opponent perspective; the dirty half is rebuilt lazily if evaluated.
+    if moving_kind == PieceKind::King {
+        acc.mark_refresh(us);
+    }
 
     // Remove piece from source square
     acc.sub_piece(net, white_king, black_king, us, moving_kind, from);
@@ -3652,6 +3660,21 @@ fn update_accumulator_for_move(
         acc.add_piece(net, white_king, black_king, us, promo, to);
     } else {
         acc.add_piece(net, white_king, black_king, us, moving_kind, to);
+    }
+
+    // Castling also moves a rook. Previously every king move forced a full
+    // two-perspective refresh, which hid this delta; the opponent perspective
+    // now stays clean and must receive it explicitly.
+    let rook_move = match (flag, us) {
+        (MoveFlag::KingsideCastle, Color::White) => Some((Square::H1, Square::F1)),
+        (MoveFlag::KingsideCastle, Color::Black) => Some((Square::H8, Square::F8)),
+        (MoveFlag::QueensideCastle, Color::White) => Some((Square::A1, Square::D1)),
+        (MoveFlag::QueensideCastle, Color::Black) => Some((Square::A8, Square::D8)),
+        _ => None,
+    };
+    if let Some((rook_from, rook_to)) = rook_move {
+        acc.sub_piece(net, white_king, black_king, us, PieceKind::Rook, rook_from);
+        acc.add_piece(net, white_king, black_king, us, PieceKind::Rook, rook_to);
     }
 }
 
@@ -3699,6 +3722,67 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
+
+    fn assert_partial_king_refresh_matches_full(fen: &str, uci: &str) {
+        let mut board = Board::from_fen(fen).expect("valid test FEN");
+        let moving_side = board.side_to_move;
+        let net = NnueNetwork::embedded();
+        let tt = Arc::new(SharedTT::new(1));
+        let mut state = SearchState::new(
+            None,
+            None,
+            false,
+            0,
+            0,
+            None,
+            0,
+            0,
+            1,
+            &tt,
+            true,
+            Arc::clone(&net),
+            None,
+            TuneParams::default(),
+        );
+        state.accumulators[0].refresh(&board, &net);
+
+        let legal = chess_core::generate_legal_moves(&board);
+        let m = legal
+            .as_slice()
+            .iter()
+            .copied()
+            .find(|m| m.to_uci() == uci)
+            .unwrap_or_else(|| panic!("move {uci} is not legal in {fen}"));
+        let captured = board.make_move(m);
+        update_accumulator_for_move(&mut state, &board, m, captured, 0, 1);
+
+        let mut expected = Accumulator::new();
+        expected.refresh(&board, &net);
+        let incremental = &state.accumulators[1];
+        assert!(incremental.needs_refresh(moving_side));
+        assert!(!incremental.needs_refresh(moving_side.opposite()));
+        match moving_side {
+            Color::White => assert_eq!(incremental.black, expected.black),
+            Color::Black => assert_eq!(incremental.white, expected.white),
+        }
+
+        state.accumulators[1].refresh_perspective(&board, &net, moving_side);
+        assert_eq!(state.accumulators[1].white, expected.white);
+        assert_eq!(state.accumulators[1].black, expected.black);
+    }
+
+    #[test]
+    fn king_moves_refresh_only_their_own_perspective() {
+        assert_partial_king_refresh_matches_full("4k3/8/8/8/8/8/3R4/4K3 w - - 0 1", "e1f1");
+        assert_partial_king_refresh_matches_full("4k3/3r4/8/8/8/8/8/4K3 b - - 0 1", "e8f8");
+        assert_partial_king_refresh_matches_full("4k3/8/8/8/8/8/5p2/4K3 w - - 0 1", "e1f2");
+    }
+
+    #[test]
+    fn castling_keeps_the_opponent_perspective_incremental() {
+        assert_partial_king_refresh_matches_full("4k3/8/8/8/8/8/8/4K2R w K - 0 1", "e1g1");
+        assert_partial_king_refresh_matches_full("r3k3/8/8/8/8/8/8/4K3 b q - 0 1", "e8c8");
+    }
 
     #[test]
     fn long_game_cap_bounds_blitz_and_rapid_no_increment() {
