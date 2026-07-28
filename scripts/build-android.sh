@@ -41,9 +41,10 @@ fi
 rustup target add "$TARGET" >/dev/null 2>&1 || true
 
 echo "Building endspiel for $ABI ($TARGET), minSdk $API, target-cpu=$CPU ..."
-RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=$CPU" \
+CARGO_INCREMENTAL=0 \
+  RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=$CPU" \
   cargo ndk --target "$ABI" --platform "$API" \
-  build --release --bin endspiel
+  build --release --locked --bin endspiel
 
 OUT="target/${TARGET}/release/endspiel"
 echo

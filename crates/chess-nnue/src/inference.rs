@@ -20,6 +20,11 @@ pub fn output_bucket(piece_count: u32) -> usize {
 fn screlu_sum(acc: &[i16; HIDDEN_SIZE], weights: &[i8]) -> i32 {
     #[cfg(target_arch = "x86_64")]
     {
+        if is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512bw") {
+            // unsafe: runtime detection guarantees both features required by
+            // the 512-bit i16/i8 kernel are available.
+            return unsafe { screlu_sum_avx512(acc, weights) };
+        }
         if is_x86_feature_detected!("avx2") {
             // unsafe: #[target_feature] fns are unsafe because calling them without the
             // feature enabled is UB; runtime detection above guarantees AVX2 is present.
@@ -44,6 +49,41 @@ fn screlu_sum_scalar(acc: &[i16; HIDDEN_SIZE], weights: &[i8]) -> i32 {
         output += clamped * clamped * i32::from(wt);
     }
     output
+}
+
+/// AVX-512-accelerated SCReLU dot product.
+///
+/// Processes 32 × i16 per iteration, twice the AVX2 width. AVX-512BW supplies
+/// the packed i8/i16 conversions and arithmetic; AVX-512F supplies the i32
+/// accumulation and reduction.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f,avx512bw")]
+unsafe fn screlu_sum_avx512(acc: &[i16; HIDDEN_SIZE], weights: &[i8]) -> i32 {
+    use std::arch::x86_64::*;
+
+    debug_assert_eq!(weights.len(), HIDDEN_SIZE);
+    debug_assert_eq!(HIDDEN_SIZE % 32, 0);
+
+    let zero = _mm512_setzero_si512();
+    let quant = _mm512_set1_epi16(FT_QUANT as i16);
+    let mut sum = _mm512_setzero_si512();
+
+    unsafe {
+        let mut i = 0;
+        while i < HIDDEN_SIZE {
+            let v = _mm512_loadu_si512(acc.as_ptr().add(i) as *const __m512i);
+            let clamped = _mm512_min_epi16(_mm512_max_epi16(v, zero), quant);
+            let sq = _mm512_mullo_epi16(clamped, clamped);
+
+            let packed_weights = _mm256_loadu_si256(weights.as_ptr().add(i) as *const __m256i);
+            let w = _mm512_cvtepi8_epi16(packed_weights);
+
+            sum = _mm512_add_epi32(sum, _mm512_madd_epi16(sq, w));
+            i += 32;
+        }
+
+        _mm512_reduce_add_epi32(sum)
+    }
 }
 
 /// AVX2-accelerated SCReLU dot product.
@@ -212,7 +252,7 @@ mod tests {
 
     /// SIMD and scalar paths must produce identical results.
     #[test]
-    fn avx2_matches_scalar() {
+    fn simd_matches_scalar() {
         let net = test_net();
         let board = Board::starting_position();
 
@@ -225,11 +265,21 @@ mod tests {
             let scalar_opp = screlu_sum_scalar(&acc.black, &weights[HIDDEN_SIZE..]);
 
             #[cfg(target_arch = "x86_64")]
-            if is_x86_feature_detected!("avx2") {
-                let simd_stm = unsafe { screlu_sum_avx2(&acc.white, &weights[..HIDDEN_SIZE]) };
-                let simd_opp = unsafe { screlu_sum_avx2(&acc.black, &weights[HIDDEN_SIZE..]) };
-                assert_eq!(scalar_stm, simd_stm, "AVX2 STM half mismatch");
-                assert_eq!(scalar_opp, simd_opp, "AVX2 opponent half mismatch");
+            {
+                if is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512bw") {
+                    let simd_stm =
+                        unsafe { screlu_sum_avx512(&acc.white, &weights[..HIDDEN_SIZE]) };
+                    let simd_opp =
+                        unsafe { screlu_sum_avx512(&acc.black, &weights[HIDDEN_SIZE..]) };
+                    assert_eq!(scalar_stm, simd_stm, "AVX-512 STM half mismatch");
+                    assert_eq!(scalar_opp, simd_opp, "AVX-512 opponent half mismatch");
+                }
+                if is_x86_feature_detected!("avx2") {
+                    let simd_stm = unsafe { screlu_sum_avx2(&acc.white, &weights[..HIDDEN_SIZE]) };
+                    let simd_opp = unsafe { screlu_sum_avx2(&acc.black, &weights[HIDDEN_SIZE..]) };
+                    assert_eq!(scalar_stm, simd_stm, "AVX2 STM half mismatch");
+                    assert_eq!(scalar_opp, simd_opp, "AVX2 opponent half mismatch");
+                }
             }
 
             #[cfg(target_arch = "aarch64")]

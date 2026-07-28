@@ -37,6 +37,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             artifact: endspiel-linux-x64-v4
             rustflags: "-C target-cpu=x86-64-v4"
+            lto: fat
             pgo: false
           # Lower tier for x86-64 CPUs without AVX2 (the default is v3/AVX2).
           # v2 = SSE4.2 + POPCNT — covers pre-2013 mainstream and recent low-end
@@ -59,6 +60,7 @@ jobs:
             target: aarch64-unknown-linux-gnu
             artifact: endspiel-linux-arm64-pi5
             rustflags: "-C target-cpu=cortex-a76"
+            lto: fat
             pgo: true
           - name: win-x64-v3
             os: windows-2025-vs2026
@@ -71,6 +73,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             artifact: endspiel-win-x64-v4.exe
             rustflags: "-C target-cpu=x86-64-v4"
+            lto: fat
             pgo: false
           - name: win-x64-v2
             os: windows-2025-vs2026
@@ -101,8 +104,10 @@ jobs:
       # --- Plain build path (no PGO) ----------------------------------------
       - name: Build (no PGO)
         if: ${{ !matrix.pgo }}
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --locked --bin endspiel --target ${{ matrix.target }}
         env:
+          CARGO_INCREMENTAL: "0"
+          CARGO_PROFILE_RELEASE_LTO: ${{ matrix.lto || 'thin' }}
           RUSTFLAGS: ${{ matrix.rustflags }}
 
       # --- PGO build path ---------------------------------------------------
@@ -111,8 +116,10 @@ jobs:
       - name: Build instrumented (PGO gen)
         if: matrix.pgo
         shell: bash
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --locked --bin endspiel --target ${{ matrix.target }}
         env:
+          CARGO_INCREMENTAL: "0"
+          CARGO_PROFILE_RELEASE_LTO: ${{ matrix.lto || 'thin' }}
           RUSTFLAGS: "${{ matrix.rustflags }} -Cprofile-generate=${{ github.workspace }}/pgo-data"
 
       - name: Run PGO training workload
@@ -138,8 +145,10 @@ jobs:
       - name: Build optimized (PGO use)
         if: matrix.pgo
         shell: bash
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --locked --bin endspiel --target ${{ matrix.target }}
         env:
+          CARGO_INCREMENTAL: "0"
+          CARGO_PROFILE_RELEASE_LTO: ${{ matrix.lto || 'thin' }}
           RUSTFLAGS: "${{ matrix.rustflags }} -Cprofile-use=${{ github.workspace }}/pgo-data/merged.profdata"
 
       # --- Artifact rename + upload ----------------------------------------
@@ -165,7 +174,9 @@ jobs:
   # the OEX engine APK; the bare NDK binary is only an intermediate it wraps.
   build-android:
     name: android-arm64
-    runs-on: ubuntu-latest
+    # This image includes Android platform 34, build-tools 34.0.0, and the NDK,
+    # so the APK build needs no additional SDK provisioning.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
         with:
@@ -182,12 +193,13 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
 
-      # ubuntu-latest ships an NDK and exports ANDROID_NDK_LATEST_HOME, which
+      # ubuntu-24.04 ships an NDK and exports ANDROID_NDK_LATEST_HOME, which
       # cargo-ndk auto-detects. minSdk 24; portable ARMv8-A baseline. The output
       # at target/aarch64-linux-android/release/endspiel feeds the APK below.
       - name: Build (Android NDK)
-        run: cargo ndk --target arm64-v8a --platform 24 build --release --bin endspiel
+        run: cargo ndk --target arm64-v8a --platform 24 build --release --locked --bin endspiel
         env:
+          CARGO_INCREMENTAL: "0"
           RUSTFLAGS: "-C target-cpu=generic"
 
       # ── Wrap the binary in an Open Exchange (OEX) engine APK ──
@@ -197,11 +209,6 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-
-      - uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK packages
-        run: sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - uses: gradle/actions/setup-gradle@v4
         with:

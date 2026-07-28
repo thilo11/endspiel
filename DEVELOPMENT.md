@@ -67,30 +67,53 @@ cargo build --release --workspace  # all binaries including datagen and tuner
 rustflags = ["-C", "target-cpu=native"]
 ```
 
+For the benchmark-backed native fat-LTO + PGO build:
+
+```bash
+rustup component add llvm-tools-preview
+scripts/build-native-pgo.sh
+# binary: target/native-pgo/endspiel
+```
+
+On a Raspberry Pi 5, use the equivalent Cortex-A76-tuned build:
+
+```bash
+rustup component add llvm-tools-preview
+scripts/build-pi5-pgo.sh
+# binary: target/pi5-pgo/endspiel
+```
+
+Both helpers resolve the repository from their own location, keep final
+build outputs below `target/`, and use `${TMPDIR:-/tmp}` only for temporary
+profile data. They do not contain user- or machine-specific filesystem
+paths.
+
 ### Release build matrix
 
 CI (`.github/workflows/release.yml`, manual `workflow_dispatch` on a tag) builds
 the following variants. x86-64 ships three micro-architecture tiers (v2–v4):
 
-| Artifact | `target-cpu` | PGO | Notes |
-|----------|--------------|-----|-------|
-| `endspiel-linux-x64-v4` | `x86-64-v4` | no | AVX-512 (Zen 4/5, recent Xeon/Core) |
-| `endspiel-linux-x64-v3` | `x86-64-v3` | yes | default Linux build (AVX2, ~2013+) |
-| `endspiel-linux-x64-v2` | `x86-64-v2` | yes | SSE4.2 + POPCNT (no-AVX2 CPUs) |
-| `endspiel-win-x64-v4.exe` | `x86-64-v4` | no | AVX-512 Windows build |
-| `endspiel-win-x64-v3.exe` | `x86-64-v3` | yes | default Windows build |
-| `endspiel-win-x64-v2.exe` | `x86-64-v2` | yes | SSE4.2 + POPCNT Windows build |
-| `endspiel-win-arm64.exe` | `generic` | no | cross-built, no PGO |
-| `endspiel-mac-arm64` | `apple-m1` | yes | macOS Apple Silicon |
-| `endspiel-linux-arm64-pi5` | `cortex-a76` | yes | Raspberry Pi 5 (Raspberry Pi OS Trixie / Debian 13 or newer, glibc ≥ 2.39) |
-| `endspiel-android-arm64.apk` | `generic` | no | Android arm64-v8a, minSdk 24 — Open Exchange engine APK (see `android/oex/`) |
+| Artifact | `target-cpu` | LTO | PGO | Notes |
+|----------|--------------|-----|-----|-------|
+| `endspiel-linux-x64-v4` | `x86-64-v4` | fat | no | AVX-512 (Zen 4/5, recent Xeon/Core) |
+| `endspiel-linux-x64-v3` | `x86-64-v3` | thin | yes | default Linux build (AVX2, ~2013+) |
+| `endspiel-linux-x64-v2` | `x86-64-v2` | thin | yes | SSE4.2 + POPCNT (no-AVX2 CPUs) |
+| `endspiel-win-x64-v4.exe` | `x86-64-v4` | fat | no | AVX-512 Windows build |
+| `endspiel-win-x64-v3.exe` | `x86-64-v3` | thin | yes | default Windows build |
+| `endspiel-win-x64-v2.exe` | `x86-64-v2` | thin | yes | SSE4.2 + POPCNT Windows build |
+| `endspiel-win-arm64.exe` | `generic` | thin | no | cross-built, no PGO |
+| `endspiel-mac-arm64` | `apple-m1` | thin | yes | macOS Apple Silicon |
+| `endspiel-linux-arm64-pi5` | `cortex-a76` | fat | yes | Raspberry Pi 5 (Raspberry Pi OS Trixie / Debian 13 or newer, glibc ≥ 2.39) |
+| `endspiel-android-arm64.apk` | `generic` | thin | no | Android arm64-v8a, minSdk 24 — Open Exchange engine APK (see `android/oex/`) |
 
 PGO is a two-stage build: an instrumented binary is built with
 `-Cprofile-generate`, then `endspiel bench` is run against it to produce
-profile data, and a final build is done with `-Cprofile-use`. PGO is
-skipped for the AVX-512 variants (the runner CPU may not support AVX-512
-and the instrumented binary would crash with SIGILL) and for the
-cross-built `win-arm64` target (can't execute on the x64 runner).
+profile data, and a final build is done with `-Cprofile-use`. PGO is skipped
+for the AVX-512 variants because the runner CPU may not support AVX-512, and
+for cross-built targets whose binaries cannot execute on their runner. Fat LTO
+is still used for the AVX-512 artifacts. The Pi 5 combines fat LTO with PGO;
+this pairing must remain benchmark-backed because fat LTO alone can be slower
+on Cortex-A76.
 
 ### Releasing a new version
 

@@ -6,6 +6,7 @@
 [![License](https://img.shields.io/github/license/thilo11/endspiel)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-stable-orange?logo=rust)](https://www.rust-lang.org)
 [![Lichess](https://img.shields.io/badge/lichess-Endspiel%20%28Pi5%29-green?logo=lichess)](https://lichess.org/@/endspiel-pi)
+[![Lichess endspiel-engine](https://img.shields.io/badge/lichess-endspiel--engine-green?logo=lichess)](https://lichess.org/@/endspiel-engine)
 
 > **Endspiel** /ˈɛnt.ʃpiːl/ *n.* (German) &nbsp; **1.** the final, decisive game. &nbsp; **2.** the final phase of a chess game.
 
@@ -51,9 +52,9 @@ See [ABOUT.md](ABOUT.md) for project rationale, playing strength, and training d
 - **WDL output** — optional `wdl W D L` annotation on each `info` line
   (`UCI_ShowWDL`), with the win/draw/loss mapping fit per net
 - **Contempt** and configurable time management (`Move Overhead`, `Slow Mover`)
-- **Performance** — native-CPU release builds; on a modern desktop the
-  engine searches in the millions of nodes per second per thread and plays
-  competitive bullet/blitz time controls comfortably
+- **Performance** — runtime-dispatched AVX-512 and AVX2 inference on x86-64,
+  NEON on AArch64, and a scalar fallback; selected release builds also use
+  profile-guided optimisation and fat LTO
 - **Cross-platform** — Linux x86_64/ARM64, Windows x86_64/ARM64, macOS Apple Silicon
 - **Self-contained binary** — no runtime dependencies, no external net file
 
@@ -61,7 +62,7 @@ See [ABOUT.md](ABOUT.md) for project rationale, playing strength, and training d
 
 Prebuilt binaries are on the [Releases](https://github.com/thilo11/endspiel/releases) page.
 
-**x86-64** ships in four micro-architecture tiers (each faster than the one
+**x86-64** ships in three micro-architecture tiers (each faster than the one
 below, all but `-v4` profile-guided-optimised). Pick the **highest your CPU
 supports**:
 
@@ -77,7 +78,7 @@ supports**:
 |----------|--------|-------|
 | macOS Apple Silicon | `endspiel-mac-arm64` | `apple-m1`, PGO-optimised |
 | Windows ARM64 | `endspiel-win-arm64.exe` | generic ARM64 |
-| Raspberry Pi 5 | `endspiel-linux-arm64-pi5` | `cortex-a76`, PGO-optimised; needs Raspberry Pi OS (Trixie / Debian 13) or newer — glibc ≥ 2.39 |
+| Raspberry Pi 5 | `endspiel-linux-arm64-pi5` | `cortex-a76`, fat LTO + PGO; needs Raspberry Pi OS (Trixie / Debian 13) or newer — glibc ≥ 2.39 |
 | Android arm64 | `endspiel-android-arm64.apk` | `arm64-v8a`, minSdk 24 — installs like an app; pick "Endspiel" as a UCI engine in DroidFish / Chess for Android |
 
 **Picking an x86-64 build.** `-v3` (AVX2) is the safe default — it runs on
