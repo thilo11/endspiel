@@ -579,7 +579,7 @@ impl SearchState {
 /// Sudden death keeps its cap at *every* clock: there a flag is fatal, not merely
 /// expensive.
 fn long_game_time_cap(target_ms: u64, inc_ms: u64, time_ms: u64) -> u64 {
-    let n: u64 = if time_ms > 300_000 { 38 } else { 34 };
+    let n: u64 = if time_ms > 300_000 { 32 } else { 34 };
     if inc_ms == 0 {
         return target_ms.min(time_ms / n);
     }
@@ -587,6 +587,26 @@ fn long_game_time_cap(target_ms: u64, inc_ms: u64, time_ms: u64) -> u64 {
         return target_ms;
     }
     target_ms.min(inc_ms.saturating_add(time_ms / n))
+}
+
+/// Retain only recent score volatility for time management. A large shallow
+/// swing must not suppress the clearly-decided-position discount forever once
+/// several deeper iterations have converged.
+#[inline]
+fn update_recent_score_swing(recent: i32, current: i32) -> i32 {
+    (recent / 2).max(current.saturating_abs())
+}
+
+/// Track a short-lived count of recent best-move changes. Stable completed
+/// iterations pay down old instability instead of carrying it for the entire
+/// search.
+#[inline]
+fn update_recent_pv_changes(recent: u32, changed: bool) -> u32 {
+    if changed {
+        recent.saturating_add(1).min(5)
+    } else {
+        recent.saturating_sub(1)
+    }
 }
 
 /// How much longer than the soft target a difficult position may run. The soft
@@ -1487,12 +1507,12 @@ pub fn iterative_deepening(
     // and shrinks `max` — always probe with the real move history, or the numbers lie.
     let tm_debug = std::env::var("ENDSPIEL_TM_DEBUG").is_ok();
 
-    // PV instability: track best move changes for time management
-    let mut pv_changes = 0u32;
+    // Recent PV instability: old shallow best-move changes decay after stable depths.
+    let mut recent_pv_changes = 0u32;
     // Best move stability: consecutive iterations with same best move
     let mut best_move_stability = 0u32;
-    // Score volatility: max absolute swing between consecutive iterations
-    let mut max_score_swing = 0i32;
+    // Recent score volatility: the peak decays as deeper iterations converge.
+    let mut recent_score_swing = 0i32;
     // Track last iteration duration for next-iteration prediction
     let mut last_iter_ms: u64;
     // Best-move persistence: remember the last highly stable move
@@ -1719,7 +1739,7 @@ pub fn iterative_deepening(
             0
         };
         if base_depth > 1 {
-            max_score_swing = max_score_swing.max((prev_score - score).abs());
+            recent_score_swing = update_recent_score_swing(recent_score_swing, prev_score - score);
         }
         prev_score = score;
         let line0_pv = &line_results[0].1;
@@ -1737,7 +1757,7 @@ pub fn iterative_deepening(
             }
         };
         if base_depth > 1 && new_best != best_move {
-            pv_changes += 1;
+            recent_pv_changes = update_recent_pv_changes(recent_pv_changes, true);
             // Save the stable move before resetting
             if best_move_stability >= 6 {
                 stable_move = best_move;
@@ -1745,6 +1765,7 @@ pub fn iterative_deepening(
             }
             best_move_stability = 0;
         } else if base_depth > 1 {
+            recent_pv_changes = update_recent_pv_changes(recent_pv_changes, false);
             best_move_stability += 1;
         }
         best_move = new_best;
@@ -1858,13 +1879,13 @@ pub fn iterative_deepening(
             };
 
             // PV instability: +8% per change, up to +40%
-            let instability_bonus = (pv_changes as u64).min(5) * 80;
+            let instability_bonus = (recent_pv_changes as u64).min(5) * 80;
 
             // Score drop: +5% per 25cp drop, up to +40%
             let drop_bonus = ((score_drop as u64) / 25).min(8) * 50;
 
             // Score volatility: +6% per 30cp swing, up to +30%
-            let volatility_bonus = ((max_score_swing as u64) / 30).min(5) * 60;
+            let volatility_bonus = ((recent_score_swing as u64) / 30).min(5) * 60;
 
             // Aspiration failures: +8% per failure, up to +32%
             let aspiration_bonus = (aspiration_failures as u64).min(4) * 80;
@@ -1937,13 +1958,13 @@ pub fn iterative_deepening(
             let eval_adjust: i64 = if best_score.is_mate() {
                 // Once mate is visible, prioritize conversion speed.
                 -220
-            } else if eval_abs >= 500 && best_move_stability >= 2 && max_score_swing <= 40 {
+            } else if eval_abs >= 500 && best_move_stability >= 2 && recent_score_swing <= 40 {
                 -220
-            } else if eval_abs >= 300 && best_move_stability >= 2 && max_score_swing <= 60 {
+            } else if eval_abs >= 300 && best_move_stability >= 2 && recent_score_swing <= 60 {
                 -140
-            } else if eval_abs <= 50 && max_score_swing >= 35 {
+            } else if eval_abs <= 50 && recent_score_swing >= 35 {
                 180
-            } else if eval_abs <= 90 && max_score_swing >= 25 {
+            } else if eval_abs <= 90 && recent_score_swing >= 25 {
                 100
             } else {
                 0
@@ -2000,7 +2021,7 @@ pub fn iterative_deepening(
                      hard={:?} elapsed={elapsed} | inst={instability_bonus} drop={drop_bonus} \
                      vol={volatility_bonus} asp={aspiration_bonus} cplx={complexity_bonus} \
                      surp={surplus_bonus} stab=-{stability_discount} nodefrac={node_frac_adj} \
-                     eval={eval_adjust} pvch={pv_changes} swing={max_score_swing} \
+                     eval={eval_adjust} pvch={recent_pv_changes} swing={recent_score_swing} \
                      bnf={best_node_fraction:.2}",
                     state.time_limit_ms
                 );
@@ -2015,7 +2036,8 @@ pub fn iterative_deepening(
             // In unstable/tactical positions, the next iteration growth is
             // often closer to ~2x than ~3x; using 3x can stop too early.
             // Keep the conservative 3x in quiet/stable nodes.
-            let unstable = pv_changes > 0 || max_score_swing >= 35 || best_node_fraction < 0.55;
+            let unstable =
+                recent_pv_changes > 0 || recent_score_swing >= 35 || best_node_fraction < 0.55;
             let growth = if unstable { 2 } else { 3 };
             let predicted_next = last_iter_ms * growth;
             let prediction_margin_permille = if surplus > limit {
@@ -3788,16 +3810,16 @@ mod tests {
     fn long_game_cap_bounds_blitz_and_rapid_no_increment() {
         // 180+0: an over-large target is capped to time/34.
         assert_eq!(long_game_time_cap(15_000, 0, 180_000), 180_000 / 34);
-        // 10+0 rapid uses the gentler time/38 divisor.
-        assert_eq!(long_game_time_cap(40_000, 0, 600_000), 600_000 / 38);
+        // 10+0 rapid uses the gentler time/32 divisor.
+        assert_eq!(long_game_time_cap(40_000, 0, 600_000), 600_000 / 32);
     }
 
     #[test]
     fn long_game_cap_refunds_the_increment_on_top_of_the_bank_slice() {
         // The increment is free, so it is spendable above the bank slice.
         assert_eq!(
-            long_game_time_cap(60_000, 5_000, 1_800_000),
-            5_000 + 1_800_000 / 38
+            long_game_time_cap(72_000, 5_000, 1_800_000),
+            5_000 + 1_800_000 / 32
         );
         // Target already under the cap is returned unchanged.
         assert_eq!(long_game_time_cap(1_000, 0, 180_000), 1_000);
@@ -3817,16 +3839,34 @@ mod tests {
         // uncap 60rqL48Y from move ~15 on and restore the very drain it fixes.
         assert_eq!(
             long_game_time_cap(72_000, 5_000, 628_000), // 10:28 left, move 30
-            5_000 + 628_000 / 38
+            5_000 + 628_000 / 32
         );
         assert_eq!(
             long_game_time_cap(72_000, 5_000, 1_800_000),
-            5_000 + 1_800_000 / 38
+            5_000 + 1_800_000 / 32
         );
         // Sudden death is capped at ANY clock — a flag there is fatal, and the
         // 180+0 mate-at-move-90 flag is what the cap originally fixed.
         assert_eq!(long_game_time_cap(610, 0, 10_000), 10_000 / 34);
         assert_eq!(long_game_time_cap(15_000, 0, 180_000), 180_000 / 34);
+    }
+
+    #[test]
+    fn shallow_time_manager_instability_decays_after_stable_depths() {
+        let mut swing = update_recent_score_swing(0, 320);
+        for _ in 0..3 {
+            swing = update_recent_score_swing(swing, 0);
+        }
+        assert_eq!(swing, 40);
+
+        let mut pv_changes = 0;
+        for _ in 0..3 {
+            pv_changes = update_recent_pv_changes(pv_changes, true);
+        }
+        for _ in 0..3 {
+            pv_changes = update_recent_pv_changes(pv_changes, false);
+        }
+        assert_eq!(pv_changes, 0);
     }
 
     #[test]
@@ -3925,7 +3965,7 @@ mod tests {
         let alloc = allocated_move_time_ms(&params, &board).expect("timed search");
         assert!(alloc >= 5_000, "allocated {alloc} below the free increment");
         assert!(
-            alloc <= 5_000 + 628_000 / 38,
+            alloc <= 5_000 + 628_000 / 32,
             "allocated {alloc} drains the clock faster than the increment refunds it"
         );
     }
