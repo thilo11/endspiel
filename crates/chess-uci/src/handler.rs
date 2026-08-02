@@ -308,7 +308,7 @@ impl UciHandler {
             }));
         }
         let eval_mode = if self.engine.use_nnue() {
-            "NNUE (HalfKP 704\u{00d7}32\u{2192}768\u{00d7}2\u{2192}1 SCReLU)".to_string()
+            "NNUE (HalfKP 768\u{00d7}32\u{2192}(1024 pairwise 512)\u{00d7}2\u{2192}16\u{2192}32\u{2192}1)".to_string()
         } else {
             "HCE (no trained NNUE net)".to_string()
         };

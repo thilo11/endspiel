@@ -35,7 +35,7 @@ Alpha-beta with iterative deepening and PVS.
 
 Two modes, switchable at runtime via `UseNNUE`:
 
-- **NNUE** (default): HalfKP 704×32→768×2→1 SCReLU, 32 per-square king buckets, embedded at compile time via `include_bytes!`
+- **NNUE** (default): HalfKP 768×32→(1024 pairwise 512)×2→16→32→1, 32 per-square king buckets and 8 material-keyed output stacks, embedded at compile time via `include_bytes!`
 - **HCE**: tapered MG/EG with pawn hash, mobility, king safety, pawn structure (passed/doubled/isolated/backward/islands), threats, center control, connectivity, space, material imbalance, endgame scaling
 
 ### NNUE net embedding

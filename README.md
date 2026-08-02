@@ -30,8 +30,8 @@ See [ABOUT.md](ABOUT.md) for project rationale, playing strength, and training d
   the [Bullet](https://github.com/jw1912/bullet) trainer and Syzygy
   probing uses `pyrrhic-rs` — the only third-party pieces in the pipeline)
 - **Full UCI compliance** — works in any UCI GUI (Arena, CuteChess, Fritz, Banksia, Scid, …)
-- **NNUE evaluation** (default) — HalfKP 704×32→768×2→8 SCReLU (8 material-keyed output buckets), trained
-  from scratch on ~2.6 billion self-play positions; the net is embedded
+- **NNUE evaluation** (default) — HalfKP 768×32→(1024 pairwise 512)×2→16→32→1 (8 material-keyed output buckets), trained
+  from scratch on ~4.1 billion curated positions; the net is embedded
   in the binary, no extra files to ship
 - **HCE fallback** — tapered hand-crafted evaluation (`UseNNUE=false`) with
   pawn hash, mobility, king safety, pawn structure, threats, space, and

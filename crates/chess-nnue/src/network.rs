@@ -1,122 +1,161 @@
 use std::sync::{Arc, LazyLock};
 
-use crate::{HIDDEN_SIZE, INPUT_SIZE, OUTPUT_BUCKETS};
+use crate::{HIDDEN_SIZE, INPUT_SIZE, L1_SIZE, L2_SIZE, OUTPUT_BUCKETS, PAIR_INPUT_SIZE};
 
-/// NNUE network parameters.
+pub const NET_MAGIC: &[u8; 8] = b"ESPNNUE2";
+pub const NET_VERSION: u32 = 1;
+pub const HEADER_SIZE: usize = 32;
+
+/// Layer-stacked NNUE parameters.
 ///
-/// Binary layout (little-endian, sequential, matches Bullet trainer output):
-/// - ft_weights:     INPUT_SIZE × HIDDEN_SIZE i16 values              (QA=127)
-/// - ft_biases:      HIDDEN_SIZE i16 values                           (QA=127)
-/// - output_weights: OUTPUT_BUCKETS × (HIDDEN_SIZE × 2) i8 values     (QB=64, bucket rows contiguous)
-/// - output_bias:    OUTPUT_BUCKETS i16 values                        (QA×QB=8128)
-///
-/// The legacy single-bucket format (one HIDDEN_SIZE×2 row + one bias) is still
-/// accepted: it is loaded by replicating the row into every bucket, so legacy
-/// nets evaluate identically to before.
+/// Binary layout after the 32-byte versioned header:
+/// - feature-transformer weights: INPUT_SIZE × HIDDEN_SIZE i16
+/// - feature-transformer biases: HIDDEN_SIZE i16
+/// - l1 weights: OUTPUT_BUCKETS × L1_SIZE × PAIR_INPUT_SIZE i8
+/// - l1 biases: OUTPUT_BUCKETS × L1_SIZE i32
+/// - l2 weights: OUTPUT_BUCKETS × L2_SIZE × L1_SIZE i8
+/// - l2 biases: OUTPUT_BUCKETS × L2_SIZE i32
+/// - l3 weights: OUTPUT_BUCKETS × L2_SIZE i8
+/// - l3 biases: OUTPUT_BUCKETS i32
 pub struct NnueNetwork {
     pub ft_weights: Box<[[i16; HIDDEN_SIZE]; INPUT_SIZE]>,
     pub ft_biases: Box<[i16; HIDDEN_SIZE]>,
-    pub output_weights: Box<[[i8; HIDDEN_SIZE * 2]; OUTPUT_BUCKETS]>,
-    pub output_bias: [i16; OUTPUT_BUCKETS],
+    pub l1_weights: Box<[[i8; PAIR_INPUT_SIZE]]>,
+    pub l1_biases: Box<[[i32; L1_SIZE]; OUTPUT_BUCKETS]>,
+    pub l2_weights: Box<[[i8; L1_SIZE]]>,
+    pub l2_biases: Box<[[i32; L2_SIZE]; OUTPUT_BUCKETS]>,
+    pub l3_weights: Box<[[i8; L2_SIZE]; OUTPUT_BUCKETS]>,
+    pub l3_biases: [i32; OUTPUT_BUCKETS],
 }
 
-/// Expected size of the network file in bytes (bucketed format).
-pub const NET_FILE_SIZE: usize = INPUT_SIZE * HIDDEN_SIZE * 2               // ft_weights (i16)
-    + HIDDEN_SIZE * 2                          // ft_biases (i16)
-    + OUTPUT_BUCKETS * HIDDEN_SIZE * 2         // output_weights (i8)
-    + OUTPUT_BUCKETS * 2; // output_bias (i16)
+pub const NET_FILE_SIZE: usize = HEADER_SIZE
+    + INPUT_SIZE * HIDDEN_SIZE * 2
+    + HIDDEN_SIZE * 2
+    + OUTPUT_BUCKETS * L1_SIZE * PAIR_INPUT_SIZE
+    + OUTPUT_BUCKETS * L1_SIZE * 4
+    + OUTPUT_BUCKETS * L2_SIZE * L1_SIZE
+    + OUTPUT_BUCKETS * L2_SIZE * 4
+    + OUTPUT_BUCKETS * L2_SIZE
+    + OUTPUT_BUCKETS * 4;
 
-/// Size of the legacy single-output-bucket format.
-pub const LEGACY_NET_FILE_SIZE: usize = INPUT_SIZE * HIDDEN_SIZE * 2   // ft_weights (i16)
-    + HIDDEN_SIZE * 2              // ft_biases (i16)
-    + HIDDEN_SIZE * 2              // output_weights (i8)
-    + 2; // output_bias (i16)
-
-/// Alignment the trainer pads the written file up to, so an on-disk net is
-/// `*_NET_FILE_SIZE` rounded up to the next multiple of this (48 bytes of
-/// padding for the current bucketed layout).
 const PAD_ALIGN: usize = 64;
 
+fn expected_header() -> [u8; HEADER_SIZE] {
+    let mut header = [0u8; HEADER_SIZE];
+    header[..8].copy_from_slice(NET_MAGIC);
+    for (idx, value) in [
+        NET_VERSION,
+        INPUT_SIZE as u32,
+        HIDDEN_SIZE as u32,
+        OUTPUT_BUCKETS as u32,
+        L1_SIZE as u32,
+        L2_SIZE as u32,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let start = 8 + idx * 4;
+        header[start..start + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    header
+}
+
 impl NnueNetwork {
-    /// Parse a network from raw bytes (little-endian sequential format).
-    /// Accepts both the bucketed and the legacy single-bucket layout.
-    ///
-    /// The size must match one of the two layouts, give or take the trailing
-    /// padding the trainer writes to align the final bias to a 64-byte
-    /// boundary. A plain `>=` here would silently accept any larger file —
-    /// notably the trainer's FP32 `raw.bin`, which is twice the size and whose
-    /// bytes reinterpreted as i16 produce a net that evaluates every position
-    /// as 0 rather than an error.
     pub fn from_bytes(data: &[u8]) -> Result<Self, &'static str> {
-        let fits = |expected: usize| (expected..expected + PAD_ALIGN).contains(&data.len());
-        let bucketed = if fits(NET_FILE_SIZE) {
-            true
-        } else if fits(LEGACY_NET_FILE_SIZE) {
-            false
-        } else {
-            return Err("NNUE file size matches neither the bucketed nor the legacy layout");
+        if !(NET_FILE_SIZE..NET_FILE_SIZE + PAD_ALIGN).contains(&data.len()) {
+            return Err("layer-stacked NNUE file has the wrong size");
+        }
+        if data[..HEADER_SIZE] != expected_header() {
+            return Err("layer-stacked NNUE header or dimensions do not match this engine");
+        }
+
+        let mut offset = HEADER_SIZE;
+        let read_i16 = |offset: &mut usize| {
+            let value = i16::from_le_bytes([data[*offset], data[*offset + 1]]);
+            *offset += 2;
+            value
+        };
+        let read_i32 = |offset: &mut usize| {
+            let value = i32::from_le_bytes([
+                data[*offset],
+                data[*offset + 1],
+                data[*offset + 2],
+                data[*offset + 3],
+            ]);
+            *offset += 4;
+            value
         };
 
-        let mut offset = 0;
-
-        // Feature transformer weights: INPUT_SIZE × HIDDEN_SIZE i16
-        //
-        // Use vec! + into_boxed_slice to avoid materialising a 3 MB array on
-        // the stack before boxing it (Box::new([…; N]) does so in debug builds,
-        // overflowing the ~1 MB Windows default thread stack).
         let mut ft_weights: Box<[[i16; HIDDEN_SIZE]; INPUT_SIZE]> =
             vec![[0i16; HIDDEN_SIZE]; INPUT_SIZE]
                 .into_boxed_slice()
                 .try_into()
                 .unwrap();
         for row in ft_weights.iter_mut() {
-            for val in row.iter_mut() {
-                *val = i16::from_le_bytes([data[offset], data[offset + 1]]);
-                offset += 2;
+            for value in row.iter_mut() {
+                *value = read_i16(&mut offset);
             }
         }
 
-        // Feature transformer biases: HIDDEN_SIZE i16
         let mut ft_biases = Box::new([0i16; HIDDEN_SIZE]);
-        for val in ft_biases.iter_mut() {
-            *val = i16::from_le_bytes([data[offset], data[offset + 1]]);
-            offset += 2;
+        for value in ft_biases.iter_mut() {
+            *value = read_i16(&mut offset);
         }
 
-        // Output weights: bucket rows contiguous (legacy = one row, replicated).
-        let mut output_weights = Box::new([[0i8; HIDDEN_SIZE * 2]; OUTPUT_BUCKETS]);
-        let rows = if bucketed { OUTPUT_BUCKETS } else { 1 };
-        for b in 0..rows {
-            for val in output_weights[b].iter_mut() {
-                *val = data[offset] as i8;
+        let mut l1_weights =
+            vec![[0i8; PAIR_INPUT_SIZE]; OUTPUT_BUCKETS * L1_SIZE].into_boxed_slice();
+        for row in l1_weights.iter_mut() {
+            for value in row.iter_mut() {
+                *value = data[offset] as i8;
                 offset += 1;
             }
         }
-
-        // Output bias: OUTPUT_BUCKETS i16 (legacy = one value, replicated).
-        let mut output_bias = [0i16; OUTPUT_BUCKETS];
-        for val in output_bias.iter_mut().take(rows) {
-            *val = i16::from_le_bytes([data[offset], data[offset + 1]]);
-            offset += 2;
-        }
-
-        if !bucketed {
-            let row = output_weights[0];
-            for b in 1..OUTPUT_BUCKETS {
-                output_weights[b] = row;
-                output_bias[b] = output_bias[0];
+        let mut l1_biases = Box::new([[0i32; L1_SIZE]; OUTPUT_BUCKETS]);
+        for bucket in l1_biases.iter_mut() {
+            for value in bucket.iter_mut() {
+                *value = read_i32(&mut offset);
             }
         }
+
+        let mut l2_weights = vec![[0i8; L1_SIZE]; OUTPUT_BUCKETS * L2_SIZE].into_boxed_slice();
+        for row in l2_weights.iter_mut() {
+            for value in row.iter_mut() {
+                *value = data[offset] as i8;
+                offset += 1;
+            }
+        }
+        let mut l2_biases = Box::new([[0i32; L2_SIZE]; OUTPUT_BUCKETS]);
+        for bucket in l2_biases.iter_mut() {
+            for value in bucket.iter_mut() {
+                *value = read_i32(&mut offset);
+            }
+        }
+
+        let mut l3_weights = Box::new([[0i8; L2_SIZE]; OUTPUT_BUCKETS]);
+        for row in l3_weights.iter_mut() {
+            for value in row.iter_mut() {
+                *value = data[offset] as i8;
+                offset += 1;
+            }
+        }
+        let mut l3_biases = [0i32; OUTPUT_BUCKETS];
+        for value in &mut l3_biases {
+            *value = read_i32(&mut offset);
+        }
+        debug_assert_eq!(offset, NET_FILE_SIZE);
 
         Ok(Self {
             ft_weights,
             ft_biases,
-            output_weights,
-            output_bias,
+            l1_weights,
+            l1_biases,
+            l2_weights,
+            l2_biases,
+            l3_weights,
+            l3_biases,
         })
     }
 
-    /// Return a shared reference to the embedded default network.
     pub fn embedded() -> Arc<NnueNetwork> {
         static NET: LazyLock<Arc<NnueNetwork>> = LazyLock::new(|| {
             let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/default.nnue"));
@@ -125,21 +164,20 @@ impl NnueNetwork {
         Arc::clone(&NET)
     }
 
-    /// Returns false if this is a zero-initialised placeholder (net not yet trained).
     pub fn is_trained(&self) -> bool {
-        self.output_weights
+        self.l3_weights
             .iter()
-            .any(|row| row.iter().any(|&w| w != 0))
+            .any(|row| row.iter().any(|&weight| weight != 0))
     }
 
-    /// Load a network from a file path, falling back to embedded if path is empty.
     pub fn from_path(path: &str) -> Result<Arc<NnueNetwork>, String> {
         if path.is_empty() {
             return Ok(Self::embedded());
         }
-        let data = std::fs::read(path).map_err(|e| format!("failed to read '{path}': {e}"))?;
-        let net =
-            Self::from_bytes(&data).map_err(|e| format!("invalid NNUE file '{path}': {e}"))?;
+        let data =
+            std::fs::read(path).map_err(|error| format!("failed to read '{path}': {error}"))?;
+        let net = Self::from_bytes(&data)
+            .map_err(|error| format!("invalid NNUE file '{path}': {error}"))?;
         Ok(Arc::new(net))
     }
 }
@@ -148,29 +186,22 @@ impl NnueNetwork {
 mod tests {
     use super::*;
 
-    /// The trainer pads the written net up to a 64-byte boundary, so the real
-    /// on-disk size is larger than the computed layout size. Both must load.
+    fn blank_net(extra_padding: usize) -> Vec<u8> {
+        let mut bytes = vec![0u8; NET_FILE_SIZE + extra_padding];
+        bytes[..HEADER_SIZE].copy_from_slice(&expected_header());
+        bytes
+    }
+
     #[test]
     fn accepts_exact_and_padded_sizes() {
-        assert!(NnueNetwork::from_bytes(&vec![0u8; NET_FILE_SIZE]).is_ok());
-        assert!(NnueNetwork::from_bytes(&vec![0u8; NET_FILE_SIZE + 48]).is_ok());
-        assert!(NnueNetwork::from_bytes(&vec![0u8; LEGACY_NET_FILE_SIZE]).is_ok());
-    }
-
-    /// Regression: `from_bytes` used to length-check with `>=`, so the
-    /// trainer's FP32 `raw.bin` (twice the size) was accepted and reinterpreted
-    /// as i16 — yielding a net that silently evaluated every position as 0
-    /// instead of reporting the format mismatch.
-    #[test]
-    fn rejects_fp32_raw_checkpoint() {
-        let raw_fp32_len = NET_FILE_SIZE * 2;
-        assert!(NnueNetwork::from_bytes(&vec![0u8; raw_fp32_len]).is_err());
+        assert!(NnueNetwork::from_bytes(&blank_net(0)).is_ok());
+        assert!(NnueNetwork::from_bytes(&blank_net(32)).is_ok());
     }
 
     #[test]
-    fn rejects_truncated_and_overpadded() {
-        assert!(NnueNetwork::from_bytes(&vec![0u8; NET_FILE_SIZE - 1]).is_err());
-        assert!(NnueNetwork::from_bytes(&vec![0u8; NET_FILE_SIZE + PAD_ALIGN]).is_err());
+    fn rejects_bad_header_and_sizes() {
+        assert!(NnueNetwork::from_bytes(&vec![0u8; NET_FILE_SIZE]).is_err());
+        assert!(NnueNetwork::from_bytes(&blank_net(PAD_ALIGN)).is_err());
         assert!(NnueNetwork::from_bytes(&[]).is_err());
     }
 }
