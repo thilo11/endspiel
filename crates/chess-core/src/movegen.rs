@@ -625,7 +625,7 @@ mod tests {
     #[test]
     fn test_no_castling_through_check() {
         // Rook on f8 attacks f1, preventing kingside castle
-        let board = Board::from_fen("5r2/8/8/8/8/8/8/R3K2R w KQ - 0 1").unwrap();
+        let board = Board::from_fen("1k3r2/8/8/8/8/8/8/R3K2R w KQ - 0 1").unwrap();
         let moves = generate_legal_moves(&board);
         let ks_castle: Vec<_> = moves
             .iter()
@@ -640,7 +640,7 @@ mod tests {
     #[test]
     fn test_no_castling_in_check() {
         // King in check, cannot castle
-        let board = Board::from_fen("4r3/8/8/8/8/8/8/R3K2R w KQ - 0 1").unwrap();
+        let board = Board::from_fen("1k2r3/8/8/8/8/8/8/R3K2R w KQ - 0 1").unwrap();
         let moves = generate_legal_moves(&board);
         let castling_moves: Vec<_> = moves
             .iter()

@@ -1,7 +1,39 @@
-use chess_common::Board;
 use chess_common::moves::Move;
+use chess_common::{Board, Color, PieceKind};
+use thiserror::Error;
 
+use crate::attacks::is_square_attacked;
 use crate::movegen::generate_legal_moves;
+
+/// A position that is structurally parseable but cannot occur at the boundary
+/// between two legal chess moves.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum PositionError {
+    #[error("expected exactly one {color:?} king, got {count}")]
+    KingCount { color: Color, count: u32 },
+    #[error("side not to move ({0:?}) is in check")]
+    SideNotToMoveInCheck(Color),
+}
+
+/// Validate the legality assumptions required before move generation/search.
+///
+/// FEN parsing handles static structure. This additional check rejects a board
+/// where the side that supposedly just moved left its own king in check. Such
+/// a board lets move generation capture that king and corrupt all deeper state.
+pub fn validate_position(board: &Board) -> Result<(), PositionError> {
+    for color in [Color::White, Color::Black] {
+        let count = board.pieces[color.index()][PieceKind::King.index()].count();
+        if count != 1 {
+            return Err(PositionError::KingCount { color, count });
+        }
+    }
+
+    let previous = board.side_to_move.opposite();
+    if is_square_attacked(board, board.king_square(previous), board.side_to_move) {
+        return Err(PositionError::SideNotToMoveInCheck(previous));
+    }
+    Ok(())
+}
 
 /// Check if a specific move is legal in the given position.
 ///
@@ -89,5 +121,23 @@ mod tests {
         let uci_move = Move::from_uci("e2e4").unwrap();
         let legal = find_legal_move(&board, uci_move).unwrap();
         assert_eq!(legal.flag(), MoveFlag::DoublePawnPush);
+    }
+
+    #[test]
+    fn validates_normal_and_in_check_positions() {
+        assert!(validate_position(&Board::starting_position()).is_ok());
+
+        // White is in check and must respond; that is a valid position.
+        let checked = Board::from_fen("4k3/8/8/8/8/8/4r3/4K3 w - - 0 1").unwrap();
+        assert!(validate_position(&checked).is_ok());
+    }
+
+    #[test]
+    fn rejects_a_position_where_the_previous_side_is_in_check() {
+        let board = Board::from_fen("4k3/8/8/8/8/8/4R3/4K3 w - - 0 1").unwrap();
+        assert_eq!(
+            validate_position(&board),
+            Err(PositionError::SideNotToMoveInCheck(Color::Black))
+        );
     }
 }

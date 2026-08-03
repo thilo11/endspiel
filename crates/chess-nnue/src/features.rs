@@ -1,4 +1,6 @@
-use chess_common::{Color, PieceKind, Square};
+use chess_common::{Board, CastlingRights, Color, PieceKind, Square};
+
+use crate::{FEATURES_PER_BUCKET, PIECE_FEATURES};
 
 // FILE_FOLD maps file 0-7 → half_file 0-3, mirroring kingside onto queenside.
 const FILE_FOLD: [usize; 8] = [0, 1, 2, 3, 3, 2, 1, 0];
@@ -63,7 +65,61 @@ pub fn feature_index(
     };
     let base = color_offset + piece_kind.index() * 64 + (sq_idx ^ h_flip);
 
-    bucket * 768 + base
+    bucket * FEATURES_PER_BUCKET + base
+}
+
+const FRIENDLY_CASTLING_OFFSET: usize = PIECE_FEATURES;
+const ENEMY_CASTLING_OFFSET: usize = FRIENDLY_CASTLING_OFFSET + 4;
+const EN_PASSANT_OFFSET: usize = ENEMY_CASTLING_OFFSET + 4;
+
+/// Three categorical state features for one accumulator perspective: friendly
+/// castling rights, enemy castling rights, and the current en-passant file.
+pub fn state_feature_indices(
+    perspective: Color,
+    white_king: Square,
+    black_king: Square,
+    castling: CastlingRights,
+    en_passant: Option<Square>,
+) -> [usize; 3] {
+    let king_idx = match perspective {
+        Color::White => white_king.index(),
+        Color::Black => black_king.index() ^ 56,
+    };
+    let horizontal_flip = if king_idx % 8 > 3 { 7 } else { 0 };
+    let bucket = (king_idx / 8) * 4 + FILE_FOLD[king_idx % 8];
+    let bucket_base = bucket * FEATURES_PER_BUCKET;
+
+    let (friendly, enemy) = match perspective {
+        Color::White => (castling.0 & 0b0011, (castling.0 >> 2) & 0b0011),
+        Color::Black => ((castling.0 >> 2) & 0b0011, castling.0 & 0b0011),
+    };
+    let mirror_rights = |rights: u8| -> usize {
+        let rights = usize::from(rights);
+        if horizontal_flip == 0 {
+            rights
+        } else {
+            ((rights & 1) << 1) | ((rights & 2) >> 1)
+        }
+    };
+    let ep_category = en_passant.map_or(0, |square| {
+        usize::from(square.file() ^ horizontal_flip as u8) + 1
+    });
+
+    [
+        bucket_base + FRIENDLY_CASTLING_OFFSET + mirror_rights(friendly),
+        bucket_base + ENEMY_CASTLING_OFFSET + mirror_rights(enemy),
+        bucket_base + EN_PASSANT_OFFSET + ep_category,
+    ]
+}
+
+pub fn board_state_feature_indices(board: &Board, perspective: Color) -> [usize; 3] {
+    state_feature_indices(
+        perspective,
+        board.king_square(Color::White),
+        board.king_square(Color::Black),
+        board.castling,
+        board.en_passant,
+    )
 }
 
 #[cfg(test)]
@@ -86,6 +142,28 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn state_features_distinguish_lost_castling_rights() {
+        let with_rights = Board::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1").unwrap();
+        let without_rights = Board::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w - - 0 1").unwrap();
+        assert_ne!(
+            board_state_feature_indices(&with_rights, Color::White),
+            board_state_feature_indices(&without_rights, Color::White)
+        );
+    }
+
+    #[test]
+    fn state_feature_indices_stay_in_bounds() {
+        let board = Board::starting_position();
+        for perspective in [Color::White, Color::Black] {
+            assert!(
+                board_state_feature_indices(&board, perspective)
+                    .into_iter()
+                    .all(|index| index < INPUT_SIZE)
+            );
         }
     }
 

@@ -1,9 +1,12 @@
 use std::sync::{Arc, LazyLock};
 
-use crate::{HIDDEN_SIZE, INPUT_SIZE, L1_SIZE, L2_SIZE, OUTPUT_BUCKETS, PAIR_INPUT_SIZE};
+use crate::{
+    FEATURES_PER_BUCKET, HIDDEN_SIZE, INPUT_SIZE, L1_SIZE, L2_SIZE, NUM_BUCKETS, OUTPUT_BUCKETS,
+    PAIR_INPUT_SIZE, PIECE_FEATURES,
+};
 
 pub const NET_MAGIC: &[u8; 8] = b"ESPNNUE2";
-pub const NET_VERSION: u32 = 1;
+pub const NET_VERSION: u32 = 2;
 pub const HEADER_SIZE: usize = 32;
 
 /// Layer-stacked NNUE parameters.
@@ -38,8 +41,20 @@ pub const NET_FILE_SIZE: usize = HEADER_SIZE
     + OUTPUT_BUCKETS * L2_SIZE
     + OUTPUT_BUCKETS * 4;
 
+const LEGACY_INPUT_SIZE: usize = PIECE_FEATURES * NUM_BUCKETS;
+const LEGACY_NET_FILE_SIZE: usize = HEADER_SIZE
+    + LEGACY_INPUT_SIZE * HIDDEN_SIZE * 2
+    + HIDDEN_SIZE * 2
+    + OUTPUT_BUCKETS * L1_SIZE * PAIR_INPUT_SIZE
+    + OUTPUT_BUCKETS * L1_SIZE * 4
+    + OUTPUT_BUCKETS * L2_SIZE * L1_SIZE
+    + OUTPUT_BUCKETS * L2_SIZE * 4
+    + OUTPUT_BUCKETS * L2_SIZE
+    + OUTPUT_BUCKETS * 4;
+
 const PAD_ALIGN: usize = 64;
 
+#[cfg(test)]
 fn expected_header() -> [u8; HEADER_SIZE] {
     let mut header = [0u8; HEADER_SIZE];
     header[..8].copy_from_slice(NET_MAGIC);
@@ -61,11 +76,38 @@ fn expected_header() -> [u8; HEADER_SIZE] {
 }
 
 impl NnueNetwork {
+    #[cfg(test)]
+    pub(crate) fn zeroed_for_test() -> Self {
+        let mut bytes = vec![0u8; NET_FILE_SIZE];
+        bytes[..HEADER_SIZE].copy_from_slice(&expected_header());
+        Self::from_bytes(&bytes).unwrap()
+    }
+
     pub fn from_bytes(data: &[u8]) -> Result<Self, &'static str> {
-        if !(NET_FILE_SIZE..NET_FILE_SIZE + PAD_ALIGN).contains(&data.len()) {
-            return Err("layer-stacked NNUE file has the wrong size");
+        if data.len() < HEADER_SIZE || data[..8] != *NET_MAGIC {
+            return Err("layer-stacked NNUE header or dimensions do not match this engine");
         }
-        if data[..HEADER_SIZE] != expected_header() {
+        let read_header_u32 = |index: usize| {
+            let start = 8 + index * 4;
+            u32::from_le_bytes(data[start..start + 4].try_into().unwrap())
+        };
+        let version = read_header_u32(0);
+        let file_input_size = read_header_u32(1) as usize;
+        let dimensions_match = read_header_u32(2) as usize == HIDDEN_SIZE
+            && read_header_u32(3) as usize == OUTPUT_BUCKETS
+            && read_header_u32(4) as usize == L1_SIZE
+            && read_header_u32(5) as usize == L2_SIZE;
+        let legacy = version == 1 && file_input_size == LEGACY_INPUT_SIZE;
+        let current = version == NET_VERSION && file_input_size == INPUT_SIZE;
+        let expected_size = if legacy {
+            LEGACY_NET_FILE_SIZE
+        } else {
+            NET_FILE_SIZE
+        };
+        if !dimensions_match
+            || (!legacy && !current)
+            || !(expected_size..expected_size + PAD_ALIGN).contains(&data.len())
+        {
             return Err("layer-stacked NNUE header or dimensions do not match this engine");
         }
 
@@ -91,9 +133,23 @@ impl NnueNetwork {
                 .into_boxed_slice()
                 .try_into()
                 .unwrap();
-        for row in ft_weights.iter_mut() {
-            for value in row.iter_mut() {
-                *value = read_i16(&mut offset);
+        if legacy {
+            // Old nets used 768 rows per king bucket. Scatter those rows into
+            // the expanded state-aware layout; new state rows remain zero, so
+            // the embedded production net retains bit-identical evaluation.
+            for bucket in 0..NUM_BUCKETS {
+                for piece_feature in 0..PIECE_FEATURES {
+                    let row = bucket * FEATURES_PER_BUCKET + piece_feature;
+                    for value in ft_weights[row].iter_mut() {
+                        *value = read_i16(&mut offset);
+                    }
+                }
+            }
+        } else {
+            for row in ft_weights.iter_mut() {
+                for value in row.iter_mut() {
+                    *value = read_i16(&mut offset);
+                }
             }
         }
 
@@ -142,7 +198,7 @@ impl NnueNetwork {
         for value in &mut l3_biases {
             *value = read_i32(&mut offset);
         }
-        debug_assert_eq!(offset, NET_FILE_SIZE);
+        debug_assert_eq!(offset, expected_size);
 
         Ok(Self {
             ft_weights,
@@ -192,6 +248,15 @@ mod tests {
         bytes
     }
 
+    fn legacy_blank_net() -> Vec<u8> {
+        let mut bytes = vec![0u8; LEGACY_NET_FILE_SIZE];
+        let mut header = expected_header();
+        header[8..12].copy_from_slice(&1u32.to_le_bytes());
+        header[12..16].copy_from_slice(&(LEGACY_INPUT_SIZE as u32).to_le_bytes());
+        bytes[..HEADER_SIZE].copy_from_slice(&header);
+        bytes
+    }
+
     #[test]
     fn accepts_exact_and_padded_sizes() {
         assert!(NnueNetwork::from_bytes(&blank_net(0)).is_ok());
@@ -203,5 +268,18 @@ mod tests {
         assert!(NnueNetwork::from_bytes(&vec![0u8; NET_FILE_SIZE]).is_err());
         assert!(NnueNetwork::from_bytes(&blank_net(PAD_ALIGN)).is_err());
         assert!(NnueNetwork::from_bytes(&[]).is_err());
+    }
+
+    #[test]
+    fn accepts_and_expands_legacy_piece_only_nets() {
+        let net = NnueNetwork::from_bytes(&legacy_blank_net()).unwrap();
+        for bucket in 0..NUM_BUCKETS {
+            for state_feature in PIECE_FEATURES..FEATURES_PER_BUCKET {
+                assert_eq!(
+                    net.ft_weights[bucket * FEATURES_PER_BUCKET + state_feature],
+                    [0; HIDDEN_SIZE]
+                );
+            }
+        }
     }
 }

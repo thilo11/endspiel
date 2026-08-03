@@ -32,6 +32,12 @@ pub fn is_legal_move(board: &Board, m: Move) -> bool {
     validate::is_legal_move(board, m)
 }
 
+/// Validate that a board can occur between two legal moves and is safe to
+/// hand to move generation and search.
+pub fn validate_position(board: &Board) -> Result<(), validate::PositionError> {
+    validate::validate_position(board)
+}
+
 /// Check if the side to move is in check.
 pub fn is_in_check(board: &Board) -> bool {
     let king_sq = board.king_square(board.side_to_move);

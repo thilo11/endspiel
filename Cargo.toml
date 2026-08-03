@@ -38,7 +38,10 @@ pyrrhic-rs = { git = "https://github.com/Algorhythm-sxv/pyrrhic-rs", rev = "961c
 [profile.release]
 lto = "thin"
 codegen-units = 1
-panic = "abort"
+# Search threads are guarded with `catch_unwind` and return a legal fallback
+# move on an unexpected panic. Keep unwind tables in production so those
+# guards can recover instead of terminating the whole engine process.
+panic = "unwind"
 strip = true
 
 [profile.release-with-debug]

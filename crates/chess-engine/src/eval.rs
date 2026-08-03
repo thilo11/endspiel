@@ -3041,7 +3041,7 @@ mod tests {
             // Game 4 HM20: SF=+155, Engine(old)=-53
             (
                 "G4 HM20",
-                "rn1qkb1r/pb3p2/2p1pn1p/6p1/1ppPP3/2N2NB1/PP2BPPP/R2Q1RK1 w KQkq - 0 11",
+                "rn1qkb1r/pb3p2/2p1pn1p/6p1/1ppPP3/2N2NB1/PP2BPPP/R2Q1RK1 w kq - 0 11",
                 155,
             ),
             // Game 2 HM19: SF=+71, Engine(old)=-125

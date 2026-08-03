@@ -4,7 +4,10 @@ pub mod inference;
 pub mod network;
 
 pub const NUM_BUCKETS: usize = 32;
-pub const INPUT_SIZE: usize = 768 * NUM_BUCKETS; // HalfKP: 768 features × 32 king-square buckets
+pub const PIECE_FEATURES: usize = 768;
+pub const STATE_FEATURES: usize = 17;
+pub const FEATURES_PER_BUCKET: usize = PIECE_FEATURES + STATE_FEATURES;
+pub const INPUT_SIZE: usize = FEATURES_PER_BUCKET * NUM_BUCKETS;
 pub const HIDDEN_SIZE: usize = 1024;
 pub const PAIR_SIZE: usize = HIDDEN_SIZE / 2;
 pub const PAIR_INPUT_SIZE: usize = PAIR_SIZE * 2;

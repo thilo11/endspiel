@@ -206,9 +206,13 @@ struct SearchState {
     syzygy_tb: Option<SyzygyTB>,
     /// `go ponder` flag shared with the UCI handler. While it reads true every
     /// time-based stop is suspended; `ponderhit`/`stop` clear it and normal
-    /// time management takes over, with elapsed measured from the search start
-    /// (time already pondered is thereby credited against the budget).
+    /// time management takes over. Pondered work still counts toward the move's
+    /// budget, but a successful hit gets a small amount of fresh thinking on
+    /// our own clock before time-based stops become eligible.
     ponder: Option<Arc<AtomicBool>>,
+    ponder_was_active: bool,
+    ponder_hit_at: Option<Instant>,
+    ponder_fresh_ms: u64,
 }
 
 impl SearchState {
@@ -274,7 +278,17 @@ impl SearchState {
             stop: false,
             syzygy_tb,
             ponder: None,
+            ponder_was_active: false,
+            ponder_hit_at: None,
+            ponder_fresh_ms: ponder_fresh_time_ms(soft_target_ms, time_remaining_ms, game_ply),
         }
+    }
+
+    fn set_ponder(&mut self, ponder: Option<Arc<AtomicBool>>) {
+        self.ponder_was_active = ponder
+            .as_ref()
+            .is_some_and(|pending| pending.load(Ordering::Relaxed));
+        self.ponder = ponder;
     }
 
     fn elapsed_ms(&self) -> u64 {
@@ -287,13 +301,32 @@ impl SearchState {
             .is_some_and(|p| p.load(Ordering::Relaxed))
     }
 
-    fn should_stop(&self, stop_flag: &AtomicBool) -> bool {
+    /// True while a successful ponder hit is owed a small amount of fresh
+    /// thinking. Detecting the shared flag transition here keeps the UCI and
+    /// search threads decoupled and timestamps the hit, not the ponder start.
+    fn ponder_fresh_think_pending(&mut self) -> bool {
+        if !self.ponder_was_active || self.ponder_fresh_ms == 0 {
+            return false;
+        }
+        if self.pondering() {
+            return true;
+        }
+        let hit_at = *self.ponder_hit_at.get_or_insert_with(Instant::now);
+        (hit_at.elapsed().as_millis() as u64) < self.ponder_fresh_ms
+    }
+
+    fn should_stop(&mut self, stop_flag: &AtomicBool) -> bool {
         if self.stop || stop_flag.load(Ordering::Relaxed) {
             return true;
         }
+        // Poll the ponder flag on every periodic stop check so the fresh-time
+        // window starts close to `ponderhit`, not only after the old hard limit.
+        let pondering = self.pondering();
+        let ponder_fresh_pending = self.ponder_fresh_think_pending();
         if let Some(limit) = self.time_limit_ms
             && self.elapsed_ms() >= limit
-            && !self.pondering()
+            && !pondering
+            && !ponder_fresh_pending
         {
             return true;
         }
@@ -568,25 +601,77 @@ impl SearchState {
 /// to the interaction that makes it bite. Bullet said so outright: −28.3 ±22.1 Elo
 /// over 320 games at `10+0.1`.
 ///
-/// So the reserve is charged only from the blitz ceiling up. The threshold is on the
-/// *remaining* clock, which is all `wtime` gives us — the engine cannot tell "10 min
-/// left in a classical game" from "a 10-minute rapid game". It must therefore sit
-/// BELOW the range a long clock drains through, or the cap switches itself off
-/// mid-game and the drain returns: gating at 15 min would have left 60rqL48Y capped
-/// only until move ~15, then uncapped for the rest. At 5 min a classical game stays
-/// capped all the way down, and blitz is exempt from move one.
+/// So the reserve is fully charged above ten minutes and removed below five,
+/// with a linear transition in between. This avoids a spending discontinuity
+/// as a long game drains through the old five-minute boundary. The reserve is
+/// also phase-aware: early play protects a long future, while late endgames can
+/// deliberately convert more of a healthy bank into search depth.
 ///
-/// Sudden death keeps its cap at *every* clock: there a flag is fatal, not merely
-/// expensive.
-fn long_game_time_cap(target_ms: u64, inc_ms: u64, time_ms: u64) -> u64 {
-    let n: u64 = if time_ms > 300_000 { 32 } else { 34 };
+/// Sudden death keeps a reserve at every clock: there a flag is fatal, not
+/// merely expensive.
+fn long_game_time_cap(target_ms: u64, inc_ms: u64, time_ms: u64, game_ply: u64) -> u64 {
+    let phase_divisor = match game_ply {
+        0..40 => 30u64,
+        40..80 => 26,
+        80..120 => 22,
+        _ => 18,
+    };
+
     if inc_ms == 0 {
-        return target_ms.min(time_ms / n);
+        // Smoothly increase the reserve from the phase-aware classical value
+        // to the flag-safe sudden-death value as the clock approaches 5 min.
+        let divisor = if time_ms >= 600_000 {
+            phase_divisor
+        } else if time_ms <= 300_000 {
+            34
+        } else {
+            let classical_weight = time_ms - 300_000;
+            let reserve_weight = 600_000 - time_ms;
+            (phase_divisor * classical_weight + 34 * reserve_weight) / 300_000
+        };
+        return target_ms.min(time_ms / divisor);
     }
-    if time_ms < 300_000 {
+
+    if time_ms <= 300_000 {
         return target_ms;
     }
-    target_ms.min(inc_ms.saturating_add(time_ms / n))
+
+    let sustainable = inc_ms.saturating_add(time_ms / phase_divisor);
+    if time_ms >= 600_000 {
+        return target_ms.min(sustainable);
+    }
+
+    // Between five and ten minutes, blend continuously from the capped
+    // classical allocation to the tuned short-control allocation.
+    let capped_weight = time_ms - 300_000;
+    let uncapped_weight = 600_000 - time_ms;
+    let blended = sustainable
+        .saturating_mul(capped_weight)
+        .saturating_add(target_ms.saturating_mul(uncapped_weight))
+        / 300_000;
+    target_ms.min(blended)
+}
+
+/// Minimum wall-clock thinking after a successful ponder hit. A deep ponder is
+/// valuable, but immediately playing every hit leaves most of a classical bank
+/// unused and gives the actual reply no verification on our clock.
+fn ponder_fresh_time_ms(
+    soft_target_ms: Option<u64>,
+    time_remaining_ms: u64,
+    game_ply: usize,
+) -> u64 {
+    let Some(soft_target_ms) = soft_target_ms else {
+        return 0;
+    };
+    if time_remaining_ms <= 300_000 {
+        return 0;
+    }
+    let divisor = match game_ply {
+        0..40 => 4,
+        40..80 => 3,
+        _ => 2,
+    };
+    (soft_target_ms / divisor).clamp(1_000, 12_000)
 }
 
 /// Retain only recent score volatility for time management. A large shallow
@@ -786,7 +871,7 @@ fn compute_time_limit(
 
         // Long-game safety: keep enough clock in reserve for a long game (incl.
         // long endgame conversions) on every clock control. See fn docs.
-        let target = long_game_time_cap(target, inc, time);
+        let target = long_game_time_cap(target, inc, time, game_ply);
 
         // Hard maximum with stronger low-time safety to reduce flags.
         let mut max = if time <= 30_000 {
@@ -1302,7 +1387,7 @@ pub fn iterative_deepening(
         syzygy_tb,
         params.tune.clone(),
     );
-    state.ponder = params.ponder.clone();
+    state.set_ponder(params.ponder.clone());
 
     // Initialize root accumulator for NNUE
     if state.use_nnue {
@@ -1372,7 +1457,16 @@ pub fn iterative_deepening(
         );
         if quick_state.use_nnue {
             quick_state.accumulators[0].refresh(board, &quick_state.net);
-            update_accumulator_for_move(&mut quick_state, &board_copy, only_move, captured, 0, 1);
+            update_accumulator_for_move(
+                &mut quick_state,
+                &board_copy,
+                only_move,
+                captured,
+                prev_castling,
+                prev_ep,
+                0,
+                1,
+            );
         }
         let mut quick_pv = Vec::new();
         let child_score = -alpha_beta(
@@ -1860,6 +1954,7 @@ pub fn iterative_deepening(
             && !state.pondering()
             && let Some(limit) = state.soft_target_ms
         {
+            let ponder_fresh_pending = state.ponder_fresh_think_pending();
             // Dynamic soft time limit based on multiple factors:
             // Base: increase in increment controls to avoid under-spending.
             let inc_ratio_permille = state
@@ -2026,7 +2121,7 @@ pub fn iterative_deepening(
                     state.time_limit_ms
                 );
             }
-            if elapsed > soft_limit {
+            if elapsed > soft_limit && !ponder_fresh_pending {
                 break;
             }
             // Predict whether the next iteration can complete in time.
@@ -2050,6 +2145,7 @@ pub fn iterative_deepening(
             if depth >= 6
                 && elapsed + predicted_next
                     > soft_limit.saturating_mul(prediction_margin_permille) / 1000
+                && !ponder_fresh_pending
             {
                 break;
             }
@@ -2190,7 +2286,7 @@ fn alpha_beta_root(
 
         // Incremental accumulator update for root (ply 0 → ply 1)
         if state.use_nnue {
-            update_accumulator_for_move(state, board, m, captured, 0, 1);
+            update_accumulator_for_move(state, board, m, captured, prev_castling, prev_ep, 0, 1);
         }
 
         let gives_check = chess_core::is_in_check(board);
@@ -2641,6 +2737,8 @@ fn alpha_beta(
                             board,
                             m,
                             captured,
+                            prev_castling,
+                            prev_ep,
                             ply as usize,
                             ply as usize + 1,
                         );
@@ -2928,7 +3026,16 @@ fn alpha_beta(
         // Incremental accumulator update — deferred until after pruning so
         // moves that get pruned away never pay this cost.
         if state.use_nnue && ply as usize + 1 < MAX_PLY {
-            update_accumulator_for_move(state, board, m, captured, ply as usize, ply as usize + 1);
+            update_accumulator_for_move(
+                state,
+                board,
+                m,
+                captured,
+                prev_castling,
+                prev_ep,
+                ply as usize,
+                ply as usize + 1,
+            );
         }
 
         // -------------------------------------------------------------------
@@ -3270,6 +3377,8 @@ fn quiescence(
                     board,
                     m,
                     captured,
+                    prev_castling,
+                    prev_ep,
                     ply as usize,
                     ply as usize + 1,
                 );
@@ -3417,7 +3526,16 @@ fn quiescence(
         }
 
         if state.use_nnue && ply as usize + 1 < MAX_PLY {
-            update_accumulator_for_move(state, board, m, captured, ply as usize, ply as usize + 1);
+            update_accumulator_for_move(
+                state,
+                board,
+                m,
+                captured,
+                prev_castling,
+                prev_ep,
+                ply as usize,
+                ply as usize + 1,
+            );
         }
 
         let score = -quiescence(
@@ -3493,6 +3611,8 @@ fn quiescence(
                     board,
                     m,
                     captured,
+                    prev_castling,
+                    prev_ep,
                     ply as usize,
                     ply as usize + 1,
                 );
@@ -3621,11 +3741,14 @@ fn evaluate_for_side(board: &Board, state: &mut SearchState, ply: u8) -> i32 {
 /// The `captured` result from `make_move` is used to detect captures.
 ///
 /// After calling this, `state.accumulators[dst_ply]` is correctly updated.
+#[allow(clippy::too_many_arguments)]
 fn update_accumulator_for_move(
     state: &mut SearchState,
     board: &Board,
     m: Move,
     captured: Option<chess_common::Piece>,
+    previous_castling: chess_common::CastlingRights,
+    previous_en_passant: Option<Square>,
     src_ply: usize,
     dst_ply: usize,
 ) {
@@ -3662,6 +3785,16 @@ fn update_accumulator_for_move(
     if moving_kind == PieceKind::King {
         acc.mark_refresh(us);
     }
+
+    acc.update_state(
+        net,
+        white_king,
+        black_king,
+        previous_castling,
+        previous_en_passant,
+        board.castling,
+        board.en_passant,
+    );
 
     // Remove piece from source square
     acc.sub_piece(net, white_king, black_king, us, moving_kind, from);
@@ -3775,8 +3908,19 @@ mod tests {
             .copied()
             .find(|m| m.to_uci() == uci)
             .unwrap_or_else(|| panic!("move {uci} is not legal in {fen}"));
+        let prev_castling = board.castling;
+        let prev_ep = board.en_passant;
         let captured = board.make_move(m);
-        update_accumulator_for_move(&mut state, &board, m, captured, 0, 1);
+        update_accumulator_for_move(
+            &mut state,
+            &board,
+            m,
+            captured,
+            prev_castling,
+            prev_ep,
+            0,
+            1,
+        );
 
         let mut expected = Accumulator::new();
         expected.refresh(&board, &net);
@@ -3809,46 +3953,113 @@ mod tests {
     #[test]
     fn long_game_cap_bounds_blitz_and_rapid_no_increment() {
         // 180+0: an over-large target is capped to time/34.
-        assert_eq!(long_game_time_cap(15_000, 0, 180_000), 180_000 / 34);
-        // 10+0 rapid uses the gentler time/32 divisor.
-        assert_eq!(long_game_time_cap(40_000, 0, 600_000), 600_000 / 32);
+        assert_eq!(long_game_time_cap(15_000, 0, 180_000, 0), 180_000 / 34);
+        // At ten minutes the phase-aware classical reserve is fully active.
+        assert_eq!(long_game_time_cap(40_000, 0, 600_000, 0), 600_000 / 30);
     }
 
     #[test]
-    fn long_game_cap_refunds_the_increment_on_top_of_the_bank_slice() {
+    fn long_game_cap_spends_more_of_the_bank_as_the_game_advances() {
         // The increment is free, so it is spendable above the bank slice.
         assert_eq!(
-            long_game_time_cap(72_000, 5_000, 1_800_000),
-            5_000 + 1_800_000 / 32
+            long_game_time_cap(120_000, 5_000, 1_800_000, 0),
+            5_000 + 1_800_000 / 30
+        );
+        assert_eq!(
+            long_game_time_cap(120_000, 5_000, 1_800_000, 40),
+            5_000 + 1_800_000 / 26
+        );
+        assert_eq!(
+            long_game_time_cap(120_000, 5_000, 1_800_000, 80),
+            5_000 + 1_800_000 / 22
+        );
+        assert_eq!(
+            long_game_time_cap(120_000, 5_000, 1_800_000, 120),
+            5_000 + 1_800_000 / 18
         );
         // Target already under the cap is returned unchanged.
-        assert_eq!(long_game_time_cap(1_000, 0, 180_000), 1_000);
-        assert_eq!(long_game_time_cap(3_000, 2_000, 180_000), 3_000);
+        assert_eq!(long_game_time_cap(1_000, 0, 180_000, 0), 1_000);
+        assert_eq!(long_game_time_cap(3_000, 2_000, 180_000, 0), 3_000);
     }
 
     #[test]
-    fn long_game_cap_charges_the_reserve_only_above_the_blitz_ceiling() {
+    fn long_game_cap_transitions_smoothly_above_the_blitz_ceiling() {
         // Bullet and blitz with an increment keep the tuned allocation. Capping
         // them starved the bot in live play: a 180+5 game ended with 179 of its
         // 180 seconds unspent, and 10+0.1 measured -28.3 Elo (see fn docs).
-        assert_eq!(long_game_time_cap(610, 100, 10_000), 610); // 10+0.1 bullet
-        assert_eq!(long_game_time_cap(22_500, 5_000, 180_000), 22_500); // 3+5 blitz
-        assert_eq!(long_game_time_cap(30_000, 5_000, 299_999), 30_000); // just under
-        // Above the blitz ceiling the reserve applies. Crucially it must STAY
-        // applied as a long clock drains: gating any higher (say 15 min) would
-        // uncap 60rqL48Y from move ~15 on and restore the very drain it fixes.
+        assert_eq!(long_game_time_cap(610, 100, 10_000, 0), 610); // 10+0.1 bullet
+        assert_eq!(long_game_time_cap(22_500, 5_000, 180_000, 0), 22_500); // 3+5 blitz
+        assert_eq!(long_game_time_cap(30_000, 5_000, 300_000, 0), 30_000);
+        // The old hard switch at five minutes is replaced by a blend. Halfway
+        // through the transition, the result is halfway between the tuned
+        // target and the phase-aware sustainable allocation.
         assert_eq!(
-            long_game_time_cap(72_000, 5_000, 628_000), // 10:28 left, move 30
-            5_000 + 628_000 / 32
+            long_game_time_cap(80_000, 5_000, 450_000, 80),
+            (80_000 + (5_000 + 450_000 / 22)) / 2
         );
         assert_eq!(
-            long_game_time_cap(72_000, 5_000, 1_800_000),
-            5_000 + 1_800_000 / 32
+            long_game_time_cap(80_000, 5_000, 600_000, 80),
+            5_000 + 600_000 / 22
         );
         // Sudden death is capped at ANY clock — a flag there is fatal, and the
         // 180+0 mate-at-move-90 flag is what the cap originally fixed.
-        assert_eq!(long_game_time_cap(610, 0, 10_000), 10_000 / 34);
-        assert_eq!(long_game_time_cap(15_000, 0, 180_000), 180_000 / 34);
+        assert_eq!(long_game_time_cap(610, 0, 10_000, 120), 10_000 / 34);
+        assert_eq!(long_game_time_cap(15_000, 0, 180_000, 120), 180_000 / 34);
+    }
+
+    #[test]
+    fn ponder_hit_fresh_time_is_phase_aware_and_clock_safe() {
+        assert_eq!(ponder_fresh_time_ms(None, 1_800_000, 0), 0);
+        assert_eq!(ponder_fresh_time_ms(Some(60_000), 300_000, 120), 0);
+        assert_eq!(ponder_fresh_time_ms(Some(24_000), 1_800_000, 0), 6_000);
+        assert_eq!(ponder_fresh_time_ms(Some(24_000), 1_800_000, 40), 8_000);
+        assert_eq!(ponder_fresh_time_ms(Some(24_000), 1_800_000, 80), 12_000);
+        assert_eq!(ponder_fresh_time_ms(Some(500), 1_800_000, 0), 1_000);
+        assert_eq!(ponder_fresh_time_ms(Some(100_000), 1_800_000, 120), 12_000);
+    }
+
+    #[test]
+    fn successful_ponder_hit_defers_an_expired_hard_limit_for_fresh_time() {
+        let tt = Arc::new(SharedTT::new(1));
+        let net = NnueNetwork::embedded();
+        let mut state = SearchState::new(
+            Some(0),
+            Some(24_000),
+            true,
+            5_000,
+            1_800_000,
+            None,
+            80,
+            0,
+            1,
+            &tt,
+            true,
+            net,
+            None,
+            TuneParams::default(),
+        );
+        let ponder = Arc::new(AtomicBool::new(true));
+        state.set_ponder(Some(Arc::clone(&ponder)));
+        let stop = AtomicBool::new(false);
+
+        assert!(
+            !state.should_stop(&stop),
+            "time stops are suspended in ponder"
+        );
+        ponder.store(false, Ordering::Relaxed);
+        assert!(state.ponder_hit_at.is_none());
+        assert!(
+            !state.should_stop(&stop),
+            "an expired ponder budget must not stop at the instant of the hit"
+        );
+        assert!(state.ponder_hit_at.is_some());
+
+        state.ponder_hit_at =
+            Instant::now().checked_sub(std::time::Duration::from_millis(state.ponder_fresh_ms + 1));
+        assert!(
+            state.should_stop(&stop),
+            "the original hard limit applies after fresh time expires"
+        );
     }
 
     #[test]
@@ -3965,7 +4176,7 @@ mod tests {
         let alloc = allocated_move_time_ms(&params, &board).expect("timed search");
         assert!(alloc >= 5_000, "allocated {alloc} below the free increment");
         assert!(
-            alloc <= 5_000 + 628_000 / 32,
+            alloc <= 5_000 + 628_000 / 26,
             "allocated {alloc} drains the clock faster than the increment refunds it"
         );
     }

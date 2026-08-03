@@ -94,11 +94,15 @@ pub struct UciHandler {
     /// `go ponder`. Only consulted at `ponderhit` to detect the no-budget case
     /// (0 = no clock info → play the pondered result at once); a nonzero
     /// budget is enforced by the search's own time manager, which activates
-    /// when `ponder_pending` clears.
+    /// when `ponder_pending` clears and guarantees a bounded amount of fresh
+    /// thinking on a healthy classical clock.
     ponder_alloc_ms: u64,
     /// Game-level history/correction tables, persisted across moves and shared
     /// into the per-`go` search thread. Reset on `ucinewgame`.
     history: Arc<Mutex<PersistentHistory>>,
+    /// Why the most recent `position` command was rejected. While set, `go`
+    /// returns `bestmove 0000` instead of searching the previous (stale) board.
+    position_error: Option<String>,
 }
 
 impl Default for UciHandler {
@@ -124,6 +128,7 @@ impl UciHandler {
             ponder_pending: Arc::new(AtomicBool::new(false)),
             ponder_alloc_ms: 0,
             history: Arc::new(Mutex::new(PersistentHistory::new())),
+            position_error: None,
         }
     }
 
@@ -308,7 +313,7 @@ impl UciHandler {
             }));
         }
         let eval_mode = if self.engine.use_nnue() {
-            "NNUE (HalfKP 768\u{00d7}32\u{2192}(1024 pairwise 512)\u{00d7}2\u{2192}16\u{2192}32\u{2192}1)".to_string()
+            "NNUE (state-aware HalfKP 785\u{00d7}32\u{2192}(1024 pairwise 512)\u{00d7}2\u{2192}16\u{2192}32\u{2192}1)".to_string()
         } else {
             "HCE (no trained NNUE net)".to_string()
         };
@@ -352,6 +357,7 @@ impl UciHandler {
     fn handle_ucinewgame(&mut self) {
         self.handle_stop();
         self.board = Board::starting_position();
+        self.position_error = None;
         self.engine.clear_tt();
         // Fresh game: drop accumulated history/corrections. handle_stop() above
         // has joined any search thread, so the lock is free.
@@ -359,38 +365,40 @@ impl UciHandler {
     }
 
     fn handle_position(&mut self, fen: Option<String>, moves: Vec<String>) {
-        // Set up the base position
-        let mut board = if let Some(fen) = fen {
-            match Board::from_fen(&fen) {
-                Ok(b) => b,
-                Err(e) => {
-                    log::error!("Invalid FEN '{}': {}", fen, e);
-                    return;
-                }
+        match build_position(fen.as_deref(), &moves) {
+            Ok(board) => {
+                self.board = board;
+                self.position_error = None;
             }
-        } else {
-            Board::starting_position()
-        };
-
-        // Apply each move in sequence
-        for (i, move_str) in moves.iter().enumerate() {
-            let Some(m) = find_legal_move(&board, move_str) else {
-                log::error!(
-                    "handle_position: could not apply move {} (index {}) — board NOT updated",
-                    move_str,
-                    i
-                );
-                return;
-            };
-            board.make_move(m);
+            Err(error) => {
+                log::error!("Rejected UCI position: {error}");
+                send_response(&UciResponse::Info(UciInfo {
+                    string: Some(format!("Invalid position: {error}")),
+                    ..UciInfo::default()
+                }));
+                self.position_error = Some(error);
+            }
         }
-
-        self.board = board;
     }
 
     fn handle_go(&mut self, params: GoParams) {
         // Stop any existing search first
         self.handle_stop();
+
+        // Never search a stale board after rejecting the latest `position`
+        // command. A null best move is the UCI-safe response and keeps the
+        // process alive for a later valid position or `ucinewgame`.
+        if let Some(error) = &self.position_error {
+            send_response(&UciResponse::Info(UciInfo {
+                string: Some(format!("Cannot search invalid position: {error}")),
+                ..UciInfo::default()
+            }));
+            send_response(&UciResponse::BestMove {
+                best: Move::NULL,
+                ponder: None,
+            });
+            return;
+        }
 
         // Opening variety: bookless play is deterministic (same eval => same
         // game). When enabled, opening searches run with a widened MultiPV
@@ -435,8 +443,8 @@ impl UciHandler {
         // deepens freely on the opponent's clock and the move is held back
         // until `ponderhit` (which clears the flag and hands control to the
         // regular time manager, difficulty adaptation included) or `stop`
-        // (ponder-miss / quit). Elapsed time is measured from the search
-        // start, so time already pondered is credited against the budget.
+        // (ponder-miss / quit). Pondered time is credited against the budget,
+        // but a hit still receives a small phase-aware amount of fresh thought.
         let is_ponder = params.ponder;
         self.ponder_pending = Arc::new(AtomicBool::new(is_ponder));
         let ponder_pending = Arc::clone(&self.ponder_pending);
@@ -660,9 +668,9 @@ impl UciHandler {
     /// switches to its normal soft/hard time management — difficulty
     /// adaptation included, which the old flat `alloc - elapsed` timer
     /// disconnected (a pondered move could never think longer on a collapsing
-    /// eval, nor shorter on a trivial one). The search's elapsed clock started
-    /// at `go ponder`, so time already pondered is credited automatically: a
-    /// well-pondered move plays almost at once and banks the saved clock.
+    /// eval, nor shorter on a trivial one). Pondered time remains credited, but
+    /// on a healthy classical clock the search also guarantees a small bounded
+    /// amount of fresh thinking after the hit.
     ///
     /// With no budget known (e.g. `go ponder infinite` or no clock info),
     /// there is nothing for the time manager to enforce — play the pondered
@@ -940,6 +948,26 @@ fn find_legal_move(board: &Board, uci_str: &str) -> Option<Move> {
         .copied()
 }
 
+/// Build and validate a complete UCI position without mutating handler state.
+/// The side not to move must not be in check: otherwise the supplied history
+/// claims that the previous move illegally left its own king attacked.
+fn build_position(fen: Option<&str>, moves: &[String]) -> Result<Board, String> {
+    let mut board = match fen {
+        Some(fen) => Board::from_fen(fen).map_err(|e| format!("{e}"))?,
+        None => Board::starting_position(),
+    };
+    chess_core::validate_position(&board).map_err(|e| e.to_string())?;
+
+    for (index, move_str) in moves.iter().enumerate() {
+        let m = find_legal_move(&board, move_str)
+            .ok_or_else(|| format!("illegal move {move_str} at index {index}"))?;
+        board.make_move(m);
+        chess_core::validate_position(&board)
+            .map_err(|e| format!("invalid board after move {move_str} at index {index}: {e}"))?;
+    }
+    Ok(board)
+}
+
 /// Send a UCI response to stdout.
 ///
 /// Explicitly flushes after each response so GUIs receive output immediately,
@@ -956,7 +984,7 @@ fn send_response(response: &UciResponse) {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_display_score, validated_ponder_move};
+    use super::{build_position, normalize_display_score, validated_ponder_move};
     use chess_common::{Board, Move, Score};
     use chess_engine::syzygy::{TB_LOSS_SCORE, TB_WIN_SCORE};
 
@@ -1022,5 +1050,19 @@ mod tests {
         assert_eq!(normalize_display_score(Score(2)), Score(20));
         assert_eq!(normalize_display_score(Score(-2)), Score(-20));
         assert_eq!(normalize_display_score(Score(0)), Score(0));
+    }
+
+    #[test]
+    fn invalid_positions_are_rejected_before_search() {
+        assert!(build_position(Some("8/8/8/8/8/8/8/8 w - - 0 1"), &[]).is_err());
+        assert!(build_position(Some("4k3/8/8/8/8/8/4R3/4K3 w - - 0 1"), &[]).is_err());
+        assert!(build_position(None, &["e2e5".to_string()]).is_err());
+    }
+
+    #[test]
+    fn valid_position_history_is_accepted() {
+        let moves = ["e2e4".to_string(), "e7e5".to_string()];
+        let board = build_position(None, &moves).expect("legal position history");
+        assert_eq!(board.side_to_move, chess_common::Color::White);
     }
 }
