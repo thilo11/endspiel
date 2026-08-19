@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/thilo11/endspiel/actions/workflows/ci.yml/badge.svg)](https://github.com/thilo11/endspiel/actions/workflows/ci.yml)
 [![Release](https://github.com/thilo11/endspiel/actions/workflows/release.yml/badge.svg)](https://github.com/thilo11/endspiel/actions/workflows/release.yml)
-[![GitHub release](https://img.shields.io/github/v/release/thilo11/endspiel)](https://github.com/thilo11/endspiel/releases)
+[![GitHub release](https://img.shields.io/github/v/release/thilo11/endspiel?logo=github&label=release)](https://github.com/thilo11/endspiel/releases/latest)
 [![License](https://img.shields.io/github/license/thilo11/endspiel)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-stable-orange?logo=rust)](https://www.rust-lang.org)
 [![Lichess](https://img.shields.io/badge/lichess-Endspiel%20%28Pi5%29-green?logo=lichess)](https://lichess.org/@/endspiel-pi)
@@ -30,9 +30,7 @@ See [ABOUT.md](ABOUT.md) for project rationale, playing strength, and training d
   the [Bullet](https://github.com/jw1912/bullet) trainer and Syzygy
   probing uses `pyrrhic-rs` — the only third-party pieces in the pipeline)
 - **Full UCI compliance** — works in any UCI GUI (Arena, CuteChess, Fritz, Banksia, Scid, …)
-- **NNUE evaluation** (default) — HalfKP 768×32→(1024 pairwise 512)×2→16→32→1 (8 material-keyed output buckets), trained
-  from scratch on ~4.1 billion curated positions; the net is embedded
-  in the binary, no extra files to ship
+- **NNUE evaluation** (default) — state-aware HalfKP 785×32→(1024 pairwise 512)×2→16→32→1 (8 material-keyed output buckets), with castling rights and en passant in the input; trained from scratch on billions of self-play positions; the net is embedded in the binary, no extra files to ship. Older piece-only nets still load.
 - **HCE fallback** — tapered hand-crafted evaluation (`UseNNUE=false`) with
   pawn hash, mobility, king safety, pawn structure, threats, space, and
   endgame scaling
@@ -44,10 +42,11 @@ See [ABOUT.md](ABOUT.md) for project rationale, playing strength, and training d
   History and correction tables persist across moves within a game
   (reset on `ucinewgame`)
 - **Pondering** — thinks on the opponent's time (`go ponder` / `ponderhit`);
-  enable via the `Ponder` UCI option in your GUI
+  enable via the `Ponder` UCI option in your GUI. A legal ponder move is
+  still advertised when the PV is only one ply (book, tablebase, forced lines)
 - **Multi-threading** — Lazy SMP with depth diversity (`Threads` UCI option)
 - **MultiPV** — up to 256 principal variations for analysis (`MultiPV` UCI option)
-- **Syzygy tablebases** — WDL probing for 3–5 man endgames via `pyrrhic-rs`
+- **Syzygy tablebases** — WDL/DTZ probing (up to 7-man) via `pyrrhic-rs`; at the root the engine stays on win- or draw-preserving moves instead of drifting into a loss
 - **Opening books** — load Polyglot `.bin`, EPD (`.epd`, with `bm` opcodes), or PGN (`.pgn`) at runtime; format is auto-detected by extension
 - **WDL output** — optional `wdl W D L` annotation on each `info` line
   (`UCI_ShowWDL`), with the win/draw/loss mapping fit per net
@@ -60,7 +59,7 @@ See [ABOUT.md](ABOUT.md) for project rationale, playing strength, and training d
 
 ## Download
 
-Prebuilt binaries are on the [Releases](https://github.com/thilo11/endspiel/releases) page.
+Prebuilt binaries are on the [Releases](https://github.com/thilo11/endspiel/releases/latest) page. Current release: **v1.6.0**.
 
 **x86-64** ships in three micro-architecture tiers (each faster than the one
 below, all but `-v4` profile-guided-optimised). Pick the **highest your CPU
@@ -147,6 +146,7 @@ check that the binary runs end-to-end:
 | `BookFile` | *(disabled)* | Path to an opening book: Polyglot `.bin`, EPD `.epd`, or PGN `.pgn` (auto-detected by extension) |
 | `SyzygyPath` | *(disabled)* | Path to Syzygy tablebase directory |
 | `MultiPV` | 1 | Number of principal variations to report (1–256) |
+| `OpeningVariety` | 0 | Opening spice: 0 = off; otherwise pick at random among MultiPV moves within this many centipawns of the best, for the first 8 plies |
 | `UCI_ShowWDL` | false | Append `wdl <win> <draw> <loss>` (0–1000) to each info line |
 
 Set `BookFile` or `SyzygyPath` to a valid path to enable; clear to disable. No separate toggle is needed.
@@ -156,7 +156,8 @@ Set `BookFile` or `SyzygyPath` to a valid path to enable; clear to disable. No s
 - **`Hash`** — increase for long time controls or analysis; watch `hashfull` in engine output (permille, so 950 = 95%). The default adapts to the machine: ~128 MB per search thread (more threads fill the table faster), capped at ~1/16 of available RAM, floor 16 MB. So it grows with both core count and RAM, and tracks an explicit `Threads` setting.
 - **`Threads`** — Lazy SMP; scaling is sub-linear. Stick to physical core count. On Linux/Android the default is the performance-core count (the top CPU-frequency tier), which avoids the slow LITTLE cores and the thermal throttling they invite; elsewhere it's `min(available, 16)`.
 - **`EvalFile`** — load an alternate net at runtime without rebuilding. Clear to revert to the embedded net.
-- **`SyzygyPath`** — WDL probing for 3–5 man endgames. Multiple directories: `:` on Linux/macOS, `;` on Windows.
+- **`SyzygyPath`** — WDL/DTZ probing for up to 7-man endgames. Multiple directories: `:` on Linux/macOS, `;` on Windows.
+- **`OpeningVariety`** — only affects the first 8 plies; 0 (default) always plays the best move.
 
 > **Fritz 20 (Windows):** Fritz manages Syzygy and opening books through its own systems.
 > Set the tablebase path in Fritz's settings — it forwards it to Endspiel automatically.
