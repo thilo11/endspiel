@@ -917,20 +917,40 @@ impl UciHandler {
 /// Derive the ponder move (the expected opponent reply) to advertise alongside
 /// `best`, returning it only when it is genuinely playable.
 ///
-/// The ponder move is the second PV element. PV reconstruction can produce an
-/// illegal continuation (e.g. a transposition-table hash collision), and an
-/// illegal `ponder` move corrupts a GUI's ponder state machine — lichess-bot
-/// logs "Engine sent invalid ponder move" and can desync/hang pondering,
-/// occasionally losing on time. Returns `None` unless `best` is real, the PV
-/// starts with `best`, and `pv[1]` is legal in the position after `best`.
+/// Prefers PV[1] when the PV starts with `best` and the reply is legal after
+/// `best`. PV reconstruction can produce an illegal continuation (e.g. a TT
+/// hash collision); an illegal `ponder` move corrupts a GUI's ponder state
+/// machine — lichess-bot logs "Engine sent invalid ponder move" and can
+/// desync/hang pondering.
+///
+/// When the PV is short or unusable (book moves, TB-restricted roots that
+/// resolve without a multi-ply PV, forced-move fast paths), fall back to any
+/// legal reply after `best`. Omitting `ponder` entirely is worse for live play:
+/// with `Ponder` enabled the GUI never starts a ponder search, so a dead game
+/// stream leaves the bot completely idle until flag (lichess PGp4HMqQ). A
+/// wrong guess still costs nothing — the GUI stops and re-searches on a miss.
 fn validated_ponder_move(board: &Board, best: Move, pv: &[Move]) -> Option<Move> {
-    if best == Move::NULL || pv.len() < 2 || pv[0] != best {
+    if best == Move::NULL {
         return None;
     }
-    let reply = pv[1];
     let mut after = board.clone();
     after.make_move(best);
-    chess_core::is_legal_move(&after, reply).then_some(reply)
+
+    if pv.len() >= 2 && pv[0] == best {
+        let reply = pv[1];
+        if chess_core::is_legal_move(&after, reply) {
+            return Some(reply);
+        }
+    }
+
+    fallback_ponder_move(&after)
+}
+
+/// Pick any legal reply after `best` so `bestmove` can still carry a ponder
+/// move when the search did not produce a usable multi-ply PV.
+fn fallback_ponder_move(after_best: &Board) -> Option<Move> {
+    let replies = chess_core::generate_legal_moves(after_best);
+    replies.as_slice().first().copied()
 }
 
 fn find_legal_move(board: &Board, uci_str: &str) -> Option<Move> {
@@ -1005,36 +1025,63 @@ mod tests {
     }
 
     #[test]
-    fn ponder_move_dropped_when_reply_is_illegal() {
+    fn ponder_move_falls_back_when_reply_is_illegal() {
         // After 1. e4, "e2e4" again is illegal (e2 is empty) — a corrupt PV
-        // continuation must not be advertised as a ponder move.
+        // continuation must not be advertised; fall back to a legal reply.
         let board = Board::starting_position();
         let best = mv("e2e4");
-        assert_eq!(
-            validated_ponder_move(&board, best, &[best, mv("e2e4")]),
-            None
+        let ponder = validated_ponder_move(&board, best, &[best, mv("e2e4")])
+            .expect("fallback ponder after illegal PV reply");
+        let mut after = board.clone();
+        after.make_move(best);
+        assert!(
+            chess_core::is_legal_move(&after, ponder),
+            "fallback ponder must be legal after best"
         );
     }
 
     #[test]
-    fn ponder_move_dropped_when_pv_head_differs_from_best() {
+    fn ponder_move_falls_back_when_pv_head_differs_from_best() {
         let board = Board::starting_position();
-        assert_eq!(
-            validated_ponder_move(&board, mv("e2e4"), &[mv("d2d4"), mv("e7e5")]),
-            None
-        );
+        let best = mv("e2e4");
+        let ponder = validated_ponder_move(&board, best, &[mv("d2d4"), mv("e7e5")])
+            .expect("fallback ponder when PV head mismatches best");
+        let mut after = board.clone();
+        after.make_move(best);
+        assert!(chess_core::is_legal_move(&after, ponder));
     }
 
     #[test]
-    fn ponder_move_dropped_when_pv_too_short_or_best_null() {
+    fn ponder_move_falls_back_when_pv_too_short() {
+        // Book / TB-style results often return a one-move PV. Still emit a
+        // legal ponder so GUIs with Ponder on can search on the opponent's time.
         let board = Board::starting_position();
         let best = mv("e2e4");
-        assert_eq!(validated_ponder_move(&board, best, &[best]), None);
-        assert_eq!(validated_ponder_move(&board, best, &[]), None);
+        for pv in [vec![best], Vec::new()] {
+            let ponder = validated_ponder_move(&board, best, &pv)
+                .expect("fallback ponder for short PV");
+            let mut after = board.clone();
+            after.make_move(best);
+            assert!(chess_core::is_legal_move(&after, ponder));
+        }
         assert_eq!(
             validated_ponder_move(&board, Move::NULL, &[Move::NULL, mv("e7e5")]),
             None
         );
+    }
+
+    #[test]
+    fn ponder_move_falls_back_in_short_tb_style_endgame() {
+        // K+P vs K+B (4-man): search may resolve with a single-move PV.
+        let board =
+            Board::from_fen("8/8/6K1/5P2/8/3k4/1b6/8 w - - 0 66").expect("valid fen");
+        let legal = chess_core::generate_legal_moves(&board);
+        let best = *legal.as_slice().first().expect("has moves");
+        let ponder = validated_ponder_move(&board, best, &[best])
+            .expect("TB-style short PV still yields ponder");
+        let mut after = board.clone();
+        after.make_move(best);
+        assert!(chess_core::is_legal_move(&after, ponder));
     }
 
     #[test]
