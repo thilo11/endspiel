@@ -362,13 +362,15 @@ fn decode_root_move(
 /// straight into a threefold repetition (the lichess R2KlN7mg perpetual trap).
 ///
 /// So instead of minting a mate score and PV, we expose the tablebase as a *root
-/// ranking*: a root-relative score in the TB band (never a mate score) plus, when
-/// the side to move is winning, the win-preserving legal moves ordered best-first
-/// by DTZ. The search restricts its root to these moves and picks among them,
-/// producing the PV and the reported score itself. This keeps DTZ's one real
-/// strength — guaranteeing zeroing *progress*, which a search whose leaf probes
-/// return a flat `TB_WIN_SCORE` cannot see — while letting the search handle the
-/// things DTZ is blind to: tactics, game-history repetitions, and the actual line.
+/// ranking*: a root-relative score in the TB band (never a mate score) plus the
+/// WDL-preserving legal moves. In a win those are the win-preserving moves
+/// ordered best-first by DTZ; in a draw they are the draw-preserving moves
+/// (lichess RBmggG2n: without that list the search played 202...Ka8 and lost a
+/// drawn KBPPvKB). The search restricts its root to these moves and picks among
+/// them, producing the PV and the reported score itself. This keeps DTZ's one
+/// real strength — guaranteeing zeroing *progress* in wins, and not converting
+/// a tablebase draw into a loss — while letting the search handle the things
+/// DTZ is blind to: tactics, game-history repetitions, and the actual line.
 #[derive(Clone, Debug)]
 pub struct RootTbRanking {
     /// Root-relative value in the TB band (`TB_WIN_SCORE` / draw / `TB_LOSS_SCORE`),
@@ -379,6 +381,32 @@ pub struct RootTbRanking {
     /// When the root is a win, the win-preserving legal moves ordered best-first
     /// (the tablebase-recommended move, then ascending DTZ). Empty otherwise.
     pub winning_moves: Vec<Move>,
+    /// When the root is a draw (including 50-move cursed/blessed), the
+    /// draw-preserving legal moves. Empty otherwise.
+    pub drawing_moves: Vec<Move>,
+}
+
+fn is_draw_wdl(wdl: WdlProbeResult) -> bool {
+    matches!(
+        wdl,
+        WdlProbeResult::Draw | WdlProbeResult::CursedWin | WdlProbeResult::BlessedLoss
+    )
+}
+
+impl RootTbRanking {
+    /// Moves the search should confine the root to, if any.
+    pub fn restriction_moves(&self) -> &[Move] {
+        if !self.winning_moves.is_empty() {
+            &self.winning_moves
+        } else {
+            &self.drawing_moves
+        }
+    }
+
+    /// True when the root is a tablebase draw under the 50-move rule.
+    pub fn is_theoretical_draw(&self) -> bool {
+        is_draw_wdl(self.best_wdl)
+    }
 }
 
 /// Rank the legal root moves using a single DTZ root probe.
@@ -428,10 +456,29 @@ pub fn rank_root_moves(tb: &SyzygyTB, board: &Board) -> Option<RootTbRanking> {
         winning_moves = scored.into_iter().map(|(mv, _)| mv).collect();
     }
 
+    // Draw-preserving move list. Without this, a drawn 6-man root is searched
+    // over the full move list and a losing king step (RBmggG2n 202...Ka8) can
+    // be preferred because the net/search is still trying to "play for a win".
+    let mut drawing_moves: Vec<Move> = Vec::new();
+    if is_draw_wdl(best_wdl) {
+        let mut scored: Vec<(Move, u16)> = Vec::new();
+        for value in probe.moves.iter().copied().take(probe.num_moves) {
+            if let DtzProbeValue::DtzResult(r) = value
+                && is_draw_wdl(r.wdl)
+                && let Some(mv) = decode_root_move(board, r.from_square, r.to_square, r.promotion)
+            {
+                scored.push((mv, r.dtz));
+            }
+        }
+        scored.sort_by_key(|&(mv, dtz)| (Some(mv) != recommended, dtz));
+        drawing_moves = scored.into_iter().map(|(mv, _)| mv).collect();
+    }
+
     Some(RootTbRanking {
         score,
         best_wdl,
         winning_moves,
+        drawing_moves,
     })
 }
 
@@ -479,6 +526,10 @@ mod tests {
         assert!(
             ranking.winning_moves.is_empty(),
             "a losing root has no winning moves"
+        );
+        assert!(
+            ranking.drawing_moves.is_empty(),
+            "a losing root has no drawing moves"
         );
     }
 
@@ -538,8 +589,49 @@ mod tests {
                 r.winning_moves
                     .iter()
                     .map(|m| m.to_uci())
+                    .collect::<Vec<_>>(),
+                r.drawing_moves
+                    .iter()
+                    .map(|m| m.to_uci())
                     .collect::<Vec<_>>()
             ))
+        );
+    }
+
+    #[test]
+    fn rank_root_moves_keeps_only_drawing_moves_in_kbppvkb_draw() {
+        // lichess RBmggG2n, Black to move 202: K+B+2P vs K+B is a 6-man draw.
+        // Only Bd8 and Kb7 hold; Ka8 (played live) loses. The ranker must
+        // expose the holders and omit the losing king step.
+        let _guard = syzygy_test_lock().lock().expect("lock syzygy test mutex");
+        let path = syzygy_path();
+        if !path.exists() {
+            return;
+        }
+
+        let tb = SyzygyTB::new(path.to_string_lossy().as_ref()).expect("load syzygy tables");
+        let board =
+            Board::from_fen("8/k1b5/8/PP6/K1B5/8/8/8 b - - 74 202").expect("valid FEN");
+        let ranking = rank_root_moves(&tb, &board).expect("root TB ranking");
+
+        assert!(
+            ranking.is_theoretical_draw(),
+            "expected a TB draw, got {:?}",
+            ranking.best_wdl
+        );
+        assert!(ranking.winning_moves.is_empty());
+        let draws: Vec<String> = ranking
+            .drawing_moves
+            .iter()
+            .map(|m| m.to_uci())
+            .collect();
+        assert!(
+            draws.contains(&"c7d8".to_string()) && draws.contains(&"a7b7".to_string()),
+            "expected Bd8/Kb7 among drawing moves, got {draws:?}"
+        );
+        assert!(
+            !draws.contains(&"a7a8".to_string()),
+            "Ka8 must not be treated as draw-preserving, got {draws:?}"
         );
     }
 }

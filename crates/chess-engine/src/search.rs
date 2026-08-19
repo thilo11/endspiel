@@ -1379,7 +1379,14 @@ pub fn iterative_deepening(
         time_remaining,
         params.max_nodes,
         game_ply,
-        params.contempt,
+        if root_tb_ranking
+            .as_ref()
+            .is_some_and(syzygy::RootTbRanking::is_theoretical_draw)
+        {
+            0
+        } else {
+            params.contempt
+        },
         params.singular_ext_mode,
         tt,
         params.use_nnue,
@@ -1536,19 +1543,19 @@ pub fn iterative_deepening(
 
     // Tablebase root restriction. In a TB-won position, confine the search to
     // the win-preserving moves, ordered by the tablebase ranking (fastest DTZ
-    // conversion first). This is the one thing the search cannot do on its
-    // own: interior WDL probes fire only at halfmove_clock == 0, so inside a
+    // conversion first). In a TB-drawn position, confine it to the
+    // draw-preserving moves so a losing king step cannot sneak in (lichess
+    // RBmggG2n). This is the one thing the search cannot do on its own:
+    // interior WDL probes fire only at halfmove_clock == 0, so inside a
     // conversion the search sees no tablebase gradient at all and would drift
-    // toward the 50-move or repetition draw. While restricted, the order is
-    // sticky end to end: the bucketed sort in the ID loop, the unsorted
-    // working list, and the post-iteration head selection all preserve it, so
-    // cp noise cannot displace the progress move; only a proven mate promotes
-    // a move and only a draw-or-worse score (a repetition the search actually
-    // saw) demotes one. Single-PV play only; multi-PV keeps the full list.
-    let mut tb_restricted = false;
+    // toward the 50-move or repetition draw. Win restrictions keep DTZ order
+    // sticky end to end; draw restrictions only filter the list and let
+    // search pick among the holders. Single-PV play only; multi-PV keeps the
+    // full list.
+    let mut tb_win_restricted = false;
     if params.multi_pv.max(1) == 1
         && let Some(ranking) = root_tb_ranking.as_ref()
-        && !ranking.winning_moves.is_empty()
+        && !ranking.restriction_moves().is_empty()
     {
         // Syzygy is blind to game history: a statically win-preserving move
         // can still complete a claimable threefold on the board (lichess
@@ -1570,7 +1577,7 @@ pub fn iterative_deepening(
         };
         let mut restricted: Vec<(Move, i32)> = Vec::new();
         let mut seen_once: Vec<(Move, i32)> = Vec::new();
-        for &m in &ranking.winning_moves {
+        for &m in ranking.restriction_moves() {
             if !root_move_scores.iter().any(|(rm, _)| *rm == m) {
                 continue;
             }
@@ -1583,7 +1590,7 @@ pub fn iterative_deepening(
         restricted.extend(seen_once);
         if !restricted.is_empty() {
             root_move_scores = restricted;
-            tb_restricted = true;
+            tb_win_restricted = !ranking.winning_moves.is_empty();
         }
     }
 
@@ -1630,7 +1637,7 @@ pub fn iterative_deepening(
         // their tablebase order (stable), then draw-or-worse (a repetition
         // or loss the search actually found) last.
         if base_depth > 1 {
-            if tb_restricted {
+            if tb_win_restricted {
                 root_move_scores.sort_by_key(|&(_, s)| {
                     let bucket = if Score(s).is_mate() && s > 0 {
                         2
@@ -1651,7 +1658,7 @@ pub fn iterative_deepening(
         // long-stable move isn't displaced by SMP TT noise. Not in
         // TB-restricted mode: there the master order IS the choice and must
         // stay in tablebase order.
-        if !tb_restricted && best_move_stability >= 4 && !best_move.is_null() {
+        if !tb_win_restricted && best_move_stability >= 4 && !best_move.is_null() {
             for i in 1..root_move_scores.len() {
                 if root_move_scores[i].0 == best_move {
                     root_move_scores.swap(0, i);
@@ -1686,7 +1693,7 @@ pub fn iterative_deepening(
             // slot to whichever shuffle move scored highest last iteration and
             // defeat the whole restriction (lichess xp85KNLq: 28 moves of
             // queen checks in a TB-won KQvKR, halfmove clock at 95).
-            if !tb_restricted {
+            if !tb_win_restricted {
                 working_scores.sort_by_key(|b| std::cmp::Reverse(b.1));
             }
 
@@ -1806,7 +1813,7 @@ pub fn iterative_deepening(
         // else the first move in tablebase order that still scores as winning.
         // If everything scores draw-or-worse the searched line stands — the
         // bucketed sort is mid-demotion and the next iteration re-sorts.
-        if tb_restricted {
+        if tb_win_restricted {
             let mut mate_pick: Option<(Move, i32)> = None;
             let mut win_pick: Option<(Move, i32)> = None;
             for &(m, s) in root_move_scores.iter() {
@@ -1936,7 +1943,7 @@ pub fn iterative_deepening(
         // guard — a top move scored draw-or-worse means the search found a
         // repetition and the bucketed sort is mid-demotion, so keep going until
         // a move that actually preserves the win leads.
-        if tb_restricted && base_depth >= TB_RESTRICTED_MAX_DEPTH && best_score.0 > 0 {
+        if tb_win_restricted && base_depth >= TB_RESTRICTED_MAX_DEPTH && best_score.0 > 0 {
             break;
         }
 
@@ -2159,7 +2166,7 @@ pub fn iterative_deepening(
     // scores well for many depths but then drops at the final depth.
     // Not in TB-restricted mode: a displacement there is a deliberate
     // demotion/promotion, and cp EWMAs must not resurrect a demoted move.
-    if !tb_restricted
+    if !tb_win_restricted
         && !stable_move.is_null()
         && best_move != stable_move
         && stable_move_stability >= 6
@@ -2198,7 +2205,7 @@ pub fn iterative_deepening(
     // a TB-win-band score — never a fabricated mate line.
     if best_pv.is_empty()
         && let Some(ranking) = root_tb_ranking.as_ref()
-        && let Some(&first) = ranking.winning_moves.first()
+        && let Some(&first) = ranking.restriction_moves().first()
     {
         best_move = first;
         best_score = ranking.score;
@@ -4625,6 +4632,37 @@ mod tests {
             result.score.0 >= crate::syzygy::TB_WIN_SCORE,
             "expected immediate TB win score, got {}",
             result.score.0
+        );
+    }
+
+    #[test]
+    fn syzygy_does_not_play_losing_ka8_in_kbppvkb_draw() {
+        // lichess RBmggG2n: drawn 6-man KBPPvKB, live game played 202...Ka8
+        // and was mated. With TB restriction the root must stay in {Bd8, Kb7}.
+        let _guard = crate::syzygy::syzygy_test_lock()
+            .lock()
+            .expect("lock syzygy test mutex");
+        let path = syzygy_path();
+        if !path.exists() {
+            return;
+        }
+
+        let tb = SyzygyTB::new(path.to_string_lossy().as_ref()).expect("load syzygy tables");
+        let result = search_position_with_syzygy(
+            "8/k1b5/8/PP6/K1B5/8/8/8 b - - 74 202",
+            8,
+            Some(tb),
+        );
+        let uci = result.best_move.to_uci();
+        assert!(
+            uci == "c7d8" || uci == "a7b7",
+            "expected a drawing move (Bd8/Kb7), got {uci} score={}",
+            result.score
+        );
+        assert!(
+            !result.score.is_mate() || result.score.0 <= 0,
+            "must not report a win after a TB-draw root, got {}",
+            result.score
         );
     }
 }
