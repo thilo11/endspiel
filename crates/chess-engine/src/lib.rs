@@ -482,7 +482,7 @@ impl Engine {
     }
 
     /// Bump the TT generation without clearing entries (cheap alternative to
-    /// `clear_tt` between datagen games — old entries remain valid since the
+    /// `clear_tt` between successive games — old entries remain valid since the
     /// XOR key check already guarantees correctness).
     pub fn new_search_tt(&self) {
         self.tt.new_search();

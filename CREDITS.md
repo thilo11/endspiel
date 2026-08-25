@@ -6,9 +6,9 @@ software it depends on and ideas it borrows. This file documents those sources.
 ## NNUE training
 
 - **[bullet](https://github.com/jw1912/bullet)** (MIT) by Jamie Whiting — the
-  trainer used to produce endspiel's NNUE networks. endspiel's data generation
-  and weight loading deliberately match bullet's on-disk formats, via the
-  **`bulletformat`** crate.
+  trainer used to produce endspiel's NNUE networks. Weight loading
+  deliberately matches bullet's on-disk formats, via the **`bulletformat`**
+  crate.
 
 ## Endgame tablebase probing
 

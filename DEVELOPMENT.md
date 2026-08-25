@@ -58,7 +58,7 @@ In addition to the user-facing options in the README, the engine exposes search 
 
 ```bash
 cargo build --release              # endspiel binary
-cargo build --release --workspace  # all binaries including datagen and tuner
+cargo build --release --workspace  # engine plus chess-tuner
 ```
 
 ### Native CPU optimisation
@@ -165,13 +165,13 @@ Follow [Conventional Commits](https://www.conventionalcommits.org):
 ```
 
 Types: `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `chore`, `ci`.
-Scope is the crate short name, e.g. `engine`, `nnue`, `datagen`, `uci`.
+Scope is the crate short name, e.g. `engine`, `nnue`, `uci`.
 
 Examples:
 ```
 feat(engine): add passed pawn push extension
 fix(nnue): correct column-major weight indexing for hidden layer 2
-perf(datagen): raise default --hash to 16 MB
+perf(engine): raise default hash allocation
 docs: restructure README for end users
 ```
 

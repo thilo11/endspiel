@@ -5,20 +5,19 @@ AI-assisted development**, with two goals running in parallel:
 
 1. **Build a competitive chess engine end-to-end from scratch in Rust** —
    bitboards and move generation, alpha-beta search with modern pruning
-   and reductions, an NNUE evaluation with its own training pipeline, a
-   UCI front end, Syzygy probing, and a self-play data generator.
+   and reductions, an NNUE evaluation trained from scratch, a UCI front
+   end, and Syzygy probing.
 
 2. **See how far AI-assisted coding (specifically [Claude Code](https://www.anthropic.com/claude-code))
    actually pushes a solo developer.** A chess engine of this scope —
    move generator, modern search, an NNUE trained from scratch on
-   billions of self-play positions, datagen + cleaning + mixing pipeline,
-   SPSA tuner, Syzygy integration, UCI compliance, cross-platform CI —
-   would conventionally be a multi-year effort for a small team. Built
-   solo with Claude Code as a pair-programming partner, it came together
-   in weeks. Whether that is the right comparison or not, the experience
-   itself was a major part of the point: figuring out which tasks AI
-   accelerates, which it changes the shape of, and which still need a
-   human at the wheel.
+   billions of self-play positions, SPSA tuner, Syzygy integration, UCI
+   compliance, cross-platform CI — would conventionally be a multi-year
+   effort for a small team. Built solo with Claude Code as a pair-programming
+   partner, it came together in weeks. Whether that is the right comparison
+   or not, the experience itself was a major part of the point: figuring
+   out which tasks AI accelerates, which it changes the shape of, and
+   which still need a human at the wheel.
 
 ## Playing strength and where it sits
 
@@ -67,14 +66,13 @@ and Lichess opening FENs) used purely as self-play *starting points* —
 they seed the games, never the training targets. The trainer itself is the
 open-source [Bullet](https://github.com/jw1912/bullet) framework and
 Syzygy probing uses `pyrrhic-rs`; everything else — bitboards and move
-generation, search, NNUE inference, the datagen and data-cleaning
-pipeline, and the UCI layer — is hand-written from scratch.
+generation, search, NNUE inference, and the UCI layer — is hand-written
+from scratch.
 
 ## Where the strength comes from now
 
 The foundations are in place — move generation, modern search, NNUE
-inference, the full training pipeline (datagen → clean → mix → train →
-quantise → embed), Syzygy probing, SPSA tuning. From this point, closing
+inference, Syzygy probing, SPSA tuning. From this point, closing
 the remaining gap to the top of the Rust-engine charts is **mostly a
 question of data and compute**, not of new code: more self-play games at
 higher depth, larger archives, more training superbatches, more SPSA
