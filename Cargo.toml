@@ -6,7 +6,7 @@ resolver = "3"
 version = "1.6.1-dev"
 edition = "2024"
 license = "GPL-3.0-or-later"
-rust-version = "1.97.1"
+rust-version = "1.98.0"
 
 [workspace.dependencies]
 chess-common = { path = "crates/chess-common" }
@@ -16,10 +16,10 @@ chess-nnue = { path = "crates/chess-nnue" }
 chess-tuner = { path = "crates/chess-tuner" }
 chess-uci = { path = "crates/chess-uci" }
 bulletformat = "1.8.0"
-log = "0.4.33"
+log = "0.4.34"
 env_logger = "0.11.11"
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
-thiserror = "2.0.19"
+thiserror = "2.0.20"
 
 [package]
 name = "endspiel-bin"
