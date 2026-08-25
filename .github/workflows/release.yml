@@ -88,7 +88,7 @@ jobs:
             rustflags: "-C target-cpu=generic"
             pgo: false
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ inputs.tag }}
 
@@ -97,7 +97,7 @@ jobs:
           targets: ${{ matrix.target }}
           components: ${{ matrix.pgo && 'llvm-tools-preview' || '' }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.2
         with:
           key: ${{ matrix.name }}
 
@@ -162,7 +162,7 @@ jobs:
         shell: bash
         run: cp target/${{ matrix.target }}/release/endspiel.exe ${{ matrix.artifact }}
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
@@ -178,7 +178,7 @@ jobs:
     # so the APK build needs no additional SDK provisioning.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ inputs.tag }}
 
@@ -186,7 +186,7 @@ jobs:
         with:
           targets: aarch64-linux-android
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.2
         with:
           key: android-arm64
 
@@ -205,12 +205,12 @@ jobs:
       # ── Wrap the binary in an Open Exchange (OEX) engine APK ──
       # Installs like a normal app on a non-rooted device; chess GUIs
       # (DroidFish, Chess for Android) auto-discover it. See android/oex/.
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6.0.0
         with:
           distribution: temurin
           java-version: "17"
 
-      - uses: gradle/actions/setup-gradle@v6
+      - uses: gradle/actions/setup-gradle@v6.3.0
         with:
           gradle-version: "8.7"
 
@@ -254,7 +254,7 @@ jobs:
           "$BT/apksigner" verify --print-certs endspiel-android-arm64.apk
           rm -f ks.jks aligned.apk
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: endspiel-android-arm64-apk
           path: endspiel-android-arm64.apk
@@ -264,13 +264,13 @@ jobs:
     needs: [build, build-android]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v8.0.1
         with:
           path: artifacts
           merge-multiple: true
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v3.0.2
         with:
           tag_name: ${{ inputs.tag }}
           generate_release_notes: true
