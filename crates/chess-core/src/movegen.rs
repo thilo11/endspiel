@@ -1,5 +1,5 @@
 use chess_common::moves::{Move, MoveFlag, MoveList};
-use chess_common::{Bitboard, Board, CastlingRights, Color, PieceKind, Square};
+use chess_common::{Bitboard, Board, CastlingRights, Color, Piece, PieceKind, Square};
 
 use crate::attacks::{
     bishop_attacks, is_square_attacked, king_attacks, knight_attacks, queen_attacks, rook_attacks,
@@ -282,71 +282,109 @@ fn generate_king_moves(
 
 fn generate_castling_moves(board: &Board, us: Color, all_occ: Bitboard, moves: &mut MoveList) {
     let them = us.opposite();
-    let king_sq = board.king_square(us);
+    let king_from = board.king_square(us);
 
-    // Cannot castle if in check
-    if is_square_attacked(board, king_sq, them) {
+    // Cannot castle if in check. Chess960 also requires the king on the back rank.
+    if is_square_attacked(board, king_from, them) {
+        return;
+    }
+    let back = match us {
+        Color::White => 0,
+        Color::Black => 7,
+    };
+    if king_from.rank() != back {
         return;
     }
 
-    match us {
-        Color::White => {
-            // Kingside: e1-g1, rook on h1
-            if board.castling.has(CastlingRights::WHITE_KINGSIDE) {
-                let f1 = Square::F1;
-                let g1 = Square::G1;
-                if !all_occ.is_set(f1)
-                    && !all_occ.is_set(g1)
-                    && !is_square_attacked(board, f1, them)
-                    && !is_square_attacked(board, g1, them)
-                {
-                    moves.push(Move::new(king_sq, g1, MoveFlag::KingsideCastle));
-                }
-            }
-            // Queenside: e1-c1, rook on a1
-            if board.castling.has(CastlingRights::WHITE_QUEENSIDE) {
-                let d1 = Square::D1;
-                let c1 = Square::C1;
-                let b1 = Square::B1;
-                if !all_occ.is_set(d1)
-                    && !all_occ.is_set(c1)
-                    && !all_occ.is_set(b1)
-                    && !is_square_attacked(board, d1, them)
-                    && !is_square_attacked(board, c1, them)
-                {
-                    moves.push(Move::new(king_sq, c1, MoveFlag::QueensideCastle));
-                }
-            }
+    for (kingside, flag, move_flag) in [
+        (
+            true,
+            match us {
+                Color::White => CastlingRights::WHITE_KINGSIDE,
+                Color::Black => CastlingRights::BLACK_KINGSIDE,
+            },
+            MoveFlag::KingsideCastle,
+        ),
+        (
+            false,
+            match us {
+                Color::White => CastlingRights::WHITE_QUEENSIDE,
+                Color::Black => CastlingRights::BLACK_QUEENSIDE,
+            },
+            MoveFlag::QueensideCastle,
+        ),
+    ] {
+        if !board.castling.has(flag) {
+            continue;
         }
-        Color::Black => {
-            // Kingside: e8-g8, rook on h8
-            if board.castling.has(CastlingRights::BLACK_KINGSIDE) {
-                let f8 = Square::F8;
-                let g8 = Square::G8;
-                if !all_occ.is_set(f8)
-                    && !all_occ.is_set(g8)
-                    && !is_square_attacked(board, f8, them)
-                    && !is_square_attacked(board, g8, them)
-                {
-                    moves.push(Move::new(king_sq, g8, MoveFlag::KingsideCastle));
-                }
-            }
-            // Queenside: e8-c8, rook on a8
-            if board.castling.has(CastlingRights::BLACK_QUEENSIDE) {
-                let d8 = Square::D8;
-                let c8 = Square::C8;
-                let b8 = Square::B8;
-                if !all_occ.is_set(d8)
-                    && !all_occ.is_set(c8)
-                    && !all_occ.is_set(b8)
-                    && !is_square_attacked(board, d8, them)
-                    && !is_square_attacked(board, c8, them)
-                {
-                    moves.push(Move::new(king_sq, c8, MoveFlag::QueensideCastle));
-                }
-            }
+        let rook_from = board.castle_rook(us, kingside);
+        if board.piece_at(rook_from) != Some(Piece::new(PieceKind::Rook, us)) {
+            continue;
+        }
+        let king_to = Board::king_castle_to(us, kingside);
+        let rook_to = Board::rook_castle_to(us, kingside);
+        if !castle_path_clear(king_from, king_to, rook_from, rook_to, all_occ) {
+            continue;
+        }
+        if !king_castle_path_safe(board, king_from, king_to, them) {
+            continue;
+        }
+        moves.push(Move::new(king_from, king_to, move_flag));
+    }
+}
+
+/// Squares strictly between `a` and `b` on the same rank.
+fn between_on_rank(a: Square, b: Square) -> Bitboard {
+    if a.rank() != b.rank() {
+        return Bitboard::EMPTY;
+    }
+    let rank = a.rank();
+    let (lo, hi) = if a.file() < b.file() {
+        (a.file(), b.file())
+    } else {
+        (b.file(), a.file())
+    };
+    let mut bb = Bitboard::EMPTY;
+    let mut file = lo + 1;
+    while file < hi {
+        bb = bb.set(Square::new(file, rank));
+        file += 1;
+    }
+    bb
+}
+
+/// All squares the king and rook travel through, plus destinations, excluding
+/// the two origin squares (the king and rook may occupy each other's path).
+fn castle_path_clear(
+    king_from: Square,
+    king_to: Square,
+    rook_from: Square,
+    rook_to: Square,
+    occ: Bitboard,
+) -> bool {
+    let origins = king_from.bitboard() | rook_from.bitboard();
+    let mut need_empty = between_on_rank(king_from, king_to)
+        | between_on_rank(rook_from, rook_to)
+        | between_on_rank(king_from, rook_from);
+    need_empty = need_empty.set(king_to).set(rook_to);
+    let need_empty = Bitboard(need_empty.0 & !origins.0);
+    (need_empty.0 & occ.0) == 0
+}
+
+/// The king may not start, pass through, or finish on an attacked square.
+fn king_castle_path_safe(board: &Board, king_from: Square, king_to: Square, them: Color) -> bool {
+    let rank = king_from.rank();
+    let (lo, hi) = if king_from.file() <= king_to.file() {
+        (king_from.file(), king_to.file())
+    } else {
+        (king_to.file(), king_from.file())
+    };
+    for file in lo..=hi {
+        if is_square_attacked(board, Square::new(file, rank), them) {
+            return false;
         }
     }
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -745,6 +783,72 @@ mod tests {
             Board::from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")
                 .unwrap();
         assert_eq!(perft(&board, 3), 97862);
+    }
+
+    // Chess960 perft positions from chessprogramming.org (Andrew Grant / Ethereal).
+    #[test]
+    fn test_perft_chess960_grant_1() {
+        let board = Board::from_fen(
+            "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9",
+        )
+        .unwrap();
+        assert_eq!(perft(&board, 1), 21);
+        assert_eq!(perft(&board, 2), 528);
+        assert_eq!(perft(&board, 3), 12_189);
+    }
+
+    #[test]
+    fn test_perft_chess960_king_on_rook_file() {
+        // King already on f, rooks on e and g: G/E castling, rook already on dest.
+        let board =
+            Board::from_fen("b1q1rrkb/pppppppp/3nn3/8/P7/1PPP4/4PPPP/BQNNRKRB w GE - 1 9")
+                .unwrap();
+        assert_eq!(perft(&board, 1), 20);
+        assert_eq!(perft(&board, 2), 479);
+        assert_eq!(perft(&board, 3), 10_471);
+    }
+
+    #[test]
+    fn test_perft_chess960_double_rook_same_side() {
+        let board =
+            Board::from_fen("qn1rkrbb/pp1p1ppp/2p1p3/3n4/4P2P/2NP4/PPP2PP1/Q1NRKRBB w FDfd - 1 9")
+                .unwrap();
+        assert_eq!(perft(&board, 1), 24);
+        assert_eq!(perft(&board, 2), 585);
+        assert_eq!(perft(&board, 3), 14_769);
+    }
+
+    #[test]
+    fn test_chess960_castle_make_unmake_hash() {
+        // King on f, rook on g: O-O swaps them (king to g, rook to f).
+        let fen = "b1q1rrkb/pppppppp/3nn3/8/P7/1PPP4/4PPPP/BQNNRKRB w GE - 1 9";
+        let mut board = Board::from_fen(fen).unwrap();
+        let hash_before = board.hash;
+        let castle = generate_legal_moves(&board)
+            .iter()
+            .copied()
+            .find(|m| m.flag() == MoveFlag::KingsideCastle)
+            .expect("kingside castle");
+        let prev_castling = board.castling;
+        let prev_ep = board.en_passant;
+        let prev_halfmove = board.halfmove_clock;
+        let captured = board.make_move(castle);
+        assert_eq!(board.king_square(Color::White), Square::G1);
+        assert_eq!(
+            board.piece_at(Square::F1).map(|p| p.kind),
+            Some(PieceKind::Rook)
+        );
+        assert_eq!(board.hash, board.compute_hash());
+        board.unmake_move(castle, captured, prev_castling, prev_ep, prev_halfmove);
+        assert_eq!(board.hash, hash_before);
+        assert_eq!(board.to_fen(), fen);
+    }
+
+    #[test]
+    fn test_shredder_fen_standard_perft() {
+        let board =
+            Board::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w AHah - 0 1").unwrap();
+        assert_eq!(perft(&board, 3), 8902);
     }
 
     // -----------------------------------------------------------------------

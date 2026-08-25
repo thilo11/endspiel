@@ -27,6 +27,7 @@ impl Board {
             occupancy: [Bitboard::EMPTY; 2],
             side_to_move: Color::White,
             castling: CastlingRights::NONE,
+            castle_rooks: Board::STANDARD_CASTLE_ROOKS,
             en_passant: None,
             halfmove_clock: 0,
             fullmove_number: 1,
@@ -77,32 +78,10 @@ impl Board {
             _ => return Err(FenError::Invalid(format!("bad side to move: {}", parts[1]))),
         };
 
-        // Parse castling rights. Reject unknown or duplicate characters instead
-        // of silently accepting a damaged field.
-        board.castling = if parts[2] == "-" {
-            CastlingRights::NONE
-        } else {
-            let mut rights = CastlingRights::NONE;
-            for c in parts[2].chars() {
-                let flag = match c {
-                    'K' => CastlingRights::WHITE_KINGSIDE,
-                    'Q' => CastlingRights::WHITE_QUEENSIDE,
-                    'k' => CastlingRights::BLACK_KINGSIDE,
-                    'q' => CastlingRights::BLACK_QUEENSIDE,
-                    _ => {
-                        return Err(FenError::Invalid(format!(
-                            "bad castling rights: {}",
-                            parts[2]
-                        )));
-                    }
-                };
-                if rights.has(flag) {
-                    return Err(FenError::Invalid(format!("duplicate castling right: {c}")));
-                }
-                rights = rights.add(flag);
-            }
-            rights
-        };
+        // Parse castling rights. Accepts standard FEN (KQkq), X-FEN, and
+        // Shredder-FEN (AHah / file letters). Rook origins are stored on the
+        // board so Chess960 can castle from non-a/h files.
+        parse_castling_field(&mut board, parts[2])?;
 
         // Parse en passant
         board.en_passant = if parts[3] == "-" {
@@ -180,8 +159,8 @@ impl Board {
 
         fen.push(' ');
 
-        // Castling
-        fen.push_str(&self.castling.to_fen());
+        // Castling (X-FEN: K/Q when the rook is on h/a, otherwise the file letter)
+        fen.push_str(&castling_fen(self));
 
         fen.push(' ');
 
@@ -250,51 +229,187 @@ fn validate_structure(board: &Board) -> Result<(), FenError> {
     Ok(())
 }
 
-fn validate_castling_pieces(board: &Board) -> Result<(), FenError> {
-    let white_king = Piece::new(PieceKind::King, Color::White);
-    let black_king = Piece::new(PieceKind::King, Color::Black);
-    let white_rook = Piece::new(PieceKind::Rook, Color::White);
-    let black_rook = Piece::new(PieceKind::Rook, Color::Black);
+fn parse_castling_field(board: &mut Board, field: &str) -> Result<(), FenError> {
+    board.castle_rooks = Board::STANDARD_CASTLE_ROOKS;
+    if field == "-" {
+        board.castling = CastlingRights::NONE;
+        return Ok(());
+    }
 
-    for (flag, king_sq, king, rook_sq, rook, name) in [
-        (
-            CastlingRights::WHITE_KINGSIDE,
-            Square::E1,
-            white_king,
-            Square::H1,
-            white_rook,
-            "K",
-        ),
-        (
-            CastlingRights::WHITE_QUEENSIDE,
-            Square::E1,
-            white_king,
-            Square::A1,
-            white_rook,
-            "Q",
-        ),
-        (
-            CastlingRights::BLACK_KINGSIDE,
-            Square::E8,
-            black_king,
-            Square::H8,
-            black_rook,
-            "k",
-        ),
-        (
-            CastlingRights::BLACK_QUEENSIDE,
-            Square::E8,
-            black_king,
-            Square::A8,
-            black_rook,
-            "q",
-        ),
+    let mut rights = CastlingRights::NONE;
+    for c in field.chars() {
+        let (color, kingside, rook_file) = match c {
+            'K' => (
+                Color::White,
+                true,
+                outer_rook_file(board, Color::White, true)?,
+            ),
+            'Q' => (
+                Color::White,
+                false,
+                outer_rook_file(board, Color::White, false)?,
+            ),
+            'k' => (
+                Color::Black,
+                true,
+                outer_rook_file(board, Color::Black, true)?,
+            ),
+            'q' => (
+                Color::Black,
+                false,
+                outer_rook_file(board, Color::Black, false)?,
+            ),
+            'A'..='H' => rook_file_castle(board, Color::White, c as u8 - b'A')?,
+            'a'..='h' => rook_file_castle(board, Color::Black, c as u8 - b'a')?,
+            _ => {
+                return Err(FenError::Invalid(format!(
+                    "bad castling rights: {field}"
+                )));
+            }
+        };
+        let flag = castle_flag(color, kingside);
+        if rights.has(flag) {
+            return Err(FenError::Invalid(format!("duplicate castling right: {c}")));
+        }
+        rights = rights.add(flag);
+        let rank = back_rank(color);
+        board.castle_rooks[Board::castle_rook_index(color, kingside)] =
+            Square::new(rook_file, rank);
+    }
+    board.castling = rights;
+    Ok(())
+}
+
+fn back_rank(color: Color) -> u8 {
+    match color {
+        Color::White => 0,
+        Color::Black => 7,
+    }
+}
+
+fn castle_flag(color: Color, kingside: bool) -> u8 {
+    match (color, kingside) {
+        (Color::White, true) => CastlingRights::WHITE_KINGSIDE,
+        (Color::White, false) => CastlingRights::WHITE_QUEENSIDE,
+        (Color::Black, true) => CastlingRights::BLACK_KINGSIDE,
+        (Color::Black, false) => CastlingRights::BLACK_QUEENSIDE,
+    }
+}
+
+/// X-FEN / standard FEN: K/Q names the outermost rook on that side of the king.
+fn outer_rook_file(board: &Board, color: Color, kingside: bool) -> Result<u8, FenError> {
+    let king = board.king_square(color);
+    let rank = back_rank(color);
+    if king.rank() != rank {
+        return Err(FenError::Invalid(
+            "castling king is not on the back rank".to_string(),
+        ));
+    }
+    let rooks = board.pieces[color.index()][PieceKind::Rook.index()];
+    let mut found: Option<u8> = None;
+    for sq in rooks.iter() {
+        if sq.rank() != rank {
+            continue;
+        }
+        if kingside && sq.file() > king.file() {
+            found = Some(found.map_or(sq.file(), |f| f.max(sq.file())));
+        } else if !kingside && sq.file() < king.file() {
+            found = Some(found.map_or(sq.file(), |f| f.min(sq.file())));
+        }
+    }
+    found.ok_or_else(|| {
+        FenError::Invalid(
+            "castling right has no rook on that side of the king".to_string(),
+        )
+    })
+}
+
+/// Shredder-FEN / X-FEN file letter: the rook on that back-rank file.
+fn rook_file_castle(
+    board: &Board,
+    color: Color,
+    file: u8,
+) -> Result<(Color, bool, u8), FenError> {
+    let king = board.king_square(color);
+    let rank = back_rank(color);
+    if king.rank() != rank {
+        return Err(FenError::Invalid(
+            "castling king is not on the back rank".to_string(),
+        ));
+    }
+    if file == king.file() {
+        return Err(FenError::Invalid(
+            "castling rook file must not be the king's file".to_string(),
+        ));
+    }
+    let kingside = file > king.file();
+    Ok((color, kingside, file))
+}
+
+/// X-FEN castling field: K/Q when the rook is on h/a, otherwise the file letter.
+fn castling_fen(board: &Board) -> String {
+    if board.castling.0 == 0 {
+        return "-".to_string();
+    }
+    let mut s = String::with_capacity(4);
+    let mut emit = |color: Color, kingside: bool, kq: char| {
+        let rook = board.castle_rook(color, kingside);
+        let standard_file = if kingside { 7 } else { 0 };
+        if rook.file() == standard_file {
+            s.push(kq);
+        } else {
+            let letter = (b'a' + rook.file()) as char;
+            s.push(match color {
+                Color::White => letter.to_ascii_uppercase(),
+                Color::Black => letter,
+            });
+        }
+    };
+    if board.castling.has(CastlingRights::WHITE_KINGSIDE) {
+        emit(Color::White, true, 'K');
+    }
+    if board.castling.has(CastlingRights::WHITE_QUEENSIDE) {
+        emit(Color::White, false, 'Q');
+    }
+    if board.castling.has(CastlingRights::BLACK_KINGSIDE) {
+        emit(Color::Black, true, 'k');
+    }
+    if board.castling.has(CastlingRights::BLACK_QUEENSIDE) {
+        emit(Color::Black, false, 'q');
+    }
+    s
+}
+
+fn validate_castling_pieces(board: &Board) -> Result<(), FenError> {
+    for (flag, color, kingside, name) in [
+        (CastlingRights::WHITE_KINGSIDE, Color::White, true, "K"),
+        (CastlingRights::WHITE_QUEENSIDE, Color::White, false, "Q"),
+        (CastlingRights::BLACK_KINGSIDE, Color::Black, true, "k"),
+        (CastlingRights::BLACK_QUEENSIDE, Color::Black, false, "q"),
     ] {
-        if board.castling.has(flag)
-            && (board.piece_at(king_sq) != Some(king) || board.piece_at(rook_sq) != Some(rook))
+        if !board.castling.has(flag) {
+            continue;
+        }
+        let king_sq = board.king_square(color);
+        let rank = back_rank(color);
+        if king_sq.rank() != rank {
+            return Err(FenError::Invalid(format!(
+                "castling right {name} has no king on the back rank"
+            )));
+        }
+        let rook_sq = board.castle_rook(color, kingside);
+        if rook_sq.rank() != rank
+            || board.piece_at(rook_sq) != Some(Piece::new(PieceKind::Rook, color))
         {
             return Err(FenError::Invalid(format!(
-                "castling right {name} has no king and rook on their home squares"
+                "castling right {name} has no rook on its home square"
+            )));
+        }
+        if kingside && rook_sq.file() <= king_sq.file()
+            || !kingside && rook_sq.file() >= king_sq.file()
+        {
+            return Err(FenError::Invalid(format!(
+                "castling right {name} rook is on the wrong side of the king"
             )));
         }
     }
@@ -395,5 +510,46 @@ mod tests {
         assert!(Board::from_fen("4k3/8/8/8/8/8/8/4K3 w - -").is_ok());
         assert!(Board::from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1 extra").is_err());
         assert!(Board::from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 0").is_err());
+    }
+
+    #[test]
+    fn shredder_fen_standard_start_roundtrips_as_kq() {
+        // Shredder-FEN AHah is the standard start; we emit X-FEN KQkq.
+        let board =
+            Board::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w AHah - 0 1").unwrap();
+        assert_eq!(board.castle_rooks, Board::STANDARD_CASTLE_ROOKS);
+        assert_eq!(
+            board.to_fen(),
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+        );
+    }
+
+    #[test]
+    fn chess960_shredder_fen_stores_rook_files() {
+        // BBQNNRKR: king g, rooks f and h. Shredder-FEN is HFhf; X-FEN emit is KFkf
+        // because the h-file rook is written as K.
+        let board =
+            Board::from_fen("bbqnnrkr/pppppppp/8/8/8/8/PPPPPPPP/BBQNNRKR w HFhf - 0 1").unwrap();
+        assert_eq!(board.castle_rook(Color::White, true), Square::H1);
+        assert_eq!(board.castle_rook(Color::White, false), Square::F1);
+        assert_eq!(board.castle_rook(Color::Black, true), Square::H8);
+        assert_eq!(board.castle_rook(Color::Black, false), Square::F8);
+        assert_eq!(
+            board.to_fen(),
+            "bbqnnrkr/pppppppp/8/8/8/8/PPPPPPPP/BBQNNRKR w KFkf - 0 1"
+        );
+    }
+
+    #[test]
+    fn chess960_kq_infers_outermost_rooks() {
+        let board =
+            Board::from_fen("bbqnnrkr/pppppppp/8/8/8/8/PPPPPPPP/BBQNNRKR w KQkq - 0 1").unwrap();
+        assert_eq!(board.castle_rook(Color::White, true), Square::H1);
+        assert_eq!(board.castle_rook(Color::White, false), Square::F1);
+        // X-FEN: K (h-file rook) and F (not the a-file).
+        assert_eq!(
+            board.to_fen(),
+            "bbqnnrkr/pppppppp/8/8/8/8/PPPPPPPP/BBQNNRKR w KFkf - 0 1"
+        );
     }
 }

@@ -30,6 +30,7 @@ See [ABOUT.md](ABOUT.md) for project rationale, playing strength, and training d
   the [Bullet](https://github.com/jw1912/bullet) trainer and Syzygy
   probing uses `pyrrhic-rs` — the only third-party pieces in the pipeline)
 - **Full UCI compliance** — works in any UCI GUI (Arena, CuteChess, Fritz, Banksia, Scid, …)
+- **Chess960** — Fischer Random / Freestyle: X-FEN and Shredder-FEN, `UCI_Chess960` king-takes-rook castling
 - **NNUE evaluation** (default) — state-aware HalfKP 785×32→(1024 pairwise 512)×2→16→32→1 (8 material-keyed output buckets), with castling rights and en passant in the input; trained from scratch on billions of self-play positions; the net is embedded in the binary, no extra files to ship. Older piece-only nets still load.
 - **HCE fallback** — tapered hand-crafted evaluation (`UseNNUE=false`) with
   pawn hash, mobility, king safety, pawn structure, threats, space, and

@@ -1,4 +1,4 @@
-use chess_common::{Move, Score};
+use chess_common::Score;
 use std::fmt;
 
 /// A command sent from the GUI to the engine.
@@ -46,7 +46,10 @@ pub enum UciResponse {
     Id { name: String, author: String },
     UciOk,
     ReadyOk,
-    BestMove { best: Move, ponder: Option<Move> },
+    BestMove {
+        best: String,
+        ponder: Option<String>,
+    },
     Info(UciInfo),
     Option(UciOptionDef),
 }
@@ -60,7 +63,7 @@ pub struct UciInfo {
     pub multipv: Option<usize>,
     pub time: Option<u64>,
     pub nodes: Option<u64>,
-    pub pv: Vec<Move>,
+    pub pv: Vec<String>,
     pub score: Option<Score>,
     /// WDL in millipawns (win, draw, loss), each 0–1000, summing to 1000.
     /// Only set when UCI_ShowWDL is enabled.
@@ -307,9 +310,9 @@ impl fmt::Display for UciResponse {
             UciResponse::UciOk => write!(f, "uciok"),
             UciResponse::ReadyOk => write!(f, "readyok"),
             UciResponse::BestMove { best, ponder } => {
-                write!(f, "bestmove {}", best.to_uci())?;
+                write!(f, "bestmove {best}")?;
                 if let Some(p) = ponder {
-                    write!(f, " ponder {}", p.to_uci())?;
+                    write!(f, " ponder {p}")?;
                 }
                 Ok(())
             }
@@ -345,7 +348,7 @@ impl fmt::Display for UciResponse {
                 if !info.pv.is_empty() {
                     write!(f, " pv")?;
                     for m in &info.pv {
-                        write!(f, " {}", m.to_uci())?;
+                        write!(f, " {m}")?;
                     }
                 }
                 if let Some(ref s) = info.string {
@@ -561,9 +564,8 @@ mod tests {
 
     #[test]
     fn test_format_bestmove() {
-        let m = Move::from_uci("e2e4").unwrap();
         let resp = UciResponse::BestMove {
-            best: m,
+            best: "e2e4".to_string(),
             ponder: None,
         };
         assert_eq!(resp.to_string(), "bestmove e2e4");
@@ -571,11 +573,9 @@ mod tests {
 
     #[test]
     fn test_format_bestmove_with_ponder() {
-        let best = Move::from_uci("e2e4").unwrap();
-        let ponder = Move::from_uci("e7e5").unwrap();
         let resp = UciResponse::BestMove {
-            best,
-            ponder: Some(ponder),
+            best: "e2e4".to_string(),
+            ponder: Some("e7e5".to_string()),
         };
         assert_eq!(resp.to_string(), "bestmove e2e4 ponder e7e5");
     }
@@ -589,10 +589,7 @@ mod tests {
             nodes: Some(12345),
             time: Some(100),
             nps: Some(123450),
-            pv: vec![
-                Move::from_uci("e2e4").unwrap(),
-                Move::from_uci("e7e5").unwrap(),
-            ],
+            pv: vec!["e2e4".to_string(), "e7e5".to_string()],
             ..UciInfo::default()
         };
         let resp = UciResponse::Info(info);

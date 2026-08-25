@@ -1,4 +1,4 @@
-use chess_common::moves::Move;
+use chess_common::moves::{Move, MoveFlag};
 use chess_common::{Board, Color, PieceKind};
 use thiserror::Error;
 
@@ -57,26 +57,91 @@ pub fn is_legal_move(board: &Board, m: Move) -> bool {
     let promo = m.flag().promotion_piece();
 
     legal_moves.iter().any(|legal| {
-        legal.from_sq() == from && legal.to_sq() == to && legal.flag().promotion_piece() == promo
+        move_matches_uci(board, *legal, from, to, promo)
     })
 }
 
 /// Find the legal move matching the given from/to/promotion, returning the
 /// fully-flagged version. Returns `None` if no such legal move exists.
+///
+/// Accepts both standard king-destination castling (`e1g1`) and Chess960
+/// king-takes-rook (`e1h1`). When both a king walk and a castle share the
+/// same destination (king already next to c/g), the castle is preferred so
+/// standard UCI `e1g1` still means O-O.
 pub fn find_legal_move(board: &Board, m: Move) -> Option<Move> {
+    find_legal_move_uci(board, m, false)
+}
+
+/// Like [`find_legal_move`], but when `chess960` is true a same-destination
+/// king walk beats castling (castle is sent as king-takes-rook).
+pub fn find_legal_move_uci(board: &Board, m: Move, chess960: bool) -> Option<Move> {
     let legal_moves = generate_legal_moves(board);
     let from = m.from_sq();
     let to = m.to_sq();
     let promo = m.flag().promotion_piece();
 
-    legal_moves
-        .iter()
-        .find(|legal| {
-            legal.from_sq() == from
-                && legal.to_sq() == to
-                && legal.flag().promotion_piece() == promo
-        })
-        .copied()
+    let mut castle_via_rook = None;
+    let mut castle_via_dest = None;
+    let mut other = None;
+    for &legal in legal_moves.iter() {
+        if legal.from_sq() != from || legal.flag().promotion_piece() != promo {
+            continue;
+        }
+        let is_castle = matches!(
+            legal.flag(),
+            MoveFlag::KingsideCastle | MoveFlag::QueensideCastle
+        );
+        if is_castle {
+            let kingside = legal.flag() == MoveFlag::KingsideCastle;
+            let color = if legal.from_sq().rank() == 0 {
+                Color::White
+            } else {
+                Color::Black
+            };
+            if board.castle_rook(color, kingside) == to {
+                castle_via_rook = Some(legal);
+            }
+            if legal.to_sq() == to {
+                castle_via_dest = Some(legal);
+            }
+        } else if legal.to_sq() == to {
+            other = Some(legal);
+        }
+    }
+
+    if chess960 {
+        castle_via_rook.or(other).or(castle_via_dest)
+    } else {
+        castle_via_dest.or(other).or(castle_via_rook)
+    }
+}
+
+fn move_matches_uci(
+    board: &Board,
+    legal: Move,
+    from: chess_common::Square,
+    to: chess_common::Square,
+    promo: Option<PieceKind>,
+) -> bool {
+    if legal.from_sq() != from || legal.flag().promotion_piece() != promo {
+        return false;
+    }
+    if legal.to_sq() == to {
+        return true;
+    }
+    if matches!(
+        legal.flag(),
+        MoveFlag::KingsideCastle | MoveFlag::QueensideCastle
+    ) {
+        let kingside = legal.flag() == MoveFlag::KingsideCastle;
+        let color = if legal.from_sq().rank() == 0 {
+            Color::White
+        } else {
+            Color::Black
+        };
+        return board.castle_rook(color, kingside) == to;
+    }
+    false
 }
 
 #[cfg(test)]
@@ -139,5 +204,18 @@ mod tests {
             validate_position(&board),
             Err(PositionError::SideNotToMoveInCheck(Color::Black))
         );
+    }
+
+    #[test]
+    fn chess960_king_takes_rook_matches_castle() {
+        let board =
+            Board::from_fen("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1").unwrap();
+        let rook_uci = Move::from_uci("e1h1").unwrap();
+        let dest_uci = Move::from_uci("e1g1").unwrap();
+        let via_rook = find_legal_move_uci(&board, rook_uci, true).unwrap();
+        assert_eq!(via_rook.flag(), MoveFlag::KingsideCastle);
+        let via_dest = find_legal_move_uci(&board, dest_uci, false).unwrap();
+        assert_eq!(via_dest.flag(), MoveFlag::KingsideCastle);
+        assert_eq!(via_rook, via_dest);
     }
 }

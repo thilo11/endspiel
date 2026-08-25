@@ -16,6 +16,9 @@ pub struct Board {
     pub side_to_move: Color,
     /// Castling rights.
     pub castling: CastlingRights,
+    /// Starting squares of the castling rooks: [WK, WQ, BK, BQ].
+    /// Standard chess uses H1/A1/H8/A8. Chess960 stores the actual rook files.
+    pub castle_rooks: [Square; 4],
     /// En passant target square (the square a pawn can capture to).
     pub en_passant: Option<Square>,
     /// Halfmove clock for the 50-move rule.
@@ -29,6 +32,57 @@ pub struct Board {
 }
 
 impl Board {
+    /// Standard-chess rook origins (H1, A1, H8, A8).
+    pub const STANDARD_CASTLE_ROOKS: [Square; 4] =
+        [Square::H1, Square::A1, Square::H8, Square::A8];
+
+    #[inline]
+    pub fn castle_rook_index(color: Color, kingside: bool) -> usize {
+        color.index() * 2 + usize::from(!kingside)
+    }
+
+    #[inline]
+    pub fn castle_rook(&self, color: Color, kingside: bool) -> Square {
+        self.castle_rooks[Self::castle_rook_index(color, kingside)]
+    }
+
+    #[inline]
+    pub fn king_castle_to(color: Color, kingside: bool) -> Square {
+        let rank = match color {
+            Color::White => 0,
+            Color::Black => 7,
+        };
+        Square::new(if kingside { 6 } else { 2 }, rank)
+    }
+
+    #[inline]
+    pub fn rook_castle_to(color: Color, kingside: bool) -> Square {
+        let rank = match color {
+            Color::White => 0,
+            Color::Black => 7,
+        };
+        Square::new(if kingside { 5 } else { 3 }, rank)
+    }
+
+    /// Convert a move to UCI. In Chess960, castling is king-takes-own-rook.
+    pub fn move_to_uci(&self, m: Move, chess960: bool) -> String {
+        if chess960 {
+            let kingside = match m.flag() {
+                MoveFlag::KingsideCastle => true,
+                MoveFlag::QueensideCastle => false,
+                _ => return m.to_uci(),
+            };
+            let color = if m.from_sq().rank() == 0 {
+                Color::White
+            } else {
+                Color::Black
+            };
+            format!("{}{}", m.from_sq(), self.castle_rook(color, kingside))
+        } else {
+            m.to_uci()
+        }
+    }
+
     /// Create a new board from the standard starting position.
     pub fn starting_position() -> Self {
         Self::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
@@ -115,6 +169,9 @@ impl Board {
             }
         }
 
+        let is_castle =
+            matches!(flag, MoveFlag::KingsideCastle | MoveFlag::QueensideCastle);
+
         // Safety: clear any piece at `to` not already removed by the explicit capture
         // handling above.  In a legal game this is always a no-op.  Under a TT hash
         // collision a "quiet" move can target an enemy-occupied square; without this,
@@ -122,45 +179,42 @@ impl Board {
         // cross-color occupancy overlap that corrupts Syzygy probing (both color
         // occupancies share the square → pyrrhic's material key overcounts pieces →
         // wrong TB entry → sq=64 from poplsb(0) → OOB in OFF_DIAG / BINOMIAL → SEGV).
-        if let Some(ghost) = self.piece_at(to) {
+        // Skip for castling: Chess960 can have from==to (king already on c/g),
+        // and the destination may still hold the castling rook.
+        if !is_castle
+            && let Some(ghost) = self.piece_at(to)
+        {
             self.remove_piece(to, ghost);
         }
 
-        // Move the piece
-        self.remove_piece(from, moving_piece);
-
-        // Handle promotion; track the piece kind that ends up on `to`
-        let placed_kind = if flag.is_promotion() {
+        // Handle promotion; track the piece kind that ends up on `to`.
+        // Castling is done as a unit so king and rook can occupy each other's
+        // origin/destination (Chess960: king lands on the rook, or already
+        // sits on c/g).
+        let placed_kind = if is_castle {
+            let kingside = flag == MoveFlag::KingsideCastle;
+            let rook_from = self.castle_rook(us, kingside);
+            let rook_to = Self::rook_castle_to(us, kingside);
+            let rook = Piece::new(PieceKind::Rook, us);
+            self.remove_piece(from, moving_piece);
+            if rook_from != from {
+                self.remove_piece(rook_from, rook);
+            }
+            self.set_piece(to, moving_piece);
+            if rook_to != to {
+                self.set_piece(rook_to, rook);
+            }
+            moving_piece.kind
+        } else if flag.is_promotion() {
+            self.remove_piece(from, moving_piece);
             let promo_kind = flag.promotion_piece().unwrap();
             self.set_piece(to, Piece::new(promo_kind, us));
             promo_kind
         } else {
+            self.remove_piece(from, moving_piece);
             self.set_piece(to, moving_piece);
             moving_piece.kind
         };
-
-        // Handle castling (move the rook)
-        match flag {
-            MoveFlag::KingsideCastle => {
-                let (rook_from, rook_to) = match us {
-                    Color::White => (Square::H1, Square::F1),
-                    Color::Black => (Square::H8, Square::F8),
-                };
-                let rook = Piece::new(PieceKind::Rook, us);
-                self.remove_piece(rook_from, rook);
-                self.set_piece(rook_to, rook);
-            }
-            MoveFlag::QueensideCastle => {
-                let (rook_from, rook_to) = match us {
-                    Color::White => (Square::A1, Square::D1),
-                    Color::Black => (Square::A8, Square::D8),
-                };
-                let rook = Piece::new(PieceKind::Rook, us);
-                self.remove_piece(rook_from, rook);
-                self.set_piece(rook_to, rook);
-            }
-            _ => {}
-        }
 
         // Update en passant square
         // Guard: a TT hash collision can produce a DoublePawnPush from an impossible rank
@@ -178,7 +232,7 @@ impl Board {
 
         // Save castling rights before they change, then update them
         let old_castling = self.castling;
-        self.update_castling_rights(from, to);
+        self.update_castling_rights(from, to, moving_piece.kind == PieceKind::King, us);
 
         // Update halfmove clock
         if moving_piece.kind == PieceKind::Pawn || captured.is_some() {
@@ -214,25 +268,15 @@ impl Board {
                     self.hash ^= z.piece_sq[them.index()][cap.kind.index()][to.index()];
                 }
             }
-            // Castling rook teleports
-            match flag {
-                MoveFlag::KingsideCastle => {
-                    let (rook_from, rook_to) = match us {
-                        Color::White => (Square::H1, Square::F1),
-                        Color::Black => (Square::H8, Square::F8),
-                    };
-                    self.hash ^= z.piece_sq[us.index()][PieceKind::Rook.index()][rook_from.index()];
+            if matches!(flag, MoveFlag::KingsideCastle | MoveFlag::QueensideCastle) {
+                let kingside = flag == MoveFlag::KingsideCastle;
+                let rook_from = self.castle_rook(us, kingside);
+                let rook_to = Self::rook_castle_to(us, kingside);
+                if rook_from != rook_to {
+                    self.hash ^=
+                        z.piece_sq[us.index()][PieceKind::Rook.index()][rook_from.index()];
                     self.hash ^= z.piece_sq[us.index()][PieceKind::Rook.index()][rook_to.index()];
                 }
-                MoveFlag::QueensideCastle => {
-                    let (rook_from, rook_to) = match us {
-                        Color::White => (Square::A1, Square::D1),
-                        Color::Black => (Square::A8, Square::D8),
-                    };
-                    self.hash ^= z.piece_sq[us.index()][PieceKind::Rook.index()][rook_from.index()];
-                    self.hash ^= z.piece_sq[us.index()][PieceKind::Rook.index()][rook_to.index()];
-                }
-                _ => {}
             }
             // En-passant file contribution changes
             if let Some(ep) = old_ep {
@@ -275,6 +319,27 @@ impl Board {
         self.halfmove_clock = prev_halfmove;
         if us == Color::Black {
             self.fullmove_number -= 1;
+        }
+
+        let is_castle =
+            matches!(flag, MoveFlag::KingsideCastle | MoveFlag::QueensideCastle);
+
+        if is_castle {
+            let kingside = flag == MoveFlag::KingsideCastle;
+            let rook_from = self.castle_rook(us, kingside);
+            let rook_to = Self::rook_castle_to(us, kingside);
+            let rook = Piece::new(PieceKind::Rook, us);
+            let king = Piece::new(PieceKind::King, us);
+            self.remove_piece(to, king);
+            if rook_to != to {
+                self.remove_piece(rook_to, rook);
+            }
+            self.set_piece(from, king);
+            if rook_from != from {
+                self.set_piece(rook_from, rook);
+            }
+            self.hash = self.position_history.pop().unwrap_or(0);
+            return;
         }
 
         // Identify the piece at `to` BEFORE removing it
@@ -334,56 +399,32 @@ impl Board {
             self.set_piece(to, cap);
         }
 
-        // Undo castling rook move
-        match flag {
-            MoveFlag::KingsideCastle => {
-                let (rook_from, rook_to) = match us {
-                    Color::White => (Square::H1, Square::F1),
-                    Color::Black => (Square::H8, Square::F8),
-                };
-                let rook = Piece::new(PieceKind::Rook, us);
-                self.remove_piece(rook_to, rook);
-                self.set_piece(rook_from, rook);
-            }
-            MoveFlag::QueensideCastle => {
-                let (rook_from, rook_to) = match us {
-                    Color::White => (Square::A1, Square::D1),
-                    Color::Black => (Square::A8, Square::D8),
-                };
-                let rook = Piece::new(PieceKind::Rook, us);
-                self.remove_piece(rook_to, rook);
-                self.set_piece(rook_from, rook);
-            }
-            _ => {}
-        }
-
         // Restore hash from the snapshot saved by make_move
         self.hash = self.position_history.pop().unwrap_or(0);
     }
 
-    fn update_castling_rights(&mut self, from: Square, to: Square) {
-        // King moves remove both castling rights for that side
-        if from == Square::E1 {
-            self.castling = self
-                .castling
-                .remove(CastlingRights::WHITE_KINGSIDE | CastlingRights::WHITE_QUEENSIDE);
+    fn update_castling_rights(&mut self, from: Square, to: Square, moved_king: bool, us: Color) {
+        if moved_king {
+            let flags = match us {
+                Color::White => CastlingRights::WHITE_KINGSIDE | CastlingRights::WHITE_QUEENSIDE,
+                Color::Black => CastlingRights::BLACK_KINGSIDE | CastlingRights::BLACK_QUEENSIDE,
+            };
+            self.castling = self.castling.remove(flags);
         }
-        if from == Square::E8 {
-            self.castling = self
-                .castling
-                .remove(CastlingRights::BLACK_KINGSIDE | CastlingRights::BLACK_QUEENSIDE);
-        }
-        // Rook moves or captures remove the relevant castling right
-        if from == Square::A1 || to == Square::A1 {
+        let wk = self.castle_rook(Color::White, true);
+        let wq = self.castle_rook(Color::White, false);
+        let bk = self.castle_rook(Color::Black, true);
+        let bq = self.castle_rook(Color::Black, false);
+        if from == wq || to == wq {
             self.castling = self.castling.remove(CastlingRights::WHITE_QUEENSIDE);
         }
-        if from == Square::H1 || to == Square::H1 {
+        if from == wk || to == wk {
             self.castling = self.castling.remove(CastlingRights::WHITE_KINGSIDE);
         }
-        if from == Square::A8 || to == Square::A8 {
+        if from == bq || to == bq {
             self.castling = self.castling.remove(CastlingRights::BLACK_QUEENSIDE);
         }
-        if from == Square::H8 || to == Square::H8 {
+        if from == bk || to == bk {
             self.castling = self.castling.remove(CastlingRights::BLACK_KINGSIDE);
         }
     }

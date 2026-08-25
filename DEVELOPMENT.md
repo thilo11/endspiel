@@ -42,6 +42,10 @@ Two modes, switchable at runtime via `UseNNUE`:
 
 `crates/chess-nnue/build.rs` copies `nets/default.nnue` into `OUT_DIR` at build time. If the file is missing or the wrong size it writes a zero buffer (engine falls back to HCE). Always `cargo build --release` after replacing the net file.
 
+### Chess960
+
+Castling rook origins live on `Board::castle_rooks` (standard H1/A1/H8/A8 unless a FEN says otherwise). Internal castle moves still send the king to c/g and the rook to d/f. FEN parsing accepts KQkq, X-FEN, and Shredder-FEN (`AHah`); emission is X-FEN. With `UCI_Chess960=true` the UCI layer prints and parses king-takes-own-rook.
+
 ### Syzygy (`chess-engine/src/syzygy.rs`)
 
 WDL probing via `pyrrhic-rs`. Fires at alpha-beta nodes when castling rights are gone and piece count ≤ loaded range. Returns Win/CursedWin/Draw/BlessedLoss/Loss. Guards against empty king bitboards before calling native code (necessary because the search uses pseudo-legal move generation and `panic = "abort"` is set).

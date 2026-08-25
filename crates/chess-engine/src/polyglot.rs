@@ -369,7 +369,7 @@ impl BookEntry {
 
     /// Decode the Polyglot move encoding to a UCI move.
     /// Returns (from_sq, to_sq, promotion_piece).
-    fn decode_move(&self) -> (Square, Square, Option<PieceKind>) {
+    fn decode_move(&self, board: &Board) -> (Square, Square, Option<PieceKind>) {
         let to_file = (self.raw_move & 0x7) as u8;
         let to_rank = ((self.raw_move >> 3) & 0x7) as u8;
         let from_file = ((self.raw_move >> 6) & 0x7) as u8;
@@ -379,18 +379,18 @@ impl BookEntry {
         let from = Square::new(from_file, from_rank);
         let mut to = Square::new(to_file, to_rank);
 
-        // Polyglot encodes castling as king-to-rook, convert to king destination
-        if from == Square::E1 && to == Square::H1 {
-            to = Square::G1;
-        }
-        if from == Square::E1 && to == Square::A1 {
-            to = Square::C1;
-        }
-        if from == Square::E8 && to == Square::H8 {
-            to = Square::G8;
-        }
-        if from == Square::E8 && to == Square::A8 {
-            to = Square::C8;
+        // Polyglot encodes castling as king-takes-rook; convert to the internal
+        // king destination (c/g). Uses the position's rook origins so Chess960
+        // books decode the same way as standard e1h1/e1a1.
+        if let Some(piece) = board.piece_at(from)
+            && piece.kind == PieceKind::King
+            && piece.color == board.side_to_move
+        {
+            if to == board.castle_rook(piece.color, true) {
+                to = Board::king_castle_to(piece.color, true);
+            } else if to == board.castle_rook(piece.color, false) {
+                to = Board::king_castle_to(piece.color, false);
+            }
         }
 
         let promotion = match promo {
@@ -506,7 +506,7 @@ impl PolyglotBook {
                 continue;
             } // deleted entry
 
-            let (from, to, promo) = entry.decode_move();
+            let (from, to, promo) = entry.decode_move(board);
             let flag = match promo {
                 Some(PieceKind::Knight) => MoveFlag::PromoteKnight,
                 Some(PieceKind::Bishop) => MoveFlag::PromoteBishop,

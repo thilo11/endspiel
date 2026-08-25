@@ -103,6 +103,8 @@ pub struct UciHandler {
     /// Why the most recent `position` command was rejected. While set, `go`
     /// returns `bestmove 0000` instead of searching the previous (stale) board.
     position_error: Option<String>,
+    /// UCI_Chess960: castling is printed/parsed as king-takes-own-rook.
+    chess960: bool,
 }
 
 impl Default for UciHandler {
@@ -129,6 +131,7 @@ impl UciHandler {
             ponder_alloc_ms: 0,
             history: Arc::new(Mutex::new(PersistentHistory::new())),
             position_error: None,
+            chess960: false,
         }
     }
 
@@ -290,6 +293,10 @@ impl UciHandler {
             name: "UCI_ShowWDL".to_string(),
             opt_type: UciOptionType::Check { default: false },
         }));
+        send_response(&UciResponse::Option(UciOptionDef {
+            name: "UCI_Chess960".to_string(),
+            opt_type: UciOptionType::Check { default: false },
+        }));
         // ── SPSA-tunable search parameters ────────────────────────────────
         let t = self.engine.tune();
         for (name, default, min, max) in [
@@ -365,7 +372,7 @@ impl UciHandler {
     }
 
     fn handle_position(&mut self, fen: Option<String>, moves: Vec<String>) {
-        match build_position(fen.as_deref(), &moves) {
+        match build_position(fen.as_deref(), &moves, self.chess960) {
             Ok(board) => {
                 self.board = board;
                 self.position_error = None;
@@ -394,7 +401,7 @@ impl UciHandler {
                 ..UciInfo::default()
             }));
             send_response(&UciResponse::BestMove {
-                best: Move::NULL,
+                best: Move::NULL.to_uci(),
                 ponder: None,
             });
             return;
@@ -462,6 +469,7 @@ impl UciHandler {
 
         // Clone what we need for the search thread
         let board = self.board.clone();
+        let chess960 = self.chess960;
 
         // Share the TT from the main engine so entries persist across searches
         // (important for analysis mode where many positions are evaluated
@@ -490,6 +498,7 @@ impl UciHandler {
             .stack_size(4 * 1024 * 1024) // 4 MB – match helper thread stack size
             .spawn(move || {
                 let search_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let board_for_uci = board.clone();
                     let info_cb: InfoCallback = Box::new(move |info: &SearchInfo| {
                         {
                             let mut vl = variety_lines_cb
@@ -524,7 +533,11 @@ impl UciHandler {
                             score: Some(displayed_score),
                             nodes: Some(info.nodes),
                             time: Some(info.time_ms),
-                            pv: info.pv.clone(),
+                            pv: info
+                                .pv
+                                .iter()
+                                .map(|m| board_for_uci.move_to_uci(*m, chess960))
+                                .collect(),
                             hashfull: Some(info.hashfull),
                             nps,
                             wdl,
@@ -640,8 +653,8 @@ impl UciHandler {
                 let ponder_move = validated_ponder_move(&board, result.best_move, &result.pv);
 
                 send_response(&UciResponse::BestMove {
-                    best: result.best_move,
-                    ponder: ponder_move,
+                    best: board.move_to_uci(result.best_move, chess960),
+                    ponder: ponder_move.map(|p| board.move_to_uci(p, chess960)),
                 });
             })
             .expect("failed to spawn search thread");
@@ -838,6 +851,12 @@ impl UciHandler {
                     log::info!("UCI_ShowWDL set to {}", self.show_wdl);
                 }
             }
+            "uci_chess960" => {
+                if let Some(v) = value {
+                    self.chess960 = v.trim().eq_ignore_ascii_case("true");
+                    log::info!("UCI_Chess960 set to {}", self.chess960);
+                }
+            }
             // SPSA-tunable search parameters
             "lmrbase" => {
                 if let Some(v) = value
@@ -953,25 +972,15 @@ fn fallback_ponder_move(after_best: &Board) -> Option<Move> {
     replies.as_slice().first().copied()
 }
 
-fn find_legal_move(board: &Board, uci_str: &str) -> Option<Move> {
+fn find_legal_move(board: &Board, uci_str: &str, chess960: bool) -> Option<Move> {
     let parsed = Move::from_uci(uci_str)?;
-    let legal_moves = chess_core::generate_legal_moves(board);
-
-    legal_moves
-        .as_slice()
-        .iter()
-        .find(|&&legal| {
-            legal.from_sq() == parsed.from_sq()
-                && legal.to_sq() == parsed.to_sq()
-                && legal.flag().promotion_piece() == parsed.flag().promotion_piece()
-        })
-        .copied()
+    chess_core::validate::find_legal_move_uci(board, parsed, chess960)
 }
 
 /// Build and validate a complete UCI position without mutating handler state.
 /// The side not to move must not be in check: otherwise the supplied history
 /// claims that the previous move illegally left its own king attacked.
-fn build_position(fen: Option<&str>, moves: &[String]) -> Result<Board, String> {
+fn build_position(fen: Option<&str>, moves: &[String], chess960: bool) -> Result<Board, String> {
     let mut board = match fen {
         Some(fen) => Board::from_fen(fen).map_err(|e| format!("{e}"))?,
         None => Board::starting_position(),
@@ -979,7 +988,7 @@ fn build_position(fen: Option<&str>, moves: &[String]) -> Result<Board, String> 
     chess_core::validate_position(&board).map_err(|e| e.to_string())?;
 
     for (index, move_str) in moves.iter().enumerate() {
-        let m = find_legal_move(&board, move_str)
+        let m = find_legal_move(&board, move_str, chess960)
             .ok_or_else(|| format!("illegal move {move_str} at index {index}"))?;
         board.make_move(m);
         chess_core::validate_position(&board)
@@ -1101,15 +1110,53 @@ mod tests {
 
     #[test]
     fn invalid_positions_are_rejected_before_search() {
-        assert!(build_position(Some("8/8/8/8/8/8/8/8 w - - 0 1"), &[]).is_err());
-        assert!(build_position(Some("4k3/8/8/8/8/8/4R3/4K3 w - - 0 1"), &[]).is_err());
-        assert!(build_position(None, &["e2e5".to_string()]).is_err());
+        assert!(build_position(Some("8/8/8/8/8/8/8/8 w - - 0 1"), &[], false).is_err());
+        assert!(build_position(Some("4k3/8/8/8/8/8/4R3/4K3 w - - 0 1"), &[], false).is_err());
+        assert!(build_position(None, &["e2e5".to_string()], false).is_err());
     }
 
     #[test]
     fn valid_position_history_is_accepted() {
         let moves = ["e2e4".to_string(), "e7e5".to_string()];
-        let board = build_position(None, &moves).expect("legal position history");
+        let board = build_position(None, &moves, false).expect("legal position history");
         assert_eq!(board.side_to_move, chess_common::Color::White);
+    }
+
+    #[test]
+    fn chess960_position_accepts_king_takes_rook_castling() {
+        let fen = "r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1";
+        let board = build_position(Some(fen), &["e1h1".to_string()], true)
+            .expect("Chess960 king-takes-rook castle");
+        assert_eq!(
+            board.king_square(chess_common::Color::White).to_algebraic(),
+            "g1"
+        );
+        assert_eq!(
+            board
+                .piece_at(chess_common::Square::F1)
+                .map(|p| p.kind),
+            Some(chess_common::PieceKind::Rook)
+        );
+        assert_eq!(
+            board.castling.0 & chess_common::CastlingRights::WHITE_KINGSIDE,
+            0
+        );
+        assert_eq!(
+            board.castling.0 & chess_common::CastlingRights::WHITE_QUEENSIDE,
+            0
+        );
+    }
+
+    #[test]
+    fn chess960_uci_encodes_castle_as_king_takes_rook() {
+        let board =
+            Board::from_fen("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1").unwrap();
+        let castle = chess_core::generate_legal_moves(&board)
+            .iter()
+            .copied()
+            .find(|m| m.flag() == chess_common::moves::MoveFlag::KingsideCastle)
+            .unwrap();
+        assert_eq!(board.move_to_uci(castle, true), "e1h1");
+        assert_eq!(board.move_to_uci(castle, false), "e1g1");
     }
 }
