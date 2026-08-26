@@ -674,6 +674,35 @@ fn ponder_fresh_time_ms(
     (soft_target_ms / divisor).clamp(1_000, 12_000)
 }
 
+/// Early-opening soft-limit discount in permille points (negative = stop sooner).
+/// Chess960 returns 0: there is no book, and the first moves need the long think.
+fn opening_time_adjust(game_ply: usize, time_remaining_ms: u64, chess960: bool) -> i64 {
+    if chess960 {
+        return 0;
+    }
+    if game_ply < 6 {
+        if time_remaining_ms <= 300_000 {
+            -240
+        } else {
+            -160
+        }
+    } else if game_ply < 12 {
+        if time_remaining_ms <= 300_000 {
+            -140
+        } else {
+            -90
+        }
+    } else if game_ply < 20 {
+        if time_remaining_ms <= 300_000 {
+            -60
+        } else {
+            -30
+        }
+    } else {
+        0
+    }
+}
+
 /// Retain only recent score volatility for time management. A large shallow
 /// swing must not suppress the clearly-decided-position discount forever once
 /// several deeper iterations have converged.
@@ -844,8 +873,11 @@ fn compute_time_limit(
         };
         let bank_term_raw = usable_bank / burn_horizon.saturating_mul(3).max(1);
         // Opening throttle: avoid spending too much bank time in the first
-        // few moves when there is no opening book. Apply to all time controls.
-        let opening_bank_scale_permille = if game_ply < 6 {
+        // few moves when there is no opening book. Chess960 skips this — there
+        // is no book, and those first moves need the long think.
+        let opening_bank_scale_permille = if params.chess960 {
+            1000u64
+        } else if game_ply < 6 {
             if time <= 15_000 { 600u64 } else { 350u64 }
         } else if game_ply < 12 {
             if time <= 15_000 {
@@ -888,13 +920,15 @@ fn compute_time_limit(
         }
 
         // Additional early-opening cap to prevent very long thinks in the
-        // first moves without a book. Apply to all time controls.
-        if game_ply < 6 {
-            let frac = if time <= 300_000 { 16u64 } else { 30u64 };
-            max = max.min(time / frac + inc.saturating_mul(2));
-        } else if game_ply < 12 {
-            let frac = if time <= 300_000 { 13u64 } else { 22u64 };
-            max = max.min(time / frac + inc.saturating_mul(2));
+        // first moves without a book. Chess960 skips this (see bank scale).
+        if !params.chess960 {
+            if game_ply < 6 {
+                let frac = if time <= 300_000 { 16u64 } else { 30u64 };
+                max = max.min(time / frac + inc.saturating_mul(2));
+            } else if game_ply < 12 {
+                let frac = if time <= 300_000 { 13u64 } else { 22u64 };
+                max = max.min(time / frac + inc.saturating_mul(2));
+            }
         }
 
         // Minimum think time: always use at least the increment when
@@ -2073,28 +2107,10 @@ pub fn iterative_deepening(
             };
 
             // Early opening brake: keep first moves snappier and save heavy
-            // spending for richer middlegame positions. Apply to all time controls.
-            let opening_adjust: i64 = if game_ply < 6 {
-                if state.time_remaining_ms <= 300_000 {
-                    -240
-                } else {
-                    -160
-                }
-            } else if game_ply < 12 {
-                if state.time_remaining_ms <= 300_000 {
-                    -140
-                } else {
-                    -90
-                }
-            } else if game_ply < 20 {
-                if state.time_remaining_ms <= 300_000 {
-                    -60
-                } else {
-                    -30
-                }
-            } else {
-                0
-            };
+            // spending for richer middlegame positions. Chess960 skips this
+            // (see compute_time_limit).
+            let opening_adjust: i64 =
+                opening_time_adjust(game_ply, state.time_remaining_ms, params.chess960);
 
             let soft_frac = (base_frac
                 + instability_bonus
@@ -4163,6 +4179,58 @@ mod tests {
             hard.saturating_mul(6) / 5 <= max.max(hard),
             "fail-low extension off hard {hard} must stay within the safety max"
         );
+    }
+
+    #[test]
+    fn chess960_skips_opening_time_throttle() {
+        let board = Board::starting_position();
+        let standard = SearchParams {
+            white_time_ms: Some(1_800_000),
+            black_time_ms: Some(1_800_000),
+            white_inc_ms: Some(2_000),
+            black_inc_ms: Some(2_000),
+            move_overhead_ms: 200,
+            ..Default::default()
+        };
+        let mut frc = standard.clone();
+        frc.chess960 = true;
+
+        let (std_soft, std_hard, _, _, _) = compute_time_limit(&standard, &board);
+        let (frc_soft, frc_hard, _, _, _) = compute_time_limit(&frc, &board);
+        let (std_soft, std_hard) = (std_soft.unwrap(), std_hard.unwrap());
+        let (frc_soft, frc_hard) = (frc_soft.unwrap(), frc_hard.unwrap());
+
+        // 1800+2 opening: long-game cap already binds the soft target, so the
+        // win is that hard can exceed soft (difficulty bonuses can fire).
+        assert!(frc_soft >= std_soft);
+        assert!(
+            frc_hard > std_hard,
+            "chess960 hard {frc_hard} should exceed standard opening hard {std_hard}"
+        );
+        assert!(
+            frc_hard > frc_soft,
+            "chess960 hard {frc_hard} must exceed soft {frc_soft}"
+        );
+
+        let blitz = SearchParams {
+            white_time_ms: Some(180_000),
+            black_time_ms: Some(180_000),
+            white_inc_ms: Some(2_000),
+            black_inc_ms: Some(2_000),
+            ..Default::default()
+        };
+        let mut blitz_frc = blitz.clone();
+        blitz_frc.chess960 = true;
+        let std_blitz = allocated_move_time_ms(&blitz, &board).unwrap();
+        let frc_blitz = allocated_move_time_ms(&blitz_frc, &board).unwrap();
+        assert!(
+            frc_blitz > std_blitz,
+            "chess960 blitz opening {frc_blitz} should exceed standard {std_blitz}"
+        );
+
+        assert_eq!(opening_time_adjust(0, 1_800_000, true), 0);
+        assert_eq!(opening_time_adjust(0, 1_800_000, false), -160);
+        assert_eq!(opening_time_adjust(40, 1_800_000, false), 0);
     }
 
     #[test]

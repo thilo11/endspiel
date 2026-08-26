@@ -146,7 +146,7 @@ check that the binary runs end-to-end:
 | `BookFile` | *(disabled)* | Path to an opening book: Polyglot `.bin`, EPD `.epd`, or PGN `.pgn` (auto-detected by extension) |
 | `SyzygyPath` | *(disabled)* | Path to Syzygy tablebase directory |
 | `MultiPV` | 1 | Number of principal variations to report (1–256) |
-| `OpeningVariety` | 0 | Opening spice: 0 = off; otherwise pick at random among MultiPV moves within this many centipawns of the best, for the first 8 plies |
+| `OpeningVariety` | 0 | Opening spice: 0 = off; otherwise pick at random among MultiPV moves within this many centipawns of the best, for the first 8 plies of standard chess (ignored in Chess960) |
 | `UCI_ShowWDL` | false | Append `wdl <win> <draw> <loss>` (0–1000) to each info line |
 
 Set `BookFile` or `SyzygyPath` to a valid path to enable; clear to disable. No separate toggle is needed.
@@ -157,7 +157,7 @@ Set `BookFile` or `SyzygyPath` to a valid path to enable; clear to disable. No s
 - **`Threads`** — Lazy SMP; scaling is sub-linear. Stick to physical core count. On Linux/Android the default is the performance-core count (the top CPU-frequency tier), which avoids the slow LITTLE cores and the thermal throttling they invite; elsewhere it's `min(available, 16)`.
 - **`EvalFile`** — load an alternate net at runtime without rebuilding. Clear to revert to the embedded net.
 - **`SyzygyPath`** — WDL/DTZ probing for up to 7-man endgames. Multiple directories: `:` on Linux/macOS, `;` on Windows.
-- **`OpeningVariety`** — only affects the first 8 plies; 0 (default) always plays the best move.
+- **`OpeningVariety`** — only affects the first 8 plies of standard chess; 0 (default) always plays the best move. Chess960 always plays the best move, and also skips the early-opening time throttle so the first moves use the normal clock budget.
 
 > **Fritz 20 (Windows):** Fritz manages Syzygy and opening books through its own systems.
 > Set the tablebase path in Fritz's settings — it forwards it to Endspiel automatically.

@@ -62,6 +62,9 @@ pub struct SearchParams {
     /// from the search start, so time already pondered is credited against
     /// the budget automatically.
     pub ponder: Option<Arc<AtomicBool>>,
+    /// UCI_Chess960. Opening time throttle is skipped: there is no book, and
+    /// the first moves are the ones that need the long think.
+    pub chess960: bool,
 }
 
 /// Search parameters that can be tuned via SPSA.
@@ -125,6 +128,7 @@ impl Default for SearchParams {
             multi_pv: 1,
             tune: TuneParams::default(),
             ponder: None,
+            chess960: false,
         }
     }
 }

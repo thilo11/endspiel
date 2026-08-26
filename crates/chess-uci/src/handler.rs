@@ -410,13 +410,13 @@ impl UciHandler {
         // Opening variety: bookless play is deterministic (same eval => same
         // game). When enabled, opening searches run with a widened MultiPV
         // (the existing machinery) and the final move is drawn at random from
-        // the lines scoring within the window of the best. The men >= 24
-        // guard keeps this out of endgames and TB positions even for bare-FEN
-        // probes, where game_ply reads 0.
+        // the lines scoring within the window of the best. Chess960 is excluded
+        // because the net has no 960 opening prior, so the window fills with
+        // junk. The men >= 24 guard keeps this out of endgames and TB positions
+        // even for bare-FEN probes, where game_ply reads 0.
         let opening_variety = self.opening_variety;
-        let variety_active = opening_variety > 0
-            && self.board.position_history.len() < 8
-            && self.board.all_occupancy().count() >= 24;
+        let variety_active =
+            opening_variety_active(opening_variety, self.chess960, &self.board);
         let effective_multi_pv = if variety_active {
             self.multi_pv.max(4)
         } else {
@@ -441,6 +441,7 @@ impl UciHandler {
             multi_pv: effective_multi_pv,
             tune: self.engine.tune().clone(),
             ponder: None,
+            chess960: self.chess960,
         };
 
         // Pondering: the board is the predicted position (opponent's expected
@@ -972,6 +973,13 @@ fn fallback_ponder_move(after_best: &Board) -> Option<Move> {
     replies.as_slice().first().copied()
 }
 
+fn opening_variety_active(opening_variety: i32, chess960: bool, board: &Board) -> bool {
+    opening_variety > 0
+        && !chess960
+        && board.position_history.len() < 8
+        && board.all_occupancy().count() >= 24
+}
+
 fn find_legal_move(board: &Board, uci_str: &str, chess960: bool) -> Option<Move> {
     let parsed = Move::from_uci(uci_str)?;
     chess_core::validate::find_legal_move_uci(board, parsed, chess960)
@@ -1013,7 +1021,9 @@ fn send_response(response: &UciResponse) {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_position, normalize_display_score, validated_ponder_move};
+    use super::{
+        build_position, normalize_display_score, opening_variety_active, validated_ponder_move,
+    };
     use chess_common::{Board, Move, Score};
     use chess_engine::syzygy::{TB_LOSS_SCORE, TB_WIN_SCORE};
 
@@ -1145,6 +1155,14 @@ mod tests {
             board.castling.0 & chess_common::CastlingRights::WHITE_QUEENSIDE,
             0
         );
+    }
+
+    #[test]
+    fn opening_variety_skips_chess960() {
+        let board = Board::starting_position();
+        assert!(opening_variety_active(15, false, &board));
+        assert!(!opening_variety_active(15, true, &board));
+        assert!(!opening_variety_active(0, false, &board));
     }
 
     #[test]
