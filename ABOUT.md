@@ -42,32 +42,30 @@ against a pinned Stockfish version, rather than `UCI_Elo` /
 `UCI_LimitStrength`, whose scale is RNG-calibrated and drifts between
 Stockfish releases (so its numbers aren't comparable over time).
 
-If you want the top of the Rust-engine charts, look at
-[Reckless](https://github.com/codedeliveryservice/Reckless) or a
-Stockfish derivative; if you want a readable, fully-formed Rust engine
-that you can also actually play and analyse with, you're in the right
-place.
+A Rust NNUE engine on Lichess is not unusual. Endspiel's bet is a
+from-scratch chess stack (no board library), a layer-stacked king-bucketed
+net rather than a tiny `(768→N)×2→1` perspective net, and binaries meant
+to be installed — AVX-512 / AVX2 / SSE, Raspberry Pi 5, Android — rather
+than one `cargo build` on a VPS. Search is the usual modern toolkit,
+reimplemented; see [CREDITS.md](CREDITS.md). Strength is well above human
+play and short of the top of the engine lists.
 
 ## Training data
 
-The embedded NNUE was trained from scratch on the engine's own self-play
-output. The current training archive is **~2.6 billion positions** drawn
-from roughly **25–30 million self-play games** (most generated at search
-depth 10–12, with a smaller depth-12 set; openings sampled from random
-prefixes and from Lichess opening positions). Every round of training
-goes back to scratch on the full accumulated archive — there is no
-fine-tune step in the active pipeline.
+The bulk of the archive is Endspiel self-play: the engine's own games,
+labelled with its own search scores. The current set is on the order of
+**billions of positions** from tens of millions of games (mostly depth
+10–12; openings from random prefixes and Lichess starting FENs). Training
+runs from scratch on the accumulated mix — there is no fine-tune step in
+the active pipeline.
 
-Crucially, the network learns from **no external evaluation data**. Unlike
-most NNUE engines, it uses no Stockfish or Leela Chess Zero labels: every
-training target is the engine's own search score on its own games. The
-only outside ingredient is a set of raw opening positions (random prefixes
-and Lichess opening FENs) used purely as self-play *starting points* —
-they seed the games, never the training targets. The trainer itself is the
-open-source [Bullet](https://github.com/jw1912/bullet) framework and
-Syzygy probing uses `pyrrhic-rs`; everything else — bitboards and move
-generation, search, NNUE inference, and the UCI layer — is hand-written
-from scratch.
+That is not “zero external data.” Opening FENs seed games; they are not
+eval targets. The current embedded net's mix also includes a public eval
+dump as one source. What we do *not* do is ship someone else's network
+file or train only on another engine's labels. The trainer is
+[Bullet](https://github.com/jw1912/bullet); Syzygy probing is
+`pyrrhic-rs`. Everything else — bitboards, move generation, search, NNUE
+inference, UCI — is hand-written.
 
 ## Where the strength comes from now
 
