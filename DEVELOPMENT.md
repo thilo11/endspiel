@@ -35,7 +35,7 @@ Alpha-beta with iterative deepening and PVS.
 
 Two modes, switchable at runtime via `UseNNUE`:
 
-- **NNUE** (default): HalfKP 768×32→(1024 pairwise 512)×2→16→32→1, 32 per-square king buckets and 8 material-keyed output stacks, embedded at compile time via `include_bytes!`
+- **NNUE** (default): HalfKP 785×32→(1024 pairwise 512)×2→16→32→1, 32 per-square king buckets and 8 material-keyed output stacks, embedded at compile time via `include_bytes!`. Dense L1/L2 are read from the net header (`1..=64`) so `EvalFile` can load architecture-trial nets without a rebuild.
 - **HCE**: tapered MG/EG with pawn hash, mobility, king safety, pawn structure (passed/doubled/isolated/backward/islands), threats, center control, connectivity, space, material imbalance, endgame scaling
 
 ### NNUE net embedding

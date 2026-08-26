@@ -3,7 +3,8 @@ use chess_common::Color;
 use crate::accumulator::Accumulator;
 use crate::network::NnueNetwork;
 use crate::{
-    FT_QUANT, HIDDEN_SIZE, L1_SIZE, L2_SIZE, NET_QUANT, OUTPUT_BUCKETS, PAIR_INPUT_SIZE, PAIR_SIZE,
+    FT_QUANT, HIDDEN_SIZE, MAX_L1_SIZE, MAX_L2_SIZE, NET_QUANT, OUTPUT_BUCKETS, PAIR_INPUT_SIZE,
+    PAIR_SIZE,
 };
 
 #[inline]
@@ -129,7 +130,8 @@ unsafe fn pairwise_crelu_sum_neon(acc: &[i16; HIDDEN_SIZE], weights: &[i8]) -> i
 }
 
 #[inline]
-fn dense_screlu_sum<const N: usize>(values: &[i16; N], weights: &[i8; N]) -> i32 {
+fn dense_screlu_sum(values: &[i16], weights: &[i8]) -> i32 {
+    debug_assert_eq!(values.len(), weights.len());
     values
         .iter()
         .zip(weights)
@@ -145,7 +147,7 @@ fn quantised_activation(raw: i32) -> i16 {
     (raw / (FT_QUANT * NET_QUANT)).clamp(0, FT_QUANT) as i16
 }
 
-/// Evaluate the 1024-pairwise-16-32 layer-stacked NNUE.
+/// Evaluate the layer-stacked NNUE. Dense widths come from the loaded net.
 #[inline]
 pub fn nnue_evaluate(
     acc: &Accumulator,
@@ -158,24 +160,26 @@ pub fn nnue_evaluate(
         Color::Black => (&acc.black, &acc.white),
     };
     let bucket = output_bucket(piece_count);
+    let l1_size = net.l1_size;
+    let l2_size = net.l2_size;
 
-    let mut l1 = [0i16; L1_SIZE];
-    for (neuron, output) in l1.iter_mut().enumerate() {
-        let weights = &net.l1_weights[bucket * L1_SIZE + neuron];
+    let mut l1 = [0i16; MAX_L1_SIZE];
+    for (neuron, slot) in l1.iter_mut().enumerate().take(l1_size) {
+        let weights = net.l1_row(bucket, neuron);
         let raw = pairwise_crelu_sum(stm_acc, &weights[..PAIR_SIZE])
             + pairwise_crelu_sum(opp_acc, &weights[PAIR_SIZE..PAIR_INPUT_SIZE])
-            + net.l1_biases[bucket][neuron];
-        *output = quantised_activation(raw);
+            + net.l1_bias(bucket, neuron);
+        *slot = quantised_activation(raw);
     }
 
-    let mut l2 = [0i16; L2_SIZE];
-    for (neuron, output) in l2.iter_mut().enumerate() {
-        let weights = &net.l2_weights[bucket * L2_SIZE + neuron];
-        let raw = dense_screlu_sum(&l1, weights) + net.l2_biases[bucket][neuron];
-        *output = quantised_activation(raw);
+    let mut l2 = [0i16; MAX_L2_SIZE];
+    for (neuron, slot) in l2.iter_mut().enumerate().take(l2_size) {
+        let raw = dense_screlu_sum(&l1[..l1_size], net.l2_row(bucket, neuron))
+            + net.l2_bias(bucket, neuron);
+        *slot = quantised_activation(raw);
     }
 
-    let raw = dense_screlu_sum(&l2, &net.l3_weights[bucket]) + net.l3_biases[bucket];
+    let raw = dense_screlu_sum(&l2[..l2_size], net.l3_row(bucket)) + net.l3_biases[bucket];
     ((i64::from(raw) * 400) / i64::from(FT_QUANT * FT_QUANT * NET_QUANT)) as i32
 }
 

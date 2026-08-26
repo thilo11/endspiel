@@ -11,8 +11,12 @@ pub const INPUT_SIZE: usize = FEATURES_PER_BUCKET * NUM_BUCKETS;
 pub const HIDDEN_SIZE: usize = 1024;
 pub const PAIR_SIZE: usize = HIDDEN_SIZE / 2;
 pub const PAIR_INPUT_SIZE: usize = PAIR_SIZE * 2;
+/// Production dense widths (embedded `default.nnue`). EvalFile nets may use
+/// any L1/L2 in `1..=MAX_L1_SIZE` / `1..=MAX_L2_SIZE` as recorded in the header.
 pub const L1_SIZE: usize = 16;
 pub const L2_SIZE: usize = 32;
+pub const MAX_L1_SIZE: usize = 64;
+pub const MAX_L2_SIZE: usize = 64;
 /// Material-keyed output buckets: bucket = (piece_count - 2) / 4, matching
 /// bullet's MaterialCount<8> (divisor = ceil(32/8) = 4).
 pub const OUTPUT_BUCKETS: usize = 8;

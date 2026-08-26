@@ -31,7 +31,7 @@ See [ABOUT.md](ABOUT.md) for project rationale, playing strength, and training d
   in the pipeline)
 - **Full UCI compliance** — works in any UCI GUI (Arena, CuteChess, Fritz, Banksia, Scid, …)
 - **Chess960** — Fischer Random / Freestyle: X-FEN and Shredder-FEN, `UCI_Chess960` king-takes-rook castling
-- **NNUE evaluation** (default) — state-aware HalfKP 785×32→(1024 pairwise 512)×2→16→32→1 (8 material-keyed output buckets), with castling rights and en passant in the input; trained from scratch on billions of self-play positions; the net is embedded in the binary, no extra files to ship. Older piece-only nets still load.
+- **NNUE evaluation** (default) — state-aware HalfKP 785×32→(1024 pairwise 512)×2→16→32→1 (8 material-keyed output buckets), with castling rights and en passant in the input; trained from scratch on billions of self-play positions; the net is embedded in the binary, no extra files to ship. Older piece-only nets still load. `EvalFile` nets may use dense L1/L2 widths other than 16/32 (up to 64), taken from the ESPNNUE2 header.
 - **HCE fallback** — tapered hand-crafted evaluation (`UseNNUE=false`) with
   pawn hash, mobility, king safety, pawn structure, threats, space, and
   endgame scaling
