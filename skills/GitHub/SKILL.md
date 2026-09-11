@@ -17,14 +17,14 @@ Build targets and flags:
 
 | Target                   | Binary                    | RUSTFLAGS               |
 |--------------------------|---------------------------|-------------------------|
-| x86_64-unknown-linux-gnu | endspiel-linux-x64-v4     | -C target-cpu=x86-64-v4 |
-| x86_64-unknown-linux-gnu | endspiel-linux-x64-v3     | -C target-cpu=x86-64-v3 |
-| x86_64-unknown-linux-gnu | endspiel-linux-x64-v2     | -C target-cpu=x86-64-v2 |
+| x86_64-unknown-linux-gnu | endspiel-linux-x64        | -C target-cpu=x86-64-v2 |
 | aarch64-apple-darwin     | endspiel-mac-arm64        | -C target-cpu=apple-m1  |
-| x86_64-pc-windows-msvc   | endspiel-win-x64-v4.exe   | -C target-cpu=x86-64-v4 |
-| x86_64-pc-windows-msvc   | endspiel-win-x64-v3.exe   | -C target-cpu=x86-64-v3 |
-| x86_64-pc-windows-msvc   | endspiel-win-x64-v2.exe   | -C target-cpu=x86-64-v2 |
+| x86_64-pc-windows-msvc   | endspiel-win-x64.exe      | -C target-cpu=x86-64-v2 |
 | aarch64-pc-windows-msvc  | endspiel-win-arm64.exe    | (none)                  |
+
+The x86-64 artifacts are universal binaries. Keep their v2 baseline: their
+NNUE hot paths select AVX2, AVX-512, or AVX512ICL at runtime. Do not restore
+separate v3/v4 artifacts or build the release with `target-cpu=native`.
 
 ### Local workflow (default)
 - Build all targets locally using `cargo build --release --target <target>` with the RUSTFLAGS above.
@@ -39,4 +39,4 @@ Build targets and flags:
 - The workflow builds all targets on native runners and creates a GitHub release automatically.
 
 ## Testing & Clippy
-- before committing always run `cargo test` and `cargo clippy` 
+- before committing always run `cargo test` and `cargo clippy`

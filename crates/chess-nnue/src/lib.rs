@@ -25,4 +25,5 @@ pub const NET_QUANT: i32 = 64; // dense-layer weight quantization (QB)
 
 pub use accumulator::Accumulator;
 pub use inference::nnue_evaluate;
+pub use inference::{SimdBackend, simd_backend};
 pub use network::NnueNetwork;

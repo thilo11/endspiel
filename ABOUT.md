@@ -45,8 +45,10 @@ Stockfish releases (so its numbers aren't comparable over time).
 A Rust NNUE engine on Lichess is not unusual. Endspiel's bet is a
 from-scratch chess stack (no board library), a layer-stacked king-bucketed
 net rather than a tiny `(768→N)×2→1` perspective net, and binaries meant
-to be installed — AVX-512 / AVX2 / SSE, Raspberry Pi 5, Android — rather
-than one `cargo build` on a VPS. Search is the usual modern toolkit,
+to be installed — a universal runtime-dispatched x86-64 executable,
+Raspberry Pi 5, and Android builds — rather than one `cargo build` on a VPS.
+The x86-64 release has a portable v2 baseline and automatically uses AVX2 or
+AVX-512-class NNUE kernels when the host supports them. Search is the usual modern toolkit,
 reimplemented; see [CREDITS.md](CREDITS.md). Strength is well above human
 play and short of the top of the engine lists.
 

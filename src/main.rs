@@ -17,6 +17,7 @@ fn real_main() {
         .init();
 
     log::info!("Endspiel engine starting");
+    log::info!("NNUE SIMD backend: {}", chess_engine::simd_backend().name());
     chess_common::platform::log_summary();
 
     let args: Vec<String> = env::args().collect();
@@ -67,9 +68,10 @@ fn run_bench(depth: u8) {
     use chess_engine::{Engine, SearchParams};
 
     println!(
-        "Running bench: depth {} across {} positions",
+        "Running bench: depth {} across {} positions (NNUE: {})",
         depth,
-        BENCH_FENS.len()
+        BENCH_FENS.len(),
+        chess_engine::simd_backend().name()
     );
 
     let mut engine = Engine::with_hash(16);

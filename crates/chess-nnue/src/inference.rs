@@ -1,4 +1,5 @@
 use chess_common::Color;
+use std::sync::OnceLock;
 
 use crate::accumulator::Accumulator;
 use crate::network::NnueNetwork;
@@ -6,6 +7,72 @@ use crate::{
     FT_QUANT, HIDDEN_SIZE, MAX_L1_SIZE, MAX_L2_SIZE, NET_QUANT, OUTPUT_BUCKETS, PAIR_INPUT_SIZE,
     PAIR_SIZE,
 };
+
+/// Best x86 SIMD tier available to the current process.
+///
+/// Keep this in sync with the requirements used by Stockfish's universal
+/// x86-64 dispatcher.  In particular, AVX512ICL means the complete feature
+/// set shared by Intel Ice Lake and AMD Zen 4/5, not merely AVX-512F.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SimdBackend {
+    Scalar,
+    Neon,
+    Avx2,
+    Avx512,
+    Avx512Icl,
+}
+
+impl SimdBackend {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Scalar => "scalar",
+            Self::Neon => "NEON",
+            Self::Avx2 => "AVX2",
+            Self::Avx512 => "AVX-512",
+            Self::Avx512Icl => "AVX512ICL",
+        }
+    }
+}
+
+/// Report the SIMD implementation selected at runtime.
+pub fn simd_backend() -> SimdBackend {
+    static BACKEND: OnceLock<SimdBackend> = OnceLock::new();
+    *BACKEND.get_or_init(detect_simd_backend)
+}
+
+fn detect_simd_backend() -> SimdBackend {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512bw") {
+            if is_x86_feature_detected!("avx512vl")
+                && is_x86_feature_detected!("avx512dq")
+                && is_x86_feature_detected!("avx512vnni")
+                && is_x86_feature_detected!("avx512ifma")
+                && is_x86_feature_detected!("avx512vbmi")
+                && is_x86_feature_detected!("avx512vbmi2")
+                && is_x86_feature_detected!("avx512vpopcntdq")
+                && is_x86_feature_detected!("avx512bitalg")
+                && is_x86_feature_detected!("vpclmulqdq")
+                && is_x86_feature_detected!("gfni")
+                && is_x86_feature_detected!("vaes")
+            {
+                return SimdBackend::Avx512Icl;
+            }
+            return SimdBackend::Avx512;
+        }
+        if is_x86_feature_detected!("avx2") {
+            return SimdBackend::Avx2;
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        SimdBackend::Neon
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        SimdBackend::Scalar
+    }
+}
 
 #[inline]
 pub fn output_bucket(piece_count: u32) -> usize {

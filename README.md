@@ -14,7 +14,7 @@ A UCI chess engine written in Rust. Bitboards, move generation, search,
 NNUE inference, and the UCI front end are hand-written — no external chess
 libraries. The eval is a layer-stacked, state-aware HalfKP net trained
 mostly on Endspiel's own self-play, not a borrowed network file. It ships
-as a self-contained binary (embedded net, Pi / Android / AVX-512 builds).
+as a self-contained binary (embedded net, Pi / Android / universal x86-64 builds).
 
 Rust NNUE bots on Lichess are common. What is less common is a from-scratch
 chess stack, a modern king-bucketed net with castling and en passant in the
@@ -51,25 +51,43 @@ engine lists; details in [ABOUT.md](ABOUT.md).
 - **WDL output** — optional `wdl W D L` annotation on each `info` line
   (`UCI_ShowWDL`), with the win/draw/loss mapping fit per net
 - **Contempt** and configurable time management (`Move Overhead`, `Slow Mover`)
-- **Performance** — runtime-dispatched AVX-512 and AVX2 inference on x86-64,
-  NEON on AArch64, and a scalar fallback; selected release builds also use
-  profile-guided optimisation and fat LTO
+- **Performance** — one universal x86-64 executable detects the host CPU at
+  startup and dispatches its hot NNUE inference and accumulator operations to
+  AVX512ICL, AVX-512, AVX2, or the portable fallback. AArch64 uses NEON;
+  selected release builds also use profile-guided optimisation and fat LTO
 - **Cross-platform** — Linux x86_64/ARM64, Windows x86_64/ARM64, macOS Apple Silicon
 - **Self-contained binary** — no runtime dependencies, no external net file
 
 ## Download
 
-Prebuilt binaries are on the [Releases](https://github.com/thilo11/endspiel/releases/latest) page. Current release: **v1.6.0**.
+Prebuilt binaries are on the [Releases](https://github.com/thilo11/endspiel/releases/latest) page.
 
-**x86-64** ships in three micro-architecture tiers (each faster than the one
-below, all but `-v4` profile-guided-optimised). Pick the **highest your CPU
-supports**:
+> The universal filenames below begin with the release containing this change.
+> v1.6.0 and earlier still expose the old `-v2`, `-v3`, and `-v4` x86-64
+> assets; use `-v3` as the normal AVX2 choice for those older releases.
 
-| Tier | Linux | Windows | CPU requirement |
-|------|-------|---------|-----------------|
-| `v4` | `endspiel-linux-x64-v4` | `endspiel-win-x64-v4.exe` | **AVX-512** — AMD Zen 4/5, Intel Skylake-X / Ice Lake+ (typically 30–60% faster NNUE eval) |
-| `v3` *(default)* | `endspiel-linux-x64-v3` | `endspiel-win-x64-v3.exe` | **AVX2** — Intel Haswell (2013)+, AMD Zen / Excavator+ |
-| `v2` | `endspiel-linux-x64-v2` | `endspiel-win-x64-v2.exe` | **SSE4.2 + POPCNT** — pre-2013 mainstream + recent low-end Intel (Gemini/Jasper Lake) without AVX2 |
+**x86-64 now ships as one universal binary per operating system.** Download
+`endspiel-linux-x64` or `endspiel-win-x64.exe`; there is no longer a CPU tier
+to choose. These replace the former `-v2`, `-v3`, and `-v4` release assets.
+
+The executable itself has an x86-64-v2 baseline (SSE4.2 + POPCNT), while its
+hot NNUE code contains several implementations. At startup it detects CPU and
+OS support once, then selects the highest usable tier in this order:
+
+1. `AVX512ICL` — the complete Ice Lake-class feature set, also available on
+   suitable AMD Zen 4/5 CPUs
+2. `AVX-512` — AVX-512F + AVX-512BW
+3. `AVX2`
+4. portable fallback
+
+This lets the same file run on older v2-compatible machines and use
+AVX512ICL automatically on a machine such as Beast. Run the binary's `bench`
+command to verify the selected backend; it is printed on the first line.
+
+| Platform | Binary | CPU requirement |
+|----------|--------|-----------------|
+| Linux x86-64 | `endspiel-linux-x64` | x86-64-v2 baseline; NNUE SIMD selected automatically |
+| Windows x86-64 | `endspiel-win-x64.exe` | x86-64-v2 baseline; NNUE SIMD selected automatically |
 
 **Other platforms:**
 
@@ -79,14 +97,6 @@ supports**:
 | Windows ARM64 | `endspiel-win-arm64.exe` | generic ARM64 |
 | Raspberry Pi 5 | `endspiel-linux-arm64-pi5` | `cortex-a76`, fat LTO + PGO; needs Raspberry Pi OS (Trixie / Debian 13) or newer — glibc ≥ 2.39 |
 | Android arm64 | `endspiel-android-arm64.apk` | `arm64-v8a`, minSdk 24 — installs like an app; pick "Endspiel" as a UCI engine in DroidFish / Chess for Android |
-
-**Picking an x86-64 build.** `-v3` (AVX2) is the safe default — it runs on
-essentially any CPU sold since ~2013. Go up to `-v4` if your CPU has AVX-512
-(AMD Zen 4/5, recent Intel) for a sizeable NNUE-eval speedup; drop to `-v2`
-only for older or low-end (no-AVX2) hardware. If a build aborts immediately with an **illegal-
-instruction** crash, your CPU lacks that tier's instructions — step down one
-tier. On Linux you can check support with
-`lscpu | grep -oE 'avx512f|avx2|sse4_2'` (highest match wins).
 
 **Raspberry Pi 5.** Any RAM tier runs the engine; hash size is the only
 thing that scales with it. Set `Hash` in your GUI rather than relying on
@@ -112,9 +122,12 @@ prints the total node count, elapsed time, and NPS. Useful as a sanity
 check that the binary runs end-to-end:
 
 ```bash
-./endspiel bench          # default depth 14
-./endspiel bench 18       # deeper, for performance tuning
+./endspiel-linux-x64 bench       # also prints the selected NNUE SIMD backend
+./endspiel-linux-x64 bench 18    # deeper, for performance tuning
 ```
+
+On Windows, use `endspiel-win-x64.exe bench`. A current universal build prints
+an opening line such as `Running bench: ... (NNUE: AVX512ICL)`.
 
 > **macOS users — run this once from a terminal before pointing a chess
 > GUI at the binary.** The release binaries are not code-signed, so
@@ -166,7 +179,7 @@ Set `BookFile` or `SyzygyPath` to a valid path to enable; clear to disable. No s
 
 ## Build from Source
 
-Requires Rust 1.98.0+.
+Requires Rust 1.98.1+.
 
 ```bash
 cargo build --release

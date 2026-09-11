@@ -71,6 +71,13 @@ cargo build --release --workspace  # engine plus chess-tuner
 rustflags = ["-C", "target-cpu=native"]
 ```
 
+This is appropriate for a machine-local build, but not for an x86-64 release:
+`target-cpu=native`, `x86-64-v3`, or `x86-64-v4` may let LLVM emit advanced
+instructions throughout the executable and thereby defeat its portable
+baseline. Release x86-64 binaries must remain compiled with
+`-C target-cpu=x86-64-v2`; only functions protected by runtime feature
+detection may enable later instruction sets.
+
 For the benchmark-backed native fat-LTO + PGO build:
 
 ```bash
@@ -95,27 +102,40 @@ paths.
 ### Release build matrix
 
 CI (`.github/workflows/release.yml`, manual `workflow_dispatch` on a tag) builds
-the following variants. x86-64 ships three micro-architecture tiers (v2–v4):
+the following artifacts. Linux and Windows each have one universal x86-64
+executable instead of the former v2/v3/v4 variants:
 
 | Artifact | `target-cpu` | LTO | PGO | Notes |
 |----------|--------------|-----|-----|-------|
-| `endspiel-linux-x64-v4` | `x86-64-v4` | fat | no | AVX-512 (Zen 4/5, recent Xeon/Core) |
-| `endspiel-linux-x64-v3` | `x86-64-v3` | thin | yes | default Linux build (AVX2, ~2013+) |
-| `endspiel-linux-x64-v2` | `x86-64-v2` | thin | yes | SSE4.2 + POPCNT (no-AVX2 CPUs) |
-| `endspiel-win-x64-v4.exe` | `x86-64-v4` | fat | no | AVX-512 Windows build |
-| `endspiel-win-x64-v3.exe` | `x86-64-v3` | thin | yes | default Windows build |
-| `endspiel-win-x64-v2.exe` | `x86-64-v2` | thin | yes | SSE4.2 + POPCNT Windows build |
+| `endspiel-linux-x64` | `x86-64-v2` | thin | yes | universal Linux build; runtime NNUE SIMD dispatch |
+| `endspiel-win-x64.exe` | `x86-64-v2` | thin | yes | universal Windows build; runtime NNUE SIMD dispatch |
 | `endspiel-win-arm64.exe` | `generic` | thin | no | cross-built, no PGO |
 | `endspiel-mac-arm64` | `apple-m1` | thin | yes | macOS Apple Silicon |
 | `endspiel-linux-arm64-pi5` | `cortex-a76` | fat | yes | Raspberry Pi 5 (Raspberry Pi OS Trixie / Debian 13 or newer, glibc ≥ 2.39) |
 | `endspiel-android-arm64.apk` | `generic` | thin | no | Android arm64-v8a, minSdk 24 — Open Exchange engine APK (see `android/oex/`) |
 
+#### Universal x86-64 dispatch
+
+The baseline contract is x86-64-v2 (SSE4.2 and POPCNT). The dispatcher is
+cached after its first call and selects `AVX512ICL`, `AVX-512` (F + BW),
+`AVX2`, or the portable implementation. Runtime detection checks both CPU and
+OS support, so AVX/AVX-512 code is not entered unless the operating system has
+enabled the required register state. `endspiel bench` prints the selected tier
+and is the quickest packaging smoke test.
+
+The specialised functions are deliberately isolated behind
+`#[target_feature]`. Keep the baseline call path free of unconditional AVX2 or
+AVX-512 instructions. When adding another dispatched kernel, it must have a
+scalar/reference equivalence test and must be exercised on at least one
+machine that selects the new tier.
+
 PGO is a two-stage build: an instrumented binary is built with
 `-Cprofile-generate`, then `endspiel bench` is run against it to produce
-profile data, and a final build is done with `-Cprofile-use`. PGO is skipped
-for the AVX-512 variants because the runner CPU may not support AVX-512, and
-for cross-built targets whose binaries cannot execute on their runner. Fat LTO
-is still used for the AVX-512 artifacts. The Pi 5 combines fat LTO with PGO;
+profile data, and a final build is done with `-Cprofile-use`. The x86-64
+training run exercises the best SIMD tier available on its runner while all
+dispatched implementations remain in the final binary. PGO does not change
+the x86-64-v2 compatibility floor. It is skipped for cross-built targets whose
+binaries cannot execute on their runner. The Pi 5 combines fat LTO with PGO;
 this pairing must remain benchmark-backed because fat LTO alone can be slower
 on Cortex-A76.
 

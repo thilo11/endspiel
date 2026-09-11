@@ -16,6 +16,8 @@ use syzygy::SyzygyTB;
 use threads::ThreadPool;
 use tt::SharedTT;
 
+pub use chess_nnue::{SimdBackend, simd_backend};
+
 /// Search result returned by the engine.
 #[derive(Debug, Clone)]
 pub struct SearchResult {

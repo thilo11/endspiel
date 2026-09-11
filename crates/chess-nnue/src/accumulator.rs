@@ -2,7 +2,180 @@ use chess_common::{Board, CastlingRights, Color, PieceKind, Square};
 
 use crate::HIDDEN_SIZE;
 use crate::features::{board_state_feature_indices, feature_index, state_feature_indices};
+#[cfg(target_arch = "x86_64")]
+use crate::inference::{SimdBackend, simd_backend};
 use crate::network::NnueNetwork;
+
+#[inline]
+fn add_row(values: &mut [i16; HIDDEN_SIZE], row: &[i16; HIDDEN_SIZE]) {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        match simd_backend() {
+            SimdBackend::Avx512Icl | SimdBackend::Avx512 => return add_row_avx512(values, row),
+            SimdBackend::Avx2 => return add_row_avx2(values, row),
+            SimdBackend::Scalar | SimdBackend::Neon => {}
+        }
+    }
+    add_row_scalar(values, row);
+}
+
+#[inline]
+fn sub_row(values: &mut [i16; HIDDEN_SIZE], row: &[i16; HIDDEN_SIZE]) {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        match simd_backend() {
+            SimdBackend::Avx512Icl | SimdBackend::Avx512 => return sub_row_avx512(values, row),
+            SimdBackend::Avx2 => return sub_row_avx2(values, row),
+            SimdBackend::Scalar | SimdBackend::Neon => {}
+        }
+    }
+    sub_row_scalar(values, row);
+}
+
+#[inline]
+fn replace_row(
+    values: &mut [i16; HIDDEN_SIZE],
+    old_row: &[i16; HIDDEN_SIZE],
+    new_row: &[i16; HIDDEN_SIZE],
+) {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        match simd_backend() {
+            SimdBackend::Avx512Icl | SimdBackend::Avx512 => {
+                return replace_row_avx512(values, old_row, new_row);
+            }
+            SimdBackend::Avx2 => return replace_row_avx2(values, old_row, new_row),
+            SimdBackend::Scalar | SimdBackend::Neon => {}
+        }
+    }
+    for ((value, &old), &new) in values.iter_mut().zip(old_row).zip(new_row) {
+        *value += new - old;
+    }
+}
+
+#[inline]
+fn add_row_scalar(values: &mut [i16; HIDDEN_SIZE], row: &[i16; HIDDEN_SIZE]) {
+    for (value, &delta) in values.iter_mut().zip(row) {
+        *value += delta;
+    }
+}
+
+#[inline]
+fn sub_row_scalar(values: &mut [i16; HIDDEN_SIZE], row: &[i16; HIDDEN_SIZE]) {
+    for (value, &delta) in values.iter_mut().zip(row) {
+        *value -= delta;
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+macro_rules! simd_row_op {
+    ($name:ident, $feature:literal, $vector:ty, $load:ident, $store:ident, $op:ident, $lanes:expr) => {
+        #[target_feature(enable = $feature)]
+        unsafe fn $name(values: &mut [i16; HIDDEN_SIZE], row: &[i16; HIDDEN_SIZE]) {
+            use std::arch::x86_64::*;
+            unsafe {
+                let mut i = 0;
+                while i < HIDDEN_SIZE {
+                    let lhs = $load(values.as_ptr().add(i) as *const $vector);
+                    let rhs = $load(row.as_ptr().add(i) as *const $vector);
+                    $store(values.as_mut_ptr().add(i) as *mut $vector, $op(lhs, rhs));
+                    i += $lanes;
+                }
+            }
+        }
+    };
+}
+
+#[cfg(target_arch = "x86_64")]
+simd_row_op!(
+    add_row_avx512,
+    "avx512f,avx512bw",
+    __m512i,
+    _mm512_loadu_si512,
+    _mm512_storeu_si512,
+    _mm512_add_epi16,
+    32
+);
+#[cfg(target_arch = "x86_64")]
+simd_row_op!(
+    sub_row_avx512,
+    "avx512f,avx512bw",
+    __m512i,
+    _mm512_loadu_si512,
+    _mm512_storeu_si512,
+    _mm512_sub_epi16,
+    32
+);
+#[cfg(target_arch = "x86_64")]
+simd_row_op!(
+    add_row_avx2,
+    "avx2",
+    __m256i,
+    _mm256_loadu_si256,
+    _mm256_storeu_si256,
+    _mm256_add_epi16,
+    16
+);
+#[cfg(target_arch = "x86_64")]
+simd_row_op!(
+    sub_row_avx2,
+    "avx2",
+    __m256i,
+    _mm256_loadu_si256,
+    _mm256_storeu_si256,
+    _mm256_sub_epi16,
+    16
+);
+
+#[cfg(target_arch = "x86_64")]
+macro_rules! simd_replace_row {
+    ($name:ident, $feature:literal, $vector:ty, $load:ident, $store:ident, $add:ident, $sub:ident, $lanes:expr) => {
+        #[target_feature(enable = $feature)]
+        unsafe fn $name(
+            values: &mut [i16; HIDDEN_SIZE],
+            old_row: &[i16; HIDDEN_SIZE],
+            new_row: &[i16; HIDDEN_SIZE],
+        ) {
+            use std::arch::x86_64::*;
+            unsafe {
+                let mut i = 0;
+                while i < HIDDEN_SIZE {
+                    let value = $load(values.as_ptr().add(i) as *const $vector);
+                    let old = $load(old_row.as_ptr().add(i) as *const $vector);
+                    let new = $load(new_row.as_ptr().add(i) as *const $vector);
+                    $store(
+                        values.as_mut_ptr().add(i) as *mut $vector,
+                        $add(value, $sub(new, old)),
+                    );
+                    i += $lanes;
+                }
+            }
+        }
+    };
+}
+
+#[cfg(target_arch = "x86_64")]
+simd_replace_row!(
+    replace_row_avx512,
+    "avx512f,avx512bw",
+    __m512i,
+    _mm512_loadu_si512,
+    _mm512_storeu_si512,
+    _mm512_add_epi16,
+    _mm512_sub_epi16,
+    32
+);
+#[cfg(target_arch = "x86_64")]
+simd_replace_row!(
+    replace_row_avx2,
+    "avx2",
+    __m256i,
+    _mm256_loadu_si256,
+    _mm256_storeu_si256,
+    _mm256_add_epi16,
+    _mm256_sub_epi16,
+    16
+);
 
 /// NNUE accumulator holding feature-transformed values for both perspectives.
 ///
@@ -53,18 +226,14 @@ impl Accumulator {
                 for sq in bb.iter() {
                     let idx = feature_index(perspective, white_king, black_king, color, kind, sq);
                     let row = &net.ft_weights[idx];
-                    for i in 0..HIDDEN_SIZE {
-                        values[i] += row[i];
-                    }
+                    add_row(&mut values, row);
                 }
             }
         }
 
         for index in board_state_feature_indices(board, perspective) {
             let row = &net.ft_weights[index];
-            for (value, &delta) in values.iter_mut().zip(row.iter()) {
-                *value += delta;
-            }
+            add_row(&mut values, row);
         }
 
         match perspective {
@@ -124,11 +293,7 @@ impl Accumulator {
                 }
                 let old_row = &net.ft_weights[old_index];
                 let new_row = &net.ft_weights[new_index];
-                for ((value, &old_delta), &new_delta) in
-                    values.iter_mut().zip(old_row.iter()).zip(new_row.iter())
-                {
-                    *value += new_delta - old_delta;
-                }
+                replace_row(values, old_row, new_row);
             }
         }
     }
@@ -161,16 +326,12 @@ impl Accumulator {
         if !self.needs_refresh(Color::White) {
             let idx = feature_index(Color::White, white_king, black_king, color, kind, sq);
             let row = &net.ft_weights[idx];
-            for (value, &delta) in self.white.iter_mut().zip(row.iter()) {
-                *value -= delta;
-            }
+            sub_row(&mut self.white, row);
         }
         if !self.needs_refresh(Color::Black) {
             let idx = feature_index(Color::Black, white_king, black_king, color, kind, sq);
             let row = &net.ft_weights[idx];
-            for (value, &delta) in self.black.iter_mut().zip(row.iter()) {
-                *value -= delta;
-            }
+            sub_row(&mut self.black, row);
         }
     }
 
@@ -187,16 +348,12 @@ impl Accumulator {
         if !self.needs_refresh(Color::White) {
             let idx = feature_index(Color::White, white_king, black_king, color, kind, sq);
             let row = &net.ft_weights[idx];
-            for (value, &delta) in self.white.iter_mut().zip(row.iter()) {
-                *value += delta;
-            }
+            add_row(&mut self.white, row);
         }
         if !self.needs_refresh(Color::Black) {
             let idx = feature_index(Color::Black, white_king, black_king, color, kind, sq);
             let row = &net.ft_weights[idx];
-            for (value, &delta) in self.black.iter_mut().zip(row.iter()) {
-                *value += delta;
-            }
+            add_row(&mut self.black, row);
         }
     }
 }
@@ -205,6 +362,30 @@ impl Accumulator {
 mod tests {
     use super::*;
     use crate::{FEATURES_PER_BUCKET, NUM_BUCKETS, PIECE_FEATURES};
+
+    #[test]
+    fn dispatched_row_operations_match_scalar() {
+        let original = std::array::from_fn(|i| (i as i16 % 97) - 48);
+        let row = std::array::from_fn(|i| (i as i16 % 31) - 15);
+        let replacement = std::array::from_fn(|i| (i as i16 % 43) - 21);
+
+        let mut expected = original;
+        add_row_scalar(&mut expected, &row);
+        let mut actual = original;
+        add_row(&mut actual, &row);
+        assert_eq!(actual, expected);
+
+        sub_row_scalar(&mut expected, &row);
+        sub_row(&mut actual, &row);
+        assert_eq!(actual, original);
+        assert_eq!(actual, expected);
+
+        for ((value, &old), &new) in expected.iter_mut().zip(&row).zip(&replacement) {
+            *value += new - old;
+        }
+        replace_row(&mut actual, &row, &replacement);
+        assert_eq!(actual, expected);
+    }
 
     #[test]
     fn incremental_matches_refresh() {
@@ -236,9 +417,7 @@ mod tests {
                 Color::Black => &mut acc_inc.black,
             };
             for index in board_state_feature_indices(&board, perspective) {
-                for (value, &delta) in values.iter_mut().zip(net.ft_weights[index].iter()) {
-                    *value += delta;
-                }
+                add_row(values, &net.ft_weights[index]);
             }
         }
 
