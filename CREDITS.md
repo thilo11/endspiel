@@ -49,7 +49,9 @@ All permissive (MIT / Apache-2.0 / BSD-family): `rayon`, `zstd`, `serde`,
 ## Development
 
 A substantial share of endspiel's initial implementation, debugging, and
-tooling was carried out with **[Claude Code](https://claude.com/claude-code)**
+tooling was carried out with
+**[Claude Code](https://code.claude.com/docs/en/cli-usage)**
 and further improved using other AI coding assistants, including
-**[Codex](https://developers.openai.com/codex/)**,
-**[Grok](https://grok.com/)**, and **[OpenCode](https://opencode.ai/)**.
+**[Codex](https://learn.chatgpt.com/docs/codex/cli)**,
+**[Grok](https://x.ai/cli)**, and
+**[OpenCode](https://opencode.ai/docs/cli/)**.
