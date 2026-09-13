@@ -26,15 +26,15 @@ The engine plays a strong game. It is well above the level of any human
 player — including masters — and is comfortably useful as a sparring
 partner and for position analysis.
 
-A Rust NNUE engine on Lichess is not unusual. Endspiel's bet is a
-from-scratch chess stack (no board library), a layer-stacked king-bucketed
-net rather than a tiny `(768→N)×2→1` perspective net, and binaries meant
-to be installed — a universal runtime-dispatched x86-64 executable,
-Raspberry Pi 5, and Android builds — rather than one `cargo build` on a VPS.
+Endspiel's bet is a from-scratch chess stack (no board library), a
+layer-stacked king-bucketed net rather than a tiny `(768→N)×2→1` perspective
+net, and binaries meant to be installed — a universal runtime-dispatched
+x86-64 executable, Raspberry Pi 5, and Android builds — rather than one
+`cargo build` on a VPS.
 The x86-64 release has a portable v2 baseline and automatically uses AVX2 or
-AVX-512-class NNUE kernels when the host supports them. Search is the usual modern toolkit,
-reimplemented; see [CREDITS.md](CREDITS.md). Strength is well above human
-play and short of the top of the engine lists.
+AVX-512-class NNUE kernels when the host supports them. Search is the usual
+modern toolkit, reimplemented; see [CREDITS.md](CREDITS.md). Strength is well
+above human play and short of the top of the engine lists.
 
 ## Training data
 
