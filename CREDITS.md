@@ -6,9 +6,9 @@ software it depends on and ideas it borrows. This file documents those sources.
 ## NNUE training
 
 - **[bullet](https://github.com/jw1912/bullet)** (MIT) by Jamie Whiting — the
-  trainer used to produce endspiel's NNUE networks. Weight loading
-  deliberately matches bullet's on-disk formats, via the **`bulletformat`**
-  crate.
+  trainer used to produce endspiel's NNUE networks. The engine implements its
+  own network loading and inference code; bullet is not linked into or
+  distributed with endspiel.
 
 ## Endgame tablebase probing
 
@@ -33,13 +33,6 @@ community, several of which were pioneered or popularised by
 These are algorithmic ideas and conventions, re-implemented from scratch in Rust.
 **No Stockfish source code is included or ported into endspiel.**
 
-## External tools (separate processes, not linked)
-
-- **Stockfish** is optionally invoked as an *external binary* by the offline
-  `chess-tuner` to cross-check endspiel's evaluations during net validation. This
-  is a subprocess call to a separate program; no Stockfish code is linked into or
-  distributed with endspiel.
-
 ## Android packaging
 
 - **[Chess Engine Support Library](https://github.com/gkalab/chessenginesupport-androidlib)**
@@ -50,10 +43,12 @@ These are algorithmic ideas and conventions, re-implemented from scratch in Rust
 
 ## Other notable dependencies
 
-All permissive (MIT / Apache-2.0 / BSD-family): `rayon`, `zstd`, `rand`,
-`serde_json`, `thiserror`, `log`, `env_logger`.
+All permissive (MIT / Apache-2.0 / BSD-family): `rayon`, `zstd`, `serde`,
+`serde_json`, `sysinfo`, `thiserror`, `log`, `env_logger`.
 
 ## Development
 
-A substantial share of endspiel's implementation, debugging, and tooling was
-carried out with **[Claude Code](https://claude.com/claude-code)**.
+A substantial share of endspiel's initial implementation, debugging, and
+tooling was carried out with **[Claude Code](https://claude.com/claude-code)**
+and further improved using other AI coding assistants, including Codex, Grok,
+and OpenCode.
