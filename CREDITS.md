@@ -50,5 +50,6 @@ All permissive (MIT / Apache-2.0 / BSD-family): `rayon`, `zstd`, `serde`,
 
 A substantial share of endspiel's initial implementation, debugging, and
 tooling was carried out with **[Claude Code](https://claude.com/claude-code)**
-and further improved using other AI coding assistants, including Codex, Grok,
-and OpenCode.
+and further improved using other AI coding assistants, including
+**[Codex](https://developers.openai.com/codex/)**,
+**[Grok](https://grok.com/)**, and **[OpenCode](https://opencode.ai/)**.
