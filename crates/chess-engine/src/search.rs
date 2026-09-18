@@ -4595,6 +4595,151 @@ mod tests {
         );
     }
 
+    fn search_fen_with_syzygy_threads(
+        fen: &str,
+        max_depth: u8,
+        threads: usize,
+        syzygy_tb: SyzygyTB,
+        ranking: Option<crate::syzygy::RootTbRanking>,
+        use_nnue: bool,
+    ) -> SearchResult {
+        let board = Board::from_fen(fen).expect("valid FEN");
+        let pool = crate::threads::ThreadPool::new(threads);
+        let stop = Arc::new(AtomicBool::new(false));
+        let tt = Arc::new(SharedTT::new(16));
+        let params = SearchParams {
+            max_depth,
+            use_nnue,
+            ..Default::default()
+        };
+        pool.search(
+            &board,
+            &params,
+            &stop,
+            &tt,
+            None,
+            &NnueNetwork::embedded(),
+            Some(syzygy_tb),
+            ranking,
+            None,
+            None,
+        )
+    }
+
+    #[test]
+    fn converts_pawnless_tb_win_without_giving_material_away_lichess_071afrc4() {
+        // lichess.org/071AfrC4: K+Q+R+N vs K, then K+R+N vs K. Ascending DTZ
+        // used to pick 74...Qg3+ (DTZ 1, queen hang) and 78/82...Nf1+ (unique
+        // DTZ 3, mate in 12). Material-preserving ranking must keep the queen
+        // and play a mate-optimal king move at the later roots. Search is
+        // sticky to that order below mate-finding depth, so both 1 and 4
+        // threads have to agree on the property.
+        let _guard = crate::syzygy::syzygy_test_lock()
+            .lock()
+            .expect("lock syzygy test mutex");
+        let path = syzygy_path();
+        if !path.exists() {
+            return;
+        }
+
+        const M72: &str = "8/8/8/1r6/8/8/2kp2K1/q7 b - - 1 72";
+        const M74: &str = "8/6q1/8/1r6/7K/8/2k5/3n4 b - - 3 74";
+        const M78: &str = "8/8/8/8/6r1/4n3/2k4K/8 b - - 6 78";
+        const M82: &str = "8/8/8/8/6r1/4n3/7K/2k5 b - - 14 82";
+        const M78_KINGS: &[&str] = &["c2c1", "c2c3", "c2d1", "c2d2", "c2d3"];
+        const M82_KINGS: &[&str] = &["c1c2", "c1d1", "c1d2"];
+
+        let tb = SyzygyTB::new(path.to_string_lossy().as_ref()).expect("load syzygy tables");
+        let rank = |fen: &str| {
+            let board = Board::from_fen(fen).expect("valid FEN");
+            crate::syzygy::rank_root_moves(&tb, &board)
+        };
+        let r72 = rank(M72);
+        let r74 = rank(M74);
+        let r78 = rank(M78);
+        let r82 = rank(M82);
+        assert_eq!(
+            r72.as_ref()
+                .and_then(|r| r.winning_moves.first())
+                .map(|m| m.to_uci())
+                .as_deref(),
+            Some("d2d1q")
+        );
+        assert_ne!(
+            r74.as_ref()
+                .and_then(|r| r.winning_moves.first())
+                .map(|m| m.to_uci())
+                .as_deref(),
+            Some("g7g3")
+        );
+        assert!(
+            r78.as_ref()
+                .and_then(|r| r.winning_moves.first())
+                .is_some_and(|m| M78_KINGS.contains(&m.to_uci().as_str()))
+        );
+        assert!(
+            r82.as_ref()
+                .and_then(|r| r.winning_moves.first())
+                .is_some_and(|m| M82_KINGS.contains(&m.to_uci().as_str()))
+        );
+
+        for threads in [1, 4] {
+            let m72 =
+                search_fen_with_syzygy_threads(M72, 16, threads, tb.clone(), r72.clone(), true);
+            assert!(
+                m72.score.is_mate() && m72.score.0 > 0,
+                "m72 / {threads}t should prove a short mate, got {} ({})",
+                m72.score,
+                m72.best_move.to_uci()
+            );
+
+            let m74 =
+                search_fen_with_syzygy_threads(M74, 16, threads, tb.clone(), r74.clone(), true);
+            assert_ne!(
+                m74.best_move.to_uci(),
+                "g7g3",
+                "m74 / {threads}t must not hang the queen, score={}",
+                m74.score
+            );
+            assert!(
+                m74.score.is_mate() && m74.score.0 > 0,
+                "m74 / {threads}t should prove the mate-in-2, got {} ({})",
+                m74.score,
+                m74.best_move.to_uci()
+            );
+
+            let m78 =
+                search_fen_with_syzygy_threads(M78, 16, threads, tb.clone(), r78.clone(), true);
+            assert_ne!(
+                m78.best_move.to_uci(),
+                "e3f1",
+                "m78 / {threads}t must not play Nf1+, score={}",
+                m78.score
+            );
+            assert!(
+                M78_KINGS.contains(&m78.best_move.to_uci().as_str()),
+                "m78 / {threads}t expected a mate-optimal king move, got {} score={}",
+                m78.best_move.to_uci(),
+                m78.score
+            );
+
+            let m82 =
+                search_fen_with_syzygy_threads(M82, 16, threads, tb.clone(), r82.clone(), true);
+            assert_ne!(
+                m82.best_move.to_uci(),
+                "e3f1",
+                "m82 / {threads}t must not play Nf1+, score={}",
+                m82.score
+            );
+            assert!(
+                M82_KINGS.contains(&m82.best_move.to_uci().as_str()),
+                "m82 / {threads}t expected a mate-optimal king move, got {} score={}",
+                m82.best_move.to_uci(),
+                m82.score
+            );
+        }
+    }
+
     #[test]
     fn game_position_move35() {
         // Position from the game after 35.Ke2 Kd7 — Black has Q+pawns vs 2R+pawns
@@ -4716,11 +4861,8 @@ mod tests {
         }
 
         let tb = SyzygyTB::new(path.to_string_lossy().as_ref()).expect("load syzygy tables");
-        let result = search_position_with_syzygy(
-            "8/k1b5/8/PP6/K1B5/8/8/8 b - - 74 202",
-            8,
-            Some(tb),
-        );
+        let result =
+            search_position_with_syzygy("8/k1b5/8/PP6/K1B5/8/8/8 b - - 74 202", 8, Some(tb));
         let uci = result.best_move.to_uci();
         assert!(
             uci == "c7d8" || uci == "a7b7",

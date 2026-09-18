@@ -329,6 +329,40 @@ pub fn probe_root(tb: &SyzygyTB, board: &Board) -> Option<pyrrhic_rs::DtzProbeRe
     .ok()
 }
 
+/// True when a zeroing move is ours to make: we have a pawn, or they still
+/// have material we can capture. When false (pawnless vs a bare king), DTZ
+/// counts down only to *our* material being taken.
+fn dtz_is_progress(board: &Board) -> bool {
+    let us = board.side_to_move.index();
+    let them = 1 - us;
+    let our_pawns = !board.pieces[us][PieceKind::Pawn.index()].is_empty();
+    let their_material = board.occupancy[them].0.count_ones() > 1;
+    our_pawns || their_material
+}
+
+fn chebyshev(a: Square, b: Square) -> u8 {
+    a.file().abs_diff(b.file()).max(a.rank().abs_diff(b.rank()))
+}
+
+fn is_underpromotion(mv: Move) -> bool {
+    matches!(mv.flag().promotion_piece(), Some(kind) if kind != PieceKind::Queen)
+}
+
+/// After `mv` in a pawnless-vs-bare-king win: does the opponent have a legal
+/// capture (immediate hang), and did our king step closer?
+fn pawnless_win_flags(board: &Board, mv: Move) -> (bool, bool) {
+    let us = board.side_to_move;
+    let them = us.opposite();
+    let before = chebyshev(board.king_square(us), board.king_square(them));
+    let mut child = board.clone();
+    child.make_move(mv);
+    let hang = chess_core::generate_legal_moves(&child)
+        .iter()
+        .any(|m| m.flag().is_capture());
+    let approach = chebyshev(child.king_square(us), child.king_square(them)) < before;
+    (hang, approach)
+}
+
 fn decode_root_move(
     board: &Board,
     from_square: u8,
@@ -378,8 +412,17 @@ pub struct RootTbRanking {
     pub score: Score,
     /// WDL of the root position from the side-to-move's perspective.
     pub best_wdl: WdlProbeResult,
-    /// When the root is a win, the win-preserving legal moves ordered best-first
-    /// (the tablebase-recommended move, then ascending DTZ). Empty otherwise.
+    /// When the root is a win, the win-preserving legal moves ordered best-first.
+    /// Default order is ascending DTZ (fastest zeroing first), with queen
+    /// promotions ahead of underpromotions at the same DTZ.
+    ///
+    /// Pawnless vs a bare king is the exception: the only zeroing event left is
+    /// the loser capturing one of our pieces, so min-DTZ is "shed material
+    /// soonest" (lichess 071AfrC4: 74...Qg3+ DTZ 1 forced 75.Kxg3; 78...Nf1+
+    /// DTZ 3 mates in 12 while king moves at DTZ 7 mate in 8). Those roots keep
+    /// the restriction to winning moves and the DTZ progress order, but
+    /// immediate hangs and a unique non-hanging DTZ-minimum are sorted last so
+    /// the head is a material-preserving conversion. Empty otherwise.
     pub winning_moves: Vec<Move>,
     /// When the root is a draw (including 50-move cursed/blessed), the
     /// draw-preserving legal moves. Empty otherwise.
@@ -441,19 +484,62 @@ pub fn rank_root_moves(tb: &SyzygyTB, board: &Board) -> Option<RootTbRanking> {
     // Win-preserving move list — only meaningful when the root itself is a win.
     let mut winning_moves: Vec<Move> = Vec::new();
     if matches!(best_wdl, WdlProbeResult::Win) {
-        let mut scored: Vec<(Move, u16)> = Vec::new();
+        struct Scored {
+            mv: Move,
+            dtz: u16,
+            hang: bool,
+            approach: bool,
+            under: bool,
+        }
+        let progress = dtz_is_progress(board);
+        let mut scored: Vec<Scored> = Vec::new();
         for value in probe.moves.iter().copied().take(probe.num_moves) {
             if let DtzProbeValue::DtzResult(r) = value
                 && matches!(r.wdl, WdlProbeResult::Win)
                 && let Some(mv) = decode_root_move(board, r.from_square, r.to_square, r.promotion)
             {
-                scored.push((mv, r.dtz));
+                let (hang, approach) = if progress {
+                    (false, false)
+                } else {
+                    pawnless_win_flags(board, mv)
+                };
+                scored.push(Scored {
+                    mv,
+                    dtz: r.dtz,
+                    hang,
+                    approach,
+                    under: is_underpromotion(mv),
+                });
             }
         }
-        // Fastest conversion first (ascending DTZ), but keep the tablebase's own
-        // recommended move at the very front so ties match the probe's choice.
-        scored.sort_by_key(|&(mv, dtz)| (Some(mv) != recommended, dtz));
-        winning_moves = scored.into_iter().map(|(mv, _)| mv).collect();
+        // Unique non-hanging DTZ-minimum (071AfrC4 78...Nf1+): delayed give-away
+        // that is not an immediate hang, but is the only min-DTZ win. Deprioritise
+        // it; do not drop it, so a proven shorter mate can still promote it.
+        let mut unique_min_dtz: Option<u16> = None;
+        if !progress {
+            let min_keep = scored.iter().filter(|s| !s.hang).map(|s| s.dtz).min();
+            if let Some(min_dtz) = min_keep {
+                let count = scored
+                    .iter()
+                    .filter(|s| !s.hang && s.dtz == min_dtz)
+                    .count();
+                if count == 1 {
+                    unique_min_dtz = Some(min_dtz);
+                }
+            }
+        }
+        scored.sort_by_key(|s| {
+            let outlier = unique_min_dtz == Some(s.dtz) && !s.hang;
+            (
+                s.hang,
+                outlier,
+                s.dtz,
+                !s.approach,
+                s.under,
+                Some(s.mv) != recommended,
+            )
+        });
+        winning_moves = scored.into_iter().map(|s| s.mv).collect();
     }
 
     // Draw-preserving move list. Without this, a drawn 6-man root is searched
@@ -610,8 +696,7 @@ mod tests {
         }
 
         let tb = SyzygyTB::new(path.to_string_lossy().as_ref()).expect("load syzygy tables");
-        let board =
-            Board::from_fen("8/k1b5/8/PP6/K1B5/8/8/8 b - - 74 202").expect("valid FEN");
+        let board = Board::from_fen("8/k1b5/8/PP6/K1B5/8/8/8 b - - 74 202").expect("valid FEN");
         let ranking = rank_root_moves(&tb, &board).expect("root TB ranking");
 
         assert!(
@@ -620,11 +705,7 @@ mod tests {
             ranking.best_wdl
         );
         assert!(ranking.winning_moves.is_empty());
-        let draws: Vec<String> = ranking
-            .drawing_moves
-            .iter()
-            .map(|m| m.to_uci())
-            .collect();
+        let draws: Vec<String> = ranking.drawing_moves.iter().map(|m| m.to_uci()).collect();
         assert!(
             draws.contains(&"c7d8".to_string()) && draws.contains(&"a7b7".to_string()),
             "expected Bd8/Kb7 among drawing moves, got {draws:?}"
@@ -633,5 +714,128 @@ mod tests {
             !draws.contains(&"a7a8".to_string()),
             "Ka8 must not be treated as draw-preserving, got {draws:?}"
         );
+    }
+
+    fn ranking_head(tb: &SyzygyTB, fen: &str) -> (String, Vec<String>) {
+        let board = Board::from_fen(fen).expect("valid FEN");
+        let ranking = rank_root_moves(tb, &board).expect("root TB ranking");
+        assert!(
+            matches!(ranking.best_wdl, WdlProbeResult::Win),
+            "expected a TB win, got {:?}",
+            ranking.best_wdl
+        );
+        let moves: Vec<String> = ranking.winning_moves.iter().map(|m| m.to_uci()).collect();
+        let head = moves.first().cloned().expect("winning move list");
+        (head, moves)
+    }
+
+    #[test]
+    fn rank_root_moves_prefers_queen_promo_at_equal_dtz_071afrc4_m72() {
+        // lichess 071AfrC4 move 72: d1=Q and d1=N are both DTZ 1 wins. The
+        // tablebase-recommended underpromotion used to sort first and was
+        // played. Queen-preferring DTZ ties keep the faster mate at the head.
+        let _guard = syzygy_test_lock().lock().expect("lock syzygy test mutex");
+        let path = syzygy_path();
+        if !path.exists() {
+            return;
+        }
+        let tb = SyzygyTB::new(path.to_string_lossy().as_ref()).expect("load syzygy tables");
+        let (head, moves) = ranking_head(&tb, "8/8/8/1r6/8/8/2kp2K1/q7 b - - 1 72");
+        assert_eq!(head, "d2d1q", "expected d1=Q at the DTZ head, got {head}");
+        assert!(
+            moves.iter().any(|m| m == "d2d1n"),
+            "underpromotion must remain a winning option, got {moves:?}"
+        );
+        let q = moves.iter().position(|m| m == "d2d1q").unwrap();
+        let n = moves.iter().position(|m| m == "d2d1n").unwrap();
+        assert!(q < n, "queen promotion must outrank d1=N, got {moves:?}");
+    }
+
+    #[test]
+    fn rank_root_moves_does_not_head_with_queen_hang_071afrc4_m74() {
+        // 74...Qg3+ is the min-DTZ win only because 75.Kxg3 zeroes the clock.
+        let _guard = syzygy_test_lock().lock().expect("lock syzygy test mutex");
+        let path = syzygy_path();
+        if !path.exists() {
+            return;
+        }
+        let tb = SyzygyTB::new(path.to_string_lossy().as_ref()).expect("load syzygy tables");
+        let (head, moves) = ranking_head(&tb, "8/6q1/8/1r6/7K/8/2k5/3n4 b - - 3 74");
+        assert_ne!(
+            head, "g7g3",
+            "Qg3+ must not lead the winning list, got {head}"
+        );
+        assert!(
+            moves.contains(&"g7g3".to_string()),
+            "Qg3+ stays legal-and-winning so a proven mate can still pick it, got {moves:?}"
+        );
+        let hang = moves.iter().position(|m| m == "g7g3").unwrap();
+        let nb2 = moves.iter().position(|m| m == "d1b2");
+        let kb1 = moves.iter().position(|m| m == "c2b1");
+        assert!(
+            nb2.is_some_and(|i| i < hang) || kb1.is_some_and(|i| i < hang),
+            "a material-preserving mate-in-2 must outrank Qg3+, got {moves:?}"
+        );
+    }
+
+    #[test]
+    fn rank_root_moves_does_not_head_with_nf1_check_071afrc4_m78() {
+        // 78...Nf1+ is the unique DTZ-3 win (mate in 12). King moves at DTZ 7
+        // mate in 8. Deprioritising the unique min-DTZ outlier puts a king
+        // approach first without inverting the rest of the list (Ra4 is DTZ 9).
+        let _guard = syzygy_test_lock().lock().expect("lock syzygy test mutex");
+        let path = syzygy_path();
+        if !path.exists() {
+            return;
+        }
+        let tb = SyzygyTB::new(path.to_string_lossy().as_ref()).expect("load syzygy tables");
+        let (head, moves) = ranking_head(&tb, "8/8/8/8/6r1/4n3/2k4K/8 b - - 6 78");
+        const MATING_KINGS: &[&str] = &["c2c1", "c2c3", "c2d1", "c2d2", "c2d3"];
+        assert!(
+            MATING_KINGS.contains(&head.as_str()),
+            "expected a mate-optimal king move at the head, got {head}"
+        );
+        assert_ne!(head, "e3f1");
+        let nf1 = moves
+            .iter()
+            .position(|m| m == "e3f1")
+            .expect("Nf1+ still winning");
+        let ra4 = moves
+            .iter()
+            .position(|m| m == "g4a4")
+            .expect("Ra4 still winning");
+        assert!(
+            nf1 > ra4,
+            "unique min-DTZ Nf1+ must sort behind the DTZ-7/9 cluster, got {moves:?}"
+        );
+        for k in MATING_KINGS {
+            let i = moves.iter().position(|m| m == k).expect(k);
+            assert!(i < nf1, "{k} must outrank Nf1+, got {moves:?}");
+        }
+    }
+
+    #[test]
+    fn rank_root_moves_does_not_head_with_nf1_check_071afrc4_m82() {
+        let _guard = syzygy_test_lock().lock().expect("lock syzygy test mutex");
+        let path = syzygy_path();
+        if !path.exists() {
+            return;
+        }
+        let tb = SyzygyTB::new(path.to_string_lossy().as_ref()).expect("load syzygy tables");
+        let (head, moves) = ranking_head(&tb, "8/8/8/8/6r1/4n3/7K/2k5 b - - 14 82");
+        const MATING_KINGS: &[&str] = &["c1c2", "c1d1", "c1d2"];
+        assert!(
+            MATING_KINGS.contains(&head.as_str()),
+            "expected a mate-optimal king move at the head, got {head}"
+        );
+        assert_ne!(head, "e3f1");
+        let nf1 = moves
+            .iter()
+            .position(|m| m == "e3f1")
+            .expect("Nf1+ still winning");
+        for k in MATING_KINGS {
+            let i = moves.iter().position(|m| m == k).expect(k);
+            assert!(i < nf1, "{k} must outrank Nf1+, got {moves:?}");
+        }
     }
 }
