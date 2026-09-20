@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::Read as _;
+use std::io::{BufRead, BufReader, Read as _};
 use std::path::Path;
 
 use chess_common::moves::MoveFlag;
@@ -540,19 +540,15 @@ impl PolyglotBook {
 
         // Soften weights: sqrt keeps the ranking but compresses the ratio.
         // e.g. weights 4900:400:100 → 70:20:10 → probabilities 70%:20%:10%
-        let softened: Vec<u32> = entries
-            .iter()
-            .map(|(_, w)| (*w as f64).sqrt() as u32)
-            .collect();
-        let total: u32 = softened.iter().sum();
+        let total: u32 = entries.iter().map(|(_, w)| (*w as f64).sqrt() as u32).sum();
         if total == 0 {
             return None;
         }
 
         let pick = ((board.hash ^ nanos_entropy()) % total as u64) as u32;
         let mut cumulative = 0u32;
-        for (i, (m, orig_w)) in entries.iter().enumerate() {
-            cumulative += softened[i];
+        for (m, orig_w) in &entries {
+            cumulative += (*orig_w as f64).sqrt() as u32;
             if pick < cumulative {
                 log::info!(
                     "polyglot book move: {} (weight {}/{})",
@@ -681,13 +677,12 @@ const MAX_BOOK_PLY: usize = 40;
 
 impl PgnBook {
     pub fn open(path: &Path) -> Option<Self> {
-        let content = std::fs::read_to_string(path).ok()?;
+        let reader = BufReader::new(File::open(path).ok()?);
         let mut positions: HashMap<u64, HashMap<u16, u16>> = HashMap::new(); // hash → {move_u16 → count}
 
-        let games = parse_pgn_games(&content);
         let mut total_moves = 0u32;
 
-        for game in &games {
+        let game_count = for_each_pgn_game(reader, |game| {
             let start_fen = game
                 .headers
                 .iter()
@@ -697,7 +692,7 @@ impl PgnBook {
             let mut board = match start_fen {
                 Some(fen) => match chess_common::Board::from_fen(fen) {
                     Ok(b) => b,
-                    Err(_) => continue,
+                    Err(_) => return,
                 },
                 None => chess_common::Board::starting_position(),
             };
@@ -715,7 +710,8 @@ impl PgnBook {
                 total_moves += 1;
                 board.make_move(m);
             }
-        }
+        })
+        .ok()?;
 
         // Convert to Vec<(Move, u16)> sorted by frequency descending
         let positions: HashMap<u64, Vec<(Move, u16)>> = positions
@@ -730,7 +726,7 @@ impl PgnBook {
         log::info!(
             "loaded PGN book: {} ({} games, {} positions, {} moves indexed)",
             path.display(),
-            games.len(),
+            game_count,
             positions.len(),
             total_moves,
         );
@@ -742,23 +738,19 @@ impl PgnBook {
     }
 
     pub fn pick_move(&self, board: &Board) -> Option<Move> {
-        let entries = self.probe(board);
+        let entries = self.positions.get(&board.hash)?;
         if entries.is_empty() {
             return None;
         }
         // Soften weights with sqrt (same as Polyglot)
-        let softened: Vec<u32> = entries
-            .iter()
-            .map(|(_, w)| (*w as f64).sqrt() as u32)
-            .collect();
-        let total: u32 = softened.iter().sum();
+        let total: u32 = entries.iter().map(|(_, w)| (*w as f64).sqrt() as u32).sum();
         if total == 0 {
             return None;
         }
         let pick = ((board.hash ^ nanos_entropy()) % total as u64) as u32;
         let mut cumulative = 0u32;
-        for (i, (m, w)) in entries.iter().enumerate() {
-            cumulative += softened[i];
+        for (m, w) in entries {
+            cumulative += (*w as f64).sqrt() as u32;
             if pick < cumulative {
                 log::info!("PGN book move: {} (freq {})", m.to_uci(), w);
                 return Some(*m);
@@ -768,40 +760,47 @@ impl PgnBook {
     }
 }
 
-/// Minimal multi-game PGN parser: splits input into games and parses each.
-fn parse_pgn_games(input: &str) -> Vec<chess_common::pgn::PgnGame> {
+/// Parse and index one game at a time, retaining neither the entire file nor
+/// previously parsed games. Reuse the line and game text buffers.
+fn for_each_pgn_game(
+    mut reader: impl BufRead,
+    mut visit: impl FnMut(chess_common::pgn::PgnGame),
+) -> std::io::Result<usize> {
     use chess_common::pgn::PgnGame;
-    let mut games = Vec::new();
+    let mut count = 0;
     let mut current = String::new();
+    let mut line = String::new();
     let mut in_game = false;
+    let mut flush = |text: &str| {
+        if let Ok(game) = PgnGame::from_pgn(text)
+            && !game.moves.is_empty()
+        {
+            count += 1;
+            visit(game);
+        }
+    };
 
-    for line in input.lines() {
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            break;
+        }
         let trimmed = line.trim();
         if trimmed.starts_with('[') {
-            // New header block — if we already accumulated moves, flush the game
             if in_game && !current.is_empty() {
-                if let Ok(g) = PgnGame::from_pgn(&current)
-                    && !g.moves.is_empty()
-                {
-                    games.push(g);
-                }
+                flush(&current);
                 current.clear();
                 in_game = false;
             }
         } else if !trimmed.is_empty() {
             in_game = true;
         }
-        current.push_str(line);
-        current.push('\n');
+        current.push_str(&line);
     }
-    // Flush last game
-    if !current.is_empty()
-        && let Ok(g) = PgnGame::from_pgn(&current)
-        && !g.moves.is_empty()
-    {
-        games.push(g);
+    if !current.is_empty() {
+        flush(&current);
     }
-    games
+    Ok(count)
 }
 
 // ---------------------------------------------------------------------------
@@ -869,6 +868,31 @@ fn nanos_entropy() -> u64 {
 mod tests {
     use super::*;
     use chess_common::Board;
+
+    #[test]
+    fn streamed_pgn_preserves_games_and_final_unterminated_line() {
+        let input = "[Event \"one\"]\r\n[Result \"1-0\"]\r\n\r\n1. e4 e5 2. Nf3 Nc6 1-0\r\n\r\n[Event \"empty\"]\r\n[Event \"two\"]\r\n\r\n1. d4 d5 1/2-1/2";
+        let mut games = Vec::new();
+        let count = for_each_pgn_game(BufReader::with_capacity(7, input.as_bytes()), |game| {
+            games.push(game)
+        })
+        .unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(games[0].moves, ["e4", "e5", "Nf3", "Nc6"]);
+        assert_eq!(games[1].moves, ["d4", "d5"]);
+        assert_eq!(games[0].headers[0], ("Event".into(), "one".into()));
+    }
+
+    #[test]
+    fn streamed_pgn_propagates_read_errors() {
+        struct Broken;
+        impl std::io::Read for Broken {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("read failed"))
+            }
+        }
+        assert!(for_each_pgn_game(BufReader::new(Broken), |_| {}).is_err());
+    }
 
     #[test]
     fn test_starting_position_hash() {

@@ -11,8 +11,10 @@ pub fn generate_legal_moves(board: &Board) -> MoveList {
     let pseudo = generate_pseudo_legal_moves(board);
     let us = board.side_to_move;
 
+    let mut scratch = board.clone();
+    scratch.position_history.reserve(1);
     for &m in pseudo.iter() {
-        if is_legal(board, m, us) {
+        if is_legal(&mut scratch, m, us) {
             legal.push(m);
         }
     }
@@ -21,31 +23,14 @@ pub fn generate_legal_moves(board: &Board) -> MoveList {
     legal
 }
 
-/// Check if a pseudo-legal move is legal (king is not left in check).
-fn is_legal(board: &Board, m: Move, us: Color) -> bool {
-    let them = us.opposite();
-
-    // For castling, we already check intermediate squares in generation,
-    // but we still need to verify the king doesn't end in check.
-    // The pseudo-legal generator already ensures:
-    //   - no pieces between king and rook
-    //   - king is not currently in check
-    //   - king does not pass through attacked squares
-    // So castling moves are already fully validated.
-
-    // Make the move on a copy and check if our king is in check.
-    let mut test_board = board.clone();
-    let prev_castling = test_board.castling;
-    let prev_ep = test_board.en_passant;
-    let prev_halfmove = test_board.halfmove_clock;
-    let captured = test_board.make_move(m);
-
-    let king_sq = test_board.king_square(us);
-    let in_check = is_square_attacked(&test_board, king_sq, them);
-
-    // Unmake is not strictly needed since we cloned, but let's not bother.
-    let _ = (captured, prev_castling, prev_ep, prev_halfmove);
-
+/// Check a candidate using a scratch board, restoring it for the next move.
+fn is_legal(board: &mut Board, m: Move, us: Color) -> bool {
+    let prev_castling = board.castling;
+    let prev_ep = board.en_passant;
+    let prev_halfmove = board.halfmove_clock;
+    let captured = board.make_move(m);
+    let in_check = is_square_attacked(board, board.king_square(us), us.opposite());
+    board.unmake_move(m, captured, prev_castling, prev_ep, prev_halfmove);
     !in_check
 }
 

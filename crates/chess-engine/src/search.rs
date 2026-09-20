@@ -39,6 +39,44 @@ const MAX_PLY: usize = 128;
 const MAX_KILLERS: usize = 2;
 const MATE_THRESHOLD: i32 = 29_000;
 
+/// A search line cannot exceed the ply limit. Keep recursive scratch inline;
+/// only completed root lines need owned, heap-backed output buffers.
+struct PvLine {
+    moves: [Move; MAX_PLY],
+    len: usize,
+}
+
+impl PvLine {
+    fn new() -> Self {
+        Self {
+            moves: [Move::NULL; MAX_PLY],
+            len: 0,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    fn push(&mut self, m: Move) {
+        self.moves[self.len] = m;
+        self.len += 1;
+    }
+
+    fn extend_from_slice(&mut self, moves: &[Move]) {
+        let end = self.len + moves.len();
+        self.moves[self.len..end].copy_from_slice(moves);
+        self.len = end;
+    }
+}
+
+impl std::ops::Deref for PvLine {
+    type Target = [Move];
+    fn deref(&self) -> &[Move] {
+        &self.moves[..self.len]
+    }
+}
+
 /// Iterations worth running once the root is confined to the tablebase's
 /// win-preserving moves. Syzygy has already chosen the move — the DTZ order is
 /// sticky and cp scores cannot displace it — so the search is only still here to
@@ -126,7 +164,7 @@ fn new_cont_corr_table() -> ContCorrTable {
 }
 
 /// Game-level learning tables that persist across moves (cleared on
-/// `ucinewgame`). They are swapped into the per-search [`SearchState`] for the
+/// `ucinewgame`). They are borrowed by the per-search [`SearchState`] for the
 /// duration of a search so history and corrections accumulate over the whole
 /// game instead of resetting every move. Ply-local scratch (killers,
 /// `ply_context`, `static_evals`, accumulators) stays per-search and is *not*
@@ -167,19 +205,10 @@ impl Default for PersistentHistory {
     }
 }
 
-struct SearchState {
+struct SearchState<'a> {
+    learning: &'a mut PersistentHistory,
     tt: Arc<SharedTT>,
     killers: [[Move; MAX_KILLERS]; MAX_PLY],
-    history: [[i32; 64]; 64],
-    capture_history: CaptureHistory,
-    counter_moves: [[Move; 64]; 64],
-    cont_history: ContHistory,
-    pawn_corrhist: CorrTable,
-    white_corrhist: CorrTable,
-    black_corrhist: CorrTable,
-    minor_corrhist: CorrTable,
-    major_corrhist: CorrTable,
-    cont_corrhist: ContCorrTable,
     ply_context: [PlyContext; MAX_PLY],
     static_evals: [i32; MAX_PLY],
     accumulators: Box<[Accumulator; MAX_PLY]>,
@@ -215,7 +244,7 @@ struct SearchState {
     ponder_fresh_ms: u64,
 }
 
-impl SearchState {
+impl<'a> SearchState<'a> {
     #[allow(clippy::too_many_arguments)]
     fn new(
         time_limit_ms: Option<u64>,
@@ -232,6 +261,7 @@ impl SearchState {
         net: Arc<NnueNetwork>,
         syzygy_tb: Option<SyzygyTB>,
         tune: TuneParams,
+        learning: &'a mut PersistentHistory,
     ) -> Self {
         // Use a Vec to avoid stack allocation of the large accumulator array
         let mut acc_vec: Vec<Accumulator> = Vec::with_capacity(MAX_PLY);
@@ -244,18 +274,9 @@ impl SearchState {
         let lmr_table = build_lmr_table(tune.lmr_base, tune.lmr_div);
 
         Self {
+            learning,
             tt: Arc::clone(tt),
             killers: [[Move::NULL; MAX_KILLERS]; MAX_PLY],
-            history: [[0; 64]; 64],
-            capture_history: new_capture_history(),
-            counter_moves: [[Move::NULL; 64]; 64],
-            cont_history: new_cont_history(),
-            pawn_corrhist: new_corr_table(),
-            white_corrhist: new_corr_table(),
-            black_corrhist: new_corr_table(),
-            minor_corrhist: new_corr_table(),
-            major_corrhist: new_corr_table(),
-            cont_corrhist: new_cont_corr_table(),
             ply_context: [NULL_PLY_CONTEXT; MAX_PLY],
             static_evals: [0; MAX_PLY],
             accumulators,
@@ -352,7 +373,7 @@ impl SearchState {
 
         // Regular from-to history (gravity formula)
         let max_val = 16384;
-        let entry = &mut self.history[from][to];
+        let entry = &mut self.learning.history[from][to];
         *entry += bonus - *entry * bonus.abs() / max_val;
         *entry = (*entry).clamp(-max_val, max_val);
 
@@ -363,14 +384,16 @@ impl SearchState {
             // 1-ply lookback
             if ply >= 1 && (ply as usize - 1) < MAX_PLY {
                 let ctx = self.ply_context[ply as usize - 1];
-                let entry = &mut self.cont_history[ctx.piece_kind][ctx.to_sq][cur_kind][cur_to];
+                let entry =
+                    &mut self.learning.cont_history[ctx.piece_kind][ctx.to_sq][cur_kind][cur_to];
                 *entry += bonus - *entry * bonus.abs() / max_val;
                 *entry = (*entry).clamp(-max_val, max_val);
             }
             // 2-ply lookback
             if ply >= 2 && (ply as usize - 2) < MAX_PLY {
                 let ctx = self.ply_context[ply as usize - 2];
-                let entry = &mut self.cont_history[ctx.piece_kind][ctx.to_sq][cur_kind][cur_to];
+                let entry =
+                    &mut self.learning.cont_history[ctx.piece_kind][ctx.to_sq][cur_kind][cur_to];
                 *entry += bonus - *entry * bonus.abs() / max_val;
                 *entry = (*entry).clamp(-max_val, max_val);
             }
@@ -384,7 +407,7 @@ impl SearchState {
 
         // Regular history malus (gravity formula)
         let max_val = 16384;
-        let entry = &mut self.history[from][to];
+        let entry = &mut self.learning.history[from][to];
         *entry += -malus - *entry * malus.abs() / max_val;
         *entry = (*entry).clamp(-max_val, max_val);
 
@@ -395,14 +418,16 @@ impl SearchState {
             // 1-ply lookback
             if ply >= 1 && (ply as usize - 1) < MAX_PLY {
                 let ctx = self.ply_context[ply as usize - 1];
-                let entry = &mut self.cont_history[ctx.piece_kind][ctx.to_sq][cur_kind][cur_to];
+                let entry =
+                    &mut self.learning.cont_history[ctx.piece_kind][ctx.to_sq][cur_kind][cur_to];
                 *entry += -malus - *entry * malus.abs() / max_val;
                 *entry = (*entry).clamp(-max_val, max_val);
             }
             // 2-ply lookback
             if ply >= 2 && (ply as usize - 2) < MAX_PLY {
                 let ctx = self.ply_context[ply as usize - 2];
-                let entry = &mut self.cont_history[ctx.piece_kind][ctx.to_sq][cur_kind][cur_to];
+                let entry =
+                    &mut self.learning.cont_history[ctx.piece_kind][ctx.to_sq][cur_kind][cur_to];
                 *entry += -malus - *entry * malus.abs() / max_val;
                 *entry = (*entry).clamp(-max_val, max_val);
             }
@@ -419,14 +444,14 @@ impl SearchState {
             1
         };
         let k = crate::eval::corr_keys(board);
-        let mut sum = self.pawn_corrhist[stm][k.pawn as usize & CORR_MASK]
-            + self.white_corrhist[stm][k.white as usize & CORR_MASK]
-            + self.black_corrhist[stm][k.black as usize & CORR_MASK]
-            + self.minor_corrhist[stm][k.minor as usize & CORR_MASK]
-            + self.major_corrhist[stm][k.major as usize & CORR_MASK];
+        let mut sum = self.learning.pawn_corrhist[stm][k.pawn as usize & CORR_MASK]
+            + self.learning.white_corrhist[stm][k.white as usize & CORR_MASK]
+            + self.learning.black_corrhist[stm][k.black as usize & CORR_MASK]
+            + self.learning.minor_corrhist[stm][k.minor as usize & CORR_MASK]
+            + self.learning.major_corrhist[stm][k.major as usize & CORR_MASK];
         if ply >= 1 && (ply as usize - 1) < MAX_PLY {
             let ctx = self.ply_context[ply as usize - 1];
-            sum += self.cont_corrhist[stm][ctx.piece_kind][ctx.to_sq];
+            sum += self.learning.cont_corrhist[stm][ctx.piece_kind][ctx.to_sq];
         }
         let cp = (sum / CORRHIST_GRAIN).clamp(-CORR_TOTAL_CAP, CORR_TOTAL_CAP);
         cp * self.tune.corrhist_mult / 100
@@ -447,36 +472,21 @@ impl SearchState {
             *e = (*e * (256 - weight) + scaled * weight) / 256;
             *e = (*e).clamp(-CORRHIST_LIMIT, CORRHIST_LIMIT);
         };
-        blend(&mut self.pawn_corrhist[stm][k.pawn as usize & CORR_MASK]);
-        blend(&mut self.white_corrhist[stm][k.white as usize & CORR_MASK]);
-        blend(&mut self.black_corrhist[stm][k.black as usize & CORR_MASK]);
-        blend(&mut self.minor_corrhist[stm][k.minor as usize & CORR_MASK]);
-        blend(&mut self.major_corrhist[stm][k.major as usize & CORR_MASK]);
+        blend(&mut self.learning.pawn_corrhist[stm][k.pawn as usize & CORR_MASK]);
+        blend(&mut self.learning.white_corrhist[stm][k.white as usize & CORR_MASK]);
+        blend(&mut self.learning.black_corrhist[stm][k.black as usize & CORR_MASK]);
+        blend(&mut self.learning.minor_corrhist[stm][k.minor as usize & CORR_MASK]);
+        blend(&mut self.learning.major_corrhist[stm][k.major as usize & CORR_MASK]);
         if ply >= 1 && (ply as usize - 1) < MAX_PLY {
             let ctx = self.ply_context[ply as usize - 1];
-            blend(&mut self.cont_corrhist[stm][ctx.piece_kind][ctx.to_sq]);
+            blend(&mut self.learning.cont_corrhist[stm][ctx.piece_kind][ctx.to_sq]);
         }
-    }
-
-    /// Swap the game-level learning tables between this search state and a
-    /// persistent holder. Called once before and once after a search so the
-    /// tables accumulate across moves within a game.
-    fn swap_history(&mut self, h: &mut PersistentHistory) {
-        std::mem::swap(&mut self.history, &mut h.history);
-        std::mem::swap(&mut self.capture_history, &mut h.capture_history);
-        std::mem::swap(&mut self.counter_moves, &mut h.counter_moves);
-        std::mem::swap(&mut self.cont_history, &mut h.cont_history);
-        std::mem::swap(&mut self.pawn_corrhist, &mut h.pawn_corrhist);
-        std::mem::swap(&mut self.white_corrhist, &mut h.white_corrhist);
-        std::mem::swap(&mut self.black_corrhist, &mut h.black_corrhist);
-        std::mem::swap(&mut self.minor_corrhist, &mut h.minor_corrhist);
-        std::mem::swap(&mut self.major_corrhist, &mut h.major_corrhist);
-        std::mem::swap(&mut self.cont_corrhist, &mut h.cont_corrhist);
     }
 
     fn store_counter_move(&mut self, prev_move: Move, counter: Move) {
         if !prev_move.is_null() {
-            self.counter_moves[prev_move.from_sq().index()][prev_move.to_sq().index()] = counter;
+            self.learning.counter_moves[prev_move.from_sq().index()][prev_move.to_sq().index()] =
+                counter;
         }
     }
 
@@ -484,7 +494,7 @@ impl SearchState {
         if prev_move.is_null() {
             Move::NULL
         } else {
-            self.counter_moves[prev_move.from_sq().index()][prev_move.to_sq().index()]
+            self.learning.counter_moves[prev_move.from_sq().index()][prev_move.to_sq().index()]
         }
     }
 
@@ -500,12 +510,12 @@ impl SearchState {
         // 1-ply lookback
         if ply >= 1 && (ply as usize - 1) < MAX_PLY {
             let ctx = self.ply_context[ply as usize - 1];
-            bonus += self.cont_history[ctx.piece_kind][ctx.to_sq][cur_kind][cur_to];
+            bonus += self.learning.cont_history[ctx.piece_kind][ctx.to_sq][cur_kind][cur_to];
         }
         // 2-ply lookback (follow-up history)
         if ply >= 2 && (ply as usize - 2) < MAX_PLY {
             let ctx = self.ply_context[ply as usize - 2];
-            bonus += self.cont_history[ctx.piece_kind][ctx.to_sq][cur_kind][cur_to] / 2;
+            bonus += self.learning.cont_history[ctx.piece_kind][ctx.to_sq][cur_kind][cur_to] / 2;
         }
         bonus
     }
@@ -519,7 +529,7 @@ impl SearchState {
             Some(p) => p,
             None => return 0,
         };
-        self.capture_history[piece.kind.index()][m.to_sq().index()][captured.kind.index()]
+        self.learning.capture_history[piece.kind.index()][m.to_sq().index()][captured.kind.index()]
     }
 
     fn update_capture_history(&mut self, m: Move, depth: u8, board: &Board) {
@@ -533,8 +543,8 @@ impl SearchState {
         };
         let bonus = depth as i32 * depth as i32;
         let max_val = 16384;
-        let entry =
-            &mut self.capture_history[piece.kind.index()][m.to_sq().index()][captured.kind.index()];
+        let entry = &mut self.learning.capture_history[piece.kind.index()][m.to_sq().index()]
+            [captured.kind.index()];
         *entry += bonus - *entry * bonus.abs() / max_val;
         *entry = (*entry).clamp(-max_val, max_val);
     }
@@ -550,8 +560,8 @@ impl SearchState {
         };
         let malus = depth as i32 * depth as i32;
         let max_val = 16384;
-        let entry =
-            &mut self.capture_history[piece.kind.index()][m.to_sq().index()][captured.kind.index()];
+        let entry = &mut self.learning.capture_history[piece.kind.index()][m.to_sq().index()]
+            [captured.kind.index()];
         *entry += -malus - *entry * malus.abs() / max_val;
         *entry = (*entry).clamp(-max_val, max_val);
     }
@@ -1139,7 +1149,7 @@ impl MovePicker {
                         if m == self.tt_move {
                             continue;
                         }
-                        let hist = state.history[m.from_sq().index()][m.to_sq().index()];
+                        let hist = state.learning.history[m.from_sq().index()][m.to_sq().index()];
                         let cont = state.get_cont_history_bonus(m, board, ply);
                         let score = if m == killers[0] {
                             900_000
@@ -1361,7 +1371,7 @@ pub fn iterative_deepening(
     syzygy_tb: Option<SyzygyTB>,
     root_tb_ranking: Option<syzygy::RootTbRanking>,
     external_book: Option<Arc<OpeningBook>>,
-    mut persistent: Option<&mut PersistentHistory>,
+    persistent: Option<&mut PersistentHistory>,
 ) -> SearchResult {
     // Try opening book first (only in the opening — limit to 30 half-moves
     // to avoid polyglot hash collisions returning garbage moves in endgames)
@@ -1405,6 +1415,14 @@ pub fn iterative_deepening(
 
     let (soft_target, hard_limit, use_soft_limit, inc, time_remaining) =
         compute_time_limit(params, board);
+    let mut local_history;
+    let learning = match persistent {
+        Some(history) => history,
+        None => {
+            local_history = PersistentHistory::new();
+            &mut local_history
+        }
+    };
     let mut state = SearchState::new(
         hard_limit,
         soft_target,
@@ -1427,6 +1445,7 @@ pub fn iterative_deepening(
         Arc::clone(net),
         syzygy_tb,
         params.tune.clone(),
+        learning,
     );
     state.set_ponder(params.ponder.clone());
 
@@ -1480,6 +1499,7 @@ pub fn iterative_deepening(
         let captured = board_copy.make_move(only_move);
         // Quick fixed-depth search to evaluate the resulting position
         let quick_depth = 10u8;
+        let mut quick_history = PersistentHistory::new();
         let mut quick_state = SearchState::new(
             Some(2000),
             Some(2000),
@@ -1495,6 +1515,7 @@ pub fn iterative_deepening(
             Arc::clone(net),
             state.syzygy_tb.clone(),
             params.tune.clone(),
+            &mut quick_history,
         );
         if quick_state.use_nnue {
             quick_state.accumulators[0].refresh(board, &quick_state.net);
@@ -1509,7 +1530,7 @@ pub fn iterative_deepening(
                 1,
             );
         }
-        let mut quick_pv = Vec::new();
+        let mut quick_pv = PvLine::new();
         let child_score = -alpha_beta(
             &mut board_copy,
             quick_depth,
@@ -1546,12 +1567,6 @@ pub fn iterative_deepening(
             nodes: quick_state.nodes,
             pv: clean_pv,
         };
-    }
-
-    // Swap in the game-level learning tables so history/corrhist accumulate
-    // across moves. Swapped back out before returning.
-    if let Some(h) = persistent.as_deref_mut() {
-        state.swap_history(h);
     }
 
     let max_depth = params.max_depth.min(MAX_PLY as u8);
@@ -2229,11 +2244,6 @@ pub fn iterative_deepening(
         best_depth = best_depth.max(1);
     }
 
-    // Swap the (now-updated) learning tables back into the persistent holder.
-    if let Some(h) = persistent {
-        state.swap_history(h);
-    }
-
     SearchResult {
         best_move,
         score: best_score,
@@ -2286,8 +2296,8 @@ fn alpha_beta_root(
 
     let mut best_score = Score::NEG_INF.0;
     let mut best_move = root_move_scores[0].0;
-    let mut child_pv = Vec::new();
-    let mut tmp_pv: Vec<Move> = Vec::new();
+    let mut child_pv = PvLine::new();
+    let mut tmp_pv = PvLine::new();
     let mut tt_store_flag = TTFlag::UpperBound;
     let total_nodes_start = state.nodes;
     let mut best_move_nodes: u64 = 0;
@@ -2465,7 +2475,7 @@ fn alpha_beta(
     ply: u8,
     alpha: i32,
     beta: i32,
-    pv: &mut Vec<Move>,
+    pv: &mut PvLine,
     state: &mut SearchState,
     stop: &AtomicBool,
     prev_move: Move,
@@ -2701,7 +2711,7 @@ fn alpha_beta(
                 state.accumulators[ply as usize + 1] = state.accumulators[ply as usize].clone();
             }
 
-            let mut null_pv = Vec::new();
+            let mut null_pv = PvLine::new();
             let null_score = -alpha_beta(
                 board,
                 null_depth,
@@ -2768,7 +2778,7 @@ fn alpha_beta(
                     }
 
                     state.nodes += 1;
-                    let mut pc_pv = Vec::new();
+                    let mut pc_pv = PvLine::new();
                     let score = -quiescence(
                         board,
                         ply + 1,
@@ -2854,7 +2864,7 @@ fn alpha_beta(
 
     let mut best_score = Score::NEG_INF.0;
     let mut best_move = Move::NULL;
-    let mut child_pv = Vec::new();
+    let mut child_pv = PvLine::new();
     let mut tt_store_flag = TTFlag::UpperBound;
     let mut moves_searched = 0u32;
     // Fixed-size stack arrays avoid a heap allocation per node.
@@ -2864,7 +2874,7 @@ fn alpha_beta(
     let mut captures_searched = [Move::NULL; 128];
     let mut capture_count: usize = 0;
     // Single reusable buffer for LMR/null-window PV — cleared before each use.
-    let mut tmp_pv: Vec<Move> = Vec::new();
+    let mut tmp_pv = PvLine::new();
 
     while let Some(m) = picker.next(board, state, ply, &killers, counter_move) {
         if m == excluded_move && !excluded_move.is_null() {
@@ -2898,7 +2908,7 @@ fn alpha_beta(
             let se_beta = tt_score - 2 * depth as i32;
             let se_depth = (depth - 1) / 2;
 
-            let mut se_pv = Vec::new();
+            let mut se_pv = PvLine::new();
             let se_score = alpha_beta(
                 board,
                 se_depth,
@@ -3037,7 +3047,7 @@ fn alpha_beta(
                 && !m.is_promotion()
                 && !searching_for_mate
             {
-                let hist = state.history[m.from_sq().index()][m.to_sq().index()];
+                let hist = state.learning.history[m.from_sq().index()][m.to_sq().index()];
                 let cont = state.get_cont_history_bonus(m, board, ply);
                 if hist + cont / 2 < -3000 * depth as i32 {
                     board.unmake_move(m, captured, prev_castling, prev_ep, prev_halfmove);
@@ -3114,7 +3124,7 @@ fn alpha_beta(
                 }
                 // Continuous history-based reduction with continuation history:
                 // good history → less reduction, bad history → more reduction.
-                let hist = state.history[m.from_sq().index()][m.to_sq().index()];
+                let hist = state.learning.history[m.from_sq().index()][m.to_sq().index()];
                 let cont = state.get_cont_history_bonus(m, board, ply);
                 reduction -= ((hist + cont / 2) / state.tune.hist_lmr_div) as i8;
                 // Extra reduction for very negative history
@@ -3210,9 +3220,11 @@ fn alpha_beta(
                 alpha = score;
                 tt_store_flag = TTFlag::Exact;
 
-                pv.clear();
-                pv.push(m);
-                pv.extend_from_slice(&child_pv);
+                if score < beta {
+                    pv.clear();
+                    pv.push(m);
+                    pv.extend_from_slice(&child_pv);
+                }
 
                 if score >= beta {
                     tt_store_flag = TTFlag::LowerBound;
@@ -3299,7 +3311,7 @@ fn quiescence(
     ply: u8,
     mut alpha: i32,
     beta: i32,
-    pv: &mut Vec<Move>,
+    pv: &mut PvLine,
     state: &mut SearchState,
     stop: &AtomicBool,
     generate_checks: bool,
@@ -3374,7 +3386,7 @@ fn quiescence(
 
         let mut best_score = Score::NEG_INF.0;
         let mut best_move = Move::NULL;
-        let mut child_pv = Vec::new();
+        let mut child_pv = PvLine::new();
         let mut any_legal = false;
 
         for &m in pseudo.iter() {
@@ -3430,9 +3442,11 @@ fn quiescence(
 
                 if score > alpha {
                     alpha = score;
-                    pv.clear();
-                    pv.push(m);
-                    pv.extend_from_slice(&child_pv);
+                    if score < beta {
+                        pv.clear();
+                        pv.push(m);
+                        pv.extend_from_slice(&child_pv);
+                    }
 
                     if score >= beta {
                         state.tt.store(
@@ -3516,7 +3530,7 @@ fn quiescence(
 
     let mut best_score = stand_pat;
     let mut best_move = Move::NULL;
-    let mut child_pv = Vec::new();
+    let mut child_pv = PvLine::new();
 
     let mut idx = 0;
     while idx < cap_count {
@@ -3595,9 +3609,11 @@ fn quiescence(
         }
         if score > alpha {
             alpha = score;
-            pv.clear();
-            pv.push(m);
-            pv.extend_from_slice(&child_pv);
+            if score < beta {
+                pv.clear();
+                pv.push(m);
+                pv.extend_from_slice(&child_pv);
+            }
         }
     }
 
@@ -3675,9 +3691,11 @@ fn quiescence(
             }
             if score > alpha {
                 alpha = score;
-                pv.clear();
-                pv.push(m);
-                pv.extend_from_slice(&child_pv);
+                if score < beta {
+                    pv.clear();
+                    pv.push(m);
+                    pv.extend_from_slice(&child_pv);
+                }
             }
         }
     }
@@ -3725,12 +3743,12 @@ fn evaluate_for_side(board: &Board, state: &mut SearchState, ply: u8) -> i32 {
         let refresh_white = state.accumulators[ply as usize].needs_refresh(Color::White);
         let refresh_black = state.accumulators[ply as usize].needs_refresh(Color::Black);
         if refresh_white || refresh_black {
-            let net = Arc::clone(&state.net);
+            let net = &state.net;
             if refresh_white {
-                state.accumulators[ply as usize].refresh_perspective(board, &net, Color::White);
+                state.accumulators[ply as usize].refresh_perspective(board, net, Color::White);
             }
             if refresh_black {
-                state.accumulators[ply as usize].refresh_perspective(board, &net, Color::Black);
+                state.accumulators[ply as usize].refresh_perspective(board, net, Color::Black);
             }
         }
         // nnue_evaluate returns score from side-to-move perspective.
@@ -3793,21 +3811,18 @@ fn update_accumulator_for_move(
             .unwrap_or(PieceKind::Pawn)
     };
 
-    // Clone the parent even when one perspective is dirty. Deltas keep the
-    // clean perspective exact; the dirty perspective is refreshed lazily if
-    // this node survives pruning and needs an evaluation.
-    state.accumulators[dst_ply] = state.accumulators[src_ply].clone();
+    // Parent and child occupy distinct slots. Copy only perspectives that
+    // remain valid after this move, leaving dirty values for lazy refresh.
+    debug_assert!(src_ply < dst_ply);
+    let (parents, children) = state.accumulators.split_at_mut(dst_ply);
+    let acc = &mut children[0];
+    acc.copy_clean_from(
+        &parents[src_ply],
+        (moving_kind == PieceKind::King).then_some(us),
+    );
     let white_king = board.king_square(Color::White);
     let black_king = board.king_square(Color::Black);
     let net = &state.net;
-    let acc = &mut state.accumulators[dst_ply];
-
-    // The moving king changes its own HalfKP bucket. Mark that perspective
-    // before applying deltas so add/sub work is performed only for the clean
-    // opponent perspective; the dirty half is rebuilt lazily if evaluated.
-    if moving_kind == PieceKind::King {
-        acc.mark_refresh(us);
-    }
 
     acc.update_state(
         net,
@@ -3906,6 +3921,7 @@ mod tests {
         let moving_side = board.side_to_move;
         let net = NnueNetwork::embedded();
         let tt = Arc::new(SharedTT::new(1));
+        let mut history = PersistentHistory::new();
         let mut state = SearchState::new(
             None,
             None,
@@ -3921,6 +3937,7 @@ mod tests {
             Arc::clone(&net),
             None,
             TuneParams::default(),
+            &mut history,
         );
         state.accumulators[0].refresh(&board, &net);
 
@@ -4045,6 +4062,7 @@ mod tests {
     fn successful_ponder_hit_defers_an_expired_hard_limit_for_fresh_time() {
         let tt = Arc::new(SharedTT::new(1));
         let net = NnueNetwork::embedded();
+        let mut history = PersistentHistory::new();
         let mut state = SearchState::new(
             Some(0),
             Some(24_000),
@@ -4060,6 +4078,7 @@ mod tests {
             net,
             None,
             TuneParams::default(),
+            &mut history,
         );
         let ponder = Arc::new(AtomicBool::new(true));
         state.set_ponder(Some(Arc::clone(&ponder)));

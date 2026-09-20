@@ -205,6 +205,21 @@ impl Accumulator {
         }
     }
 
+    /// Inherit only usable parent values. Dirty perspectives will be rebuilt
+    /// before evaluation, so their destination storage can remain untouched.
+    pub fn copy_clean_from(&mut self, parent: &Self, invalidate: Option<Color>) {
+        self.needs_refresh = parent.needs_refresh;
+        if let Some(color) = invalidate {
+            self.mark_refresh(color);
+        }
+        if !self.needs_refresh(Color::White) {
+            self.white.copy_from_slice(&parent.white);
+        }
+        if !self.needs_refresh(Color::Black) {
+            self.black.copy_from_slice(&parent.black);
+        }
+    }
+
     /// Full recompute from scratch using the board state.
     pub fn refresh(&mut self, board: &Board, net: &NnueNetwork) {
         self.refresh_perspective(board, net, Color::White);
@@ -362,6 +377,39 @@ impl Accumulator {
 mod tests {
     use super::*;
     use crate::{FEATURES_PER_BUCKET, NUM_BUCKETS, PIECE_FEATURES};
+
+    #[test]
+    fn inheriting_dirty_perspectives_remains_correct_after_refresh() {
+        let board = Board::starting_position();
+        let net = NnueNetwork::embedded();
+        let mut parent = Accumulator::new();
+        parent.refresh(&board, &net);
+        let expected = parent.clone();
+        parent.mark_refresh(Color::White);
+        // Stale contents must never leak into a clean perspective.
+        parent.white.fill(-123);
+        let mut child = Accumulator::new();
+        child.white.fill(456);
+        child.black.fill(789);
+        child.copy_clean_from(&parent, None);
+        assert!(child.needs_refresh(Color::White));
+        assert!(!child.needs_refresh(Color::Black));
+        assert_eq!(child.black, expected.black);
+        child.refresh_perspective(&board, &net, Color::White);
+        assert_eq!(child.white, expected.white);
+
+        // A king move can invalidate the other half while one is already dirty.
+        child.copy_clean_from(&parent, Some(Color::Black));
+        assert!(child.needs_refresh(Color::White));
+        assert!(child.needs_refresh(Color::Black));
+        child.refresh(&board, &net);
+        assert_eq!(child.white, expected.white);
+        assert_eq!(child.black, expected.black);
+
+        child.copy_clean_from(&expected, None);
+        assert!(!child.needs_refresh(Color::White));
+        assert!(!child.needs_refresh(Color::Black));
+    }
 
     #[test]
     fn dispatched_row_operations_match_scalar() {
