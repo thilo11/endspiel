@@ -3354,11 +3354,16 @@ fn quiescence(
         state.seldepth = ply;
     }
 
+    // Cache bounds describe the incoming window, before stand-pat or a
+    // searched move raises alpha.
+    let original_alpha = alpha;
     let in_check = chess_core::is_in_check(board);
 
-    // TT probe in qsearch
+    // As in alpha_beta, PV nodes must establish their value on this path;
+    // cached bounds only cut off null-window searches.
     let tt_entry = state.tt.probe(board.hash);
     if let Some(entry) = tt_entry
+        && beta - alpha == 1
         && !in_check
     {
         let adj_score = score_from_tt(entry.score, ply);
@@ -3467,7 +3472,7 @@ fn quiescence(
             return -Score::MATE.0 + ply as i32;
         }
 
-        let flag = if best_score > alpha {
+        let flag = if best_score > original_alpha {
             TTFlag::Exact
         } else {
             TTFlag::UpperBound
@@ -3504,12 +3509,8 @@ fn quiescence(
     // Generate only captures+promotions (no quiet moves at all)
     let captures_list = chess_core::generate_pseudo_legal_captures(board);
     let us = board.side_to_move;
-    let num_caps = captures_list.len();
 
-    if num_caps == 0 {
-        return alpha;
-    }
-
+    // An empty capture list must still reach the quiet-check search below.
     // Score and order captures via selection sort
     let mut cap_moves = [Move::NULL; 128];
     let mut cap_scores = [0i32; 128];
@@ -3701,7 +3702,7 @@ fn quiescence(
     }
 
     if !best_move.is_null() {
-        let flag = if best_score > stand_pat {
+        let flag = if best_score > original_alpha {
             TTFlag::Exact
         } else {
             TTFlag::UpperBound
@@ -3916,6 +3917,147 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
 
+    fn with_qsearch_state(f: impl FnOnce(&mut SearchState<'_>) + Send + 'static) {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                let tt = Arc::new(SharedTT::new(1));
+                let mut learning = PersistentHistory::new();
+                let mut state = SearchState::new(
+                    None,
+                    None,
+                    false,
+                    0,
+                    0,
+                    None,
+                    0,
+                    0,
+                    0,
+                    &tt,
+                    false,
+                    NnueNetwork::embedded(),
+                    None,
+                    TuneParams::default(),
+                    &mut learning,
+                );
+                f(&mut state);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    // Exercise cache semantics independently of the embedded network and search
+    // heuristics. A fail-low result is only an upper bound, even if a capture
+    // improved on stand-pat; a PV search must establish its own value.
+    #[test]
+    fn quiescence_fail_low_capture_stores_upper_bound() {
+        with_qsearch_state(|state| {
+            let mut board = Board::from_fen("7k/8/8/4p3/3P4/8/8/K7 w - - 0 1").unwrap();
+            let alpha = evaluate_for_side(&board, state, 0) + 500;
+            let mut pv = PvLine::new();
+            let stop = AtomicBool::new(false);
+            let score = quiescence(
+                &mut board,
+                0,
+                alpha,
+                alpha + 1,
+                &mut pv,
+                state,
+                &stop,
+                false,
+            );
+            assert_eq!(score, alpha);
+            let entry = state.tt.probe(board.hash).expect("capture must be cached");
+            assert_eq!(entry.flag, TTFlag::UpperBound);
+        });
+    }
+
+    #[test]
+    fn quiescence_in_window_evasion_stores_exact() {
+        with_qsearch_state(|state| {
+            let mut board = Board::from_fen("7k/8/8/8/8/8/r7/K7 w - - 0 1").unwrap();
+            let mut pv = PvLine::new();
+            let stop = AtomicBool::new(false);
+            let score = quiescence(&mut board, 0, -10000, 10000, &mut pv, state, &stop, false);
+            let entry = state.tt.probe(board.hash).expect("evasion must be cached");
+            assert_eq!(entry.flag, TTFlag::Exact);
+            assert_eq!(entry.score, score);
+        });
+    }
+
+    #[test]
+    fn quiescence_pv_search_does_not_cut_off_on_cached_score() {
+        with_qsearch_state(|state| {
+            let mut board = Board::from_fen("7k/8/8/4p3/3P4/8/8/K7 w - - 0 1").unwrap();
+            let mut pv = PvLine::new();
+            let stop = AtomicBool::new(false);
+            state
+                .tt
+                .store(board.hash, 10, 7777, TTFlag::Exact, Move::NULL);
+            assert_eq!(
+                quiescence(&mut board, 0, 0, 1, &mut pv, state, &stop, false),
+                7777
+            );
+            assert_ne!(
+                quiescence(&mut board, 0, -10000, 10000, &mut pv, state, &stop, false),
+                7777
+            );
+        });
+    }
+
+    #[test]
+    fn quiescence_searches_quiet_checks_without_captures() {
+        with_qsearch_state(|state| {
+            let mut board = Board::from_fen("7k/8/5KQ1/8/8/8/8/8 w - - 0 1").unwrap();
+            assert!(chess_core::generate_pseudo_legal_captures(&board).is_empty());
+            let mut pv = PvLine::new();
+            let stop = AtomicBool::new(false);
+            let score = quiescence(&mut board, 0, -32000, 32000, &mut pv, state, &stop, false);
+            assert!(score < MATE_THRESHOLD);
+            let score = quiescence(&mut board, 0, -32000, 32000, &mut pv, state, &stop, true);
+            assert_eq!(score, Score::MATE.0 - 1);
+            assert!(!pv.is_empty());
+            board.make_move(pv[0]);
+            assert!(chess_core::is_in_check(&board));
+            assert!(chess_core::generate_legal_moves(&board).is_empty());
+        });
+    }
+
+    /// Mythos–Endspiel, 2026-09-18, after 47.Ke2. With singular extension
+    /// off (the default), 3M nodes still returns 47...Rh1; 10M finds Rd8.
+    #[test]
+    #[cfg(not(debug_assertions))]
+    fn mythos_endgame_finds_rd8_with_bounded_nodes() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(|| {
+                let board =
+                    Board::from_fen("6k1/4q2p/2p1P1p1/1pP1Q3/2B2P2/6P1/4K2P/3r4 b - - 4 47")
+                        .unwrap();
+                let net = NnueNetwork::embedded();
+                let stop = Arc::new(AtomicBool::new(false));
+                let tt = Arc::new(SharedTT::new(64));
+                let params = SearchParams {
+                    max_depth: 32,
+                    max_nodes: Some(10_000_000),
+                    use_nnue: true,
+                    contempt: 8,
+                    singular_ext_mode: 0,
+                    ..Default::default()
+                };
+                let result = iterative_deepening(
+                    &board, &params, &stop, &tt, None, 0, &net, None, None, None, None, None,
+                );
+                assert_eq!(result.best_move.to_uci(), "d1d8");
+                // Stop checks are amortized in blocks of 1024 nodes.
+                assert!(result.nodes <= 10_001_024, "{} nodes", result.nodes);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     fn assert_partial_king_refresh_matches_full(fen: &str, uci: &str) {
         let mut board = Board::from_fen(fen).expect("valid test FEN");
         let moving_side = board.side_to_move;
@@ -3931,7 +4073,7 @@ mod tests {
             None,
             0,
             0,
-            1,
+            0,
             &tt,
             true,
             Arc::clone(&net),
@@ -4072,7 +4214,7 @@ mod tests {
             None,
             80,
             0,
-            1,
+            0,
             &tt,
             true,
             net,

@@ -36,7 +36,7 @@ engine lists; details in [ABOUT.md](ABOUT.md).
   structure, threats, space, and endgame scaling
 - **Modern search** — alpha-beta + PVS with iterative deepening and
   aspiration windows, null move, reverse futility, futility, razoring,
-  ProbCut, SEE pruning, LMR, LMP, IIR, singular and passed-pawn extensions,
+  ProbCut, SEE pruning, LMR, LMP, IIR, and passed-pawn extensions,
   1- and 2-ply continuation history, capture history, and multi-facet
   correction history (pawn, non-pawn, minor/major, and continuation keys).
   History and correction tables persist across moves within a game
