@@ -31,9 +31,9 @@ engine lists; details in [ABOUT.md](ABOUT.md).
 - **Full UCI compliance** — works in any UCI GUI (Arena, CuteChess, Fritz, Banksia, Scid, …)
 - **Chess960** — Fischer Random / Freestyle: X-FEN and Shredder-FEN, `UCI_Chess960` king-takes-rook castling
 - **NNUE evaluation** (default) — state-aware HalfKP 785×32→(1024 pairwise 512)×2→16→32→1 (8 material-keyed output buckets), with castling rights and en passant in the input. Trained mainly on Endspiel self-play (search scores as labels); the current mix also uses a public eval dump as one source. The net is embedded in the binary. Older piece-only nets still load. `EvalFile` nets may use dense L1/L2 widths other than 16/32 (up to 64), taken from the ESPNNUE2 header.
-- **HCE fallback** — tapered hand-crafted evaluation (`UseNNUE=false`) with
-  pawn hash, mobility, king safety, pawn structure, threats, space, and
-  endgame scaling
+- **HCE fallback** — tapered hand-crafted evaluation used when no trained
+  NNUE net is available, with pawn hash, mobility, king safety, pawn
+  structure, threats, space, and endgame scaling
 - **Modern search** — alpha-beta + PVS with iterative deepening and
   aspiration windows, null move, reverse futility, futility, razoring,
   ProbCut, SEE pruning, LMR, LMP, IIR, singular and passed-pawn extensions,
@@ -153,8 +153,6 @@ an opening line such as `Running bench: ... (NNUE: AVX512ICL)`.
 | `Slow Mover` | 100 | Time usage scaling (%) — >100 thinks longer, <100 plays faster |
 | `Ponder` | false | Think on the opponent's time; the GUI toggles this and drives `go ponder` / `ponderhit` |
 | `Contempt` | 20 | Draw avoidance in centipawns |
-| `SingularExt` | 1 | Singular extension: 0 = off, 1 = conservative, 2 = aggressive |
-| `UseNNUE` | true | Use NNUE evaluation; false falls back to HCE |
 | `EvalFile` | *(embedded)* | Path to an external `.nnue` / `quantised.bin` net |
 | `BookFile` | *(disabled)* | Path to an opening book: Polyglot `.bin`, EPD `.epd`, or PGN `.pgn` (auto-detected by extension) |
 | `SyzygyPath` | *(disabled)* | Path to Syzygy tablebase directory |

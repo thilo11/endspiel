@@ -244,22 +244,10 @@ impl UciHandler {
             },
         }));
         send_response(&UciResponse::Option(UciOptionDef {
-            name: "SingularExt".to_string(),
-            opt_type: UciOptionType::Spin {
-                default: self.engine.singular_ext_mode() as i64,
-                min: 0,
-                max: 2,
-            },
-        }));
-        send_response(&UciResponse::Option(UciOptionDef {
             name: "BookFile".to_string(),
             opt_type: UciOptionType::String {
                 default: String::new(), // empty = no book
             },
-        }));
-        send_response(&UciResponse::Option(UciOptionDef {
-            name: "UseNNUE".to_string(),
-            opt_type: UciOptionType::Check { default: true },
         }));
         send_response(&UciResponse::Option(UciOptionDef {
             name: "EvalFile".to_string(),
@@ -297,28 +285,6 @@ impl UciHandler {
             name: "UCI_Chess960".to_string(),
             opt_type: UciOptionType::Check { default: false },
         }));
-        // ── SPSA-tunable search parameters ────────────────────────────────
-        let t = self.engine.tune();
-        for (name, default, min, max) in [
-            ("LmrBase", t.lmr_base, 10, 200),
-            ("LmrDiv", t.lmr_div, 100, 400),
-            ("HistLmrDiv", t.hist_lmr_div, 500, 20000),
-            ("RfpMarginImp", t.rfp_margin_imp, 10, 300),
-            ("RfpMarginNoImp", t.rfp_margin_noimp, 10, 300),
-            ("FutMarginImp", t.fut_margin_imp, 10, 300),
-            ("FutMarginNoImp", t.fut_margin_noimp, 10, 300),
-            ("SeeQuietMargin", t.see_quiet_margin, 10, 200),
-            ("CorrHistMult", t.corrhist_mult, 0, 300),
-        ] {
-            send_response(&UciResponse::Option(UciOptionDef {
-                name: name.to_string(),
-                opt_type: UciOptionType::Spin {
-                    default: default as i64,
-                    min: min as i64,
-                    max: max as i64,
-                },
-            }));
-        }
         let eval_mode = if self.engine.use_nnue() {
             "NNUE (state-aware HalfKP 785\u{00d7}32\u{2192}(1024 pairwise 512)\u{00d7}2\u{2192}16\u{2192}32\u{2192}1)".to_string()
         } else {
@@ -757,14 +723,6 @@ impl UciHandler {
                     log::info!("Contempt set to {} cp", self.engine.contempt());
                 }
             }
-            "singularext" => {
-                if let Some(v) = value
-                    && let Ok(mode) = v.trim().parse::<u8>()
-                {
-                    self.engine.set_singular_ext_mode(mode);
-                    log::info!("SingularExt set to {}", self.engine.singular_ext_mode());
-                }
-            }
             "bookfile" => {
                 if let Some(path) = value {
                     match self.engine.set_book_file(path.trim()) {
@@ -783,13 +741,6 @@ impl UciHandler {
                             }));
                         }
                     }
-                }
-            }
-            "usennue" => {
-                if let Some(v) = value {
-                    let enabled = v.trim().eq_ignore_ascii_case("true");
-                    self.engine.set_use_nnue(enabled);
-                    log::info!("UseNNUE set to {}", self.engine.use_nnue());
                 }
             }
             "evalfile" => {
@@ -856,70 +807,6 @@ impl UciHandler {
                 if let Some(v) = value {
                     self.chess960 = v.trim().eq_ignore_ascii_case("true");
                     log::info!("UCI_Chess960 set to {}", self.chess960);
-                }
-            }
-            // SPSA-tunable search parameters
-            "lmrbase" => {
-                if let Some(v) = value
-                    && let Ok(n) = v.trim().parse::<i32>()
-                {
-                    self.engine.set_tune_param("lmr_base", n);
-                }
-            }
-            "lmrdiv" => {
-                if let Some(v) = value
-                    && let Ok(n) = v.trim().parse::<i32>()
-                {
-                    self.engine.set_tune_param("lmr_div", n);
-                }
-            }
-            "histlmrdiv" => {
-                if let Some(v) = value
-                    && let Ok(n) = v.trim().parse::<i32>()
-                {
-                    self.engine.set_tune_param("hist_lmr_div", n);
-                }
-            }
-            "rfpmarginimp" => {
-                if let Some(v) = value
-                    && let Ok(n) = v.trim().parse::<i32>()
-                {
-                    self.engine.set_tune_param("rfp_margin_imp", n);
-                }
-            }
-            "rfpmarginnoimp" => {
-                if let Some(v) = value
-                    && let Ok(n) = v.trim().parse::<i32>()
-                {
-                    self.engine.set_tune_param("rfp_margin_noimp", n);
-                }
-            }
-            "futmarginimp" => {
-                if let Some(v) = value
-                    && let Ok(n) = v.trim().parse::<i32>()
-                {
-                    self.engine.set_tune_param("fut_margin_imp", n);
-                }
-            }
-            "futmarginnoimp" => {
-                if let Some(v) = value
-                    && let Ok(n) = v.trim().parse::<i32>()
-                {
-                    self.engine.set_tune_param("fut_margin_noimp", n);
-                }
-            }
-            "seequietmargin" => {
-                if let Some(v) = value
-                    && let Ok(n) = v.trim().parse::<i32>()
-                {
-                    self.engine.set_tune_param("see_quiet_margin", n);
-                }
-            }
-            "corrhistmult" => {
-                if let Some(v) = value
-                    && let Ok(n) = v.trim().parse::<i32>()
-                {
-                    self.engine.set_tune_param("corrhist_mult", n);
                 }
             }
             _ => {

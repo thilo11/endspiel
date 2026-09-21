@@ -1,6 +1,6 @@
 # Endspiel — Developer Guide
 
-## Project Layout
+## Layout
 
 ```
 ├── Cargo.toml                    # Workspace root + endspiel binary
@@ -11,288 +11,133 @@
 │   ├── chess-engine/             # Search, HCE evaluation, Syzygy WDL probing
 │   ├── chess-nnue/               # NNUE inference + embedded net (build.rs)
 │   ├── chess-uci/                # UCI protocol handler
-│   └── chess-tuner/              # HCE parameter tuner
-├── scripts/                      # build & setup helpers (Android build, Syzygy download)
-└── assets/                       # Gitignored — local resources (book, tablebases)
+│   └── chess-tuner/              # HCE parameter tuner (deprecated — see below)
+├── scripts/                      # build & setup helpers (Android, Syzygy download)
+└── assets/                       # Gitignored — local resources
 ```
 
 ## Architecture
 
 ### Search (`chess-engine`)
 
-Alpha-beta with iterative deepening and PVS.
+Alpha-beta with iterative deepening and PVS:
 
 - **Pruning**: null move, reverse futility, futility, razoring, SEE (captures + quiets), history pruning, ProbCut
-- **Extensions**: check, singular (conservative/aggressive), passed pawn push
+- **Extensions**: check, passed-pawn push. Singular extension is disabled (`singular_ext_mode = 0`): a 2026-09 h2h (same net, 10+0.1, 500 rounds, `default.nnue`) measured it at −18.4 ± 11.6 elo with LOS 0.09% for conservative (mode 1) vs off
 - **Reductions**: LMR, IIR
-- **Move ordering**: TT move → good captures (MVV-LVA + capture history) → killers → counter move → history-sorted quiets → bad captures
-- **History**: 1-ply and 2-ply continuation history
-- **Quiescence**: SEE-based pruning
-- **Time management**: complexity and volatility bonuses
-- **SMP**: Lazy SMP with depth diversity
+- **Move ordering**: TT → good captures (MVV-LVA) → killers → counter → history-sorted quiets → bad captures
+- **Quiescence**: SEE-based pruning; **SMP**: Lazy SMP with depth diversity
 
 ### Evaluation
 
-Two modes, switchable at runtime via `UseNNUE`:
+Two backends:
 
-- **NNUE** (default): HalfKP 785×32→(1024 pairwise 512)×2→16→32→1, 32 per-square king buckets and 8 material-keyed output stacks, embedded at compile time via `include_bytes!`. Dense L1/L2 are read from the net header (`1..=64`) so `EvalFile` can load architecture-trial nets without a rebuild.
-- **HCE**: tapered MG/EG with pawn hash, mobility, king safety, pawn structure (passed/doubled/isolated/backward/islands), threats, center control, connectivity, space, material imbalance, endgame scaling
+- **NNUE** (default): HalfKP 785×32→(1024 pairwise 512)×2→16→32→1, 32 king buckets × 8 material output stacks. Embedded at compile time via `include_bytes!`; dense L1/L2 read from the net header (`1..=64`) so architecture-trial nets load without a rebuild.
+- **HCE**: tapered MG/EG with pawn, mobility, king safety, pawn structure, threat, center, connectivity, space, and material-imbalance terms. Fallback when the embedded net is zeroed by `build.rs`.
 
 ### NNUE net embedding
 
-`crates/chess-nnue/build.rs` copies `nets/default.nnue` into `OUT_DIR` at build time. If the file is missing or the wrong size it writes a zero buffer (engine falls back to HCE). Always `cargo build --release` after replacing the net file.
+`crates/chess-nnue/build.rs` copies `nets/default.nnue` into `OUT_DIR`. Missing/wrong size → zero buffer (HCE fallback). Always `cargo build --release` after replacing the net.
 
 ### Chess960
 
-Castling rook origins live on `Board::castle_rooks` (standard H1/A1/H8/A8 unless a FEN says otherwise). Internal castle moves still send the king to c/g and the rook to d/f. FEN parsing accepts KQkq, X-FEN, and Shredder-FEN (`AHah`); emission is X-FEN. With `UCI_Chess960=true` the UCI layer prints and parses king-takes-own-rook.
+Rook origins live on `Board::castle_rooks` unless a FEN overrides them; internal castling still moves king→c/g and rook→d/f. FEN parsing accepts KQkq, X-FEN, and Shredder (`AHah`); emission is X-FEN. With `UCI_Chess960=true`, the UCI layer prints and parses king-takes-own-rook moves.
 
 ### Syzygy (`chess-engine/src/syzygy.rs`)
 
-WDL probing via `pyrrhic-rs`. Fires at alpha-beta nodes when castling rights are gone and piece count ≤ loaded range. Returns Win/CursedWin/Draw/BlessedLoss/Loss. Guards against empty king bitboards before calling native code (necessary because the search uses pseudo-legal move generation and `panic = "abort"` is set).
-
-### SPSA-tunable UCI options
-
-In addition to the user-facing options in the README, the engine exposes search parameters (`LmrBase`, `LmrDiv`, `HistLmrDiv`, `RfpMarginImp`, `RfpMarginNoImp`, `FutMarginImp`, `FutMarginNoImp`, `SeeQuietMargin`) as UCI spin options for SPSA tuning. Run `uci` to see the current set with min/max/default; they are intentionally omitted from the user docs because they're tuning-only knobs.
+WDL probing via `pyrrhic-rs` at alpha-beta nodes when castling rights are gone and piece count ≤ loaded range. Empty-king-bitboard guard exists because move generation is pseudo-legal and `panic = "abort"` is set.
 
 ## Build
 
 ```bash
 cargo build --release              # endspiel binary
-cargo build --release --workspace  # engine plus chess-tuner
+cargo build --release --workspace  # engine + chess-tuner
 ```
 
-### Native CPU optimisation
+### Native CPU optimisation / release contract
 
-`.cargo/config.toml` is gitignored (machine-specific). For local AVX2/AVX-512/SIMD:
+`.cargo/config.toml` is gitignored. For machine-local AVX/AVX-512 builds:
 
 ```toml
-# .cargo/config.toml  (do not commit)
 [build]
 rustflags = ["-C", "target-cpu=native"]
 ```
 
-This is appropriate for a machine-local build, but not for an x86-64 release:
-`target-cpu=native`, `x86-64-v3`, or `x86-64-v4` may let LLVM emit advanced
-instructions throughout the executable and thereby defeat its portable
-baseline. Release x86-64 binaries must remain compiled with
-`-C target-cpu=x86-64-v2`; only functions protected by runtime feature
-detection may enable later instruction sets.
+**Release x86-64 binaries must stay on `-C target-cpu=x86-64-v2`** (SSE4.2 + POPCNT baseline). Advancing the whole binary to v3/v4/native defeats its portability floor. Only individually dispatched kernels (`#[target_feature]`) may use AVX2/AVX-512, with a portable reference path kept SSE4.2/POPCNT-clean and a scalar-equivalence test for each dispatched kernel. NNUE follows this pattern (baseline + AVX2 + AVX-512 variants, runtime dispatch; `endspiel bench` prints the selected tier).
 
-For the benchmark-backed native fat-LTO + PGO build:
+### Release matrix
 
-```bash
-rustup component add llvm-tools-preview
-scripts/build-native-pgo.sh
-# binary: target/native-pgo/endspiel
-```
+CI (`release.yml`, manual `workflow_dispatch` on tag):
 
-On a Raspberry Pi 5, use the equivalent Cortex-A76-tuned build:
+| Artifact | target | LTO | PGO |
+|----------|--------|-----|-----|
+| linux-x64 / win-x64 | x86-64-v2 | thin | yes |
+| win-arm64 | generic | thin | no (cross-built) |
+| mac-arm64 | apple-m1 | thin | yes |
+| linux-arm64-pi5 (Raspberry Pi 5, glibc ≥ 2.39) | cortex-a76 | fat | yes |
+| android-arm64.apk | generic | thin | no (see `android/oex/`) |
 
-```bash
-rustup component add llvm-tools-preview
-scripts/build-pi5-pgo.sh
-# binary: target/pi5-pgo/endspiel
-```
+### Releasing a version
 
-Both helpers resolve the repository from their own location, keep final
-build outputs below `target/`, and use `${TMPDIR:-/tmp}` only for temporary
-profile data. They do not contain user- or machine-specific filesystem
-paths.
+Post-release `-dev` bump: main is always *not* a release.
 
-### Release build matrix
+1. On main, `workspace.package.version` → drop `-dev` (`1.0.1-dev` → `1.0.1`).
+2. Commit `chore: release 1.0.1`, tag `v1.0.1`, push tag. **Tag push does NOT trigger CI** — dispatch manually with the tag as input:
+   `gh workflow run release.yml -f tag=v1.0.1` (or Actions > Release > Run workflow).
+3. Immediately bump to next patch `-dev` (`1.0.1` → `1.0.2-dev`) as a separate commit.
 
-CI (`.github/workflows/release.yml`, manual `workflow_dispatch` on a tag) builds
-the following artifacts. Linux and Windows each have one universal x86-64
-executable instead of the former v2/v3/v4 variants:
+Pick a minor bump only when the queued work for the next cycle is known to be minor-worthy.
 
-| Artifact | `target-cpu` | LTO | PGO | Notes |
-|----------|--------------|-----|-----|-------|
-| `endspiel-linux-x64` | `x86-64-v2` | thin | yes | universal Linux build; runtime NNUE SIMD dispatch |
-| `endspiel-win-x64.exe` | `x86-64-v2` | thin | yes | universal Windows build; runtime NNUE SIMD dispatch |
-| `endspiel-win-arm64.exe` | `generic` | thin | no | cross-built, no PGO |
-| `endspiel-mac-arm64` | `apple-m1` | thin | yes | macOS Apple Silicon |
-| `endspiel-linux-arm64-pi5` | `cortex-a76` | fat | yes | Raspberry Pi 5 (Raspberry Pi OS Trixie / Debian 13 or newer, glibc ≥ 2.39) |
-| `endspiel-android-arm64.apk` | `generic` | thin | no | Android arm64-v8a, minSdk 24 — Open Exchange engine APK (see `android/oex/`) |
-
-#### Universal x86-64 dispatch
-
-The baseline contract is x86-64-v2 (SSE4.2 and POPCNT). The dispatcher is
-cached after its first call and selects `AVX512ICL`, `AVX-512` (F + BW),
-`AVX2`, or the portable implementation. Runtime detection checks both CPU and
-OS support, so AVX/AVX-512 code is not entered unless the operating system has
-enabled the required register state. `endspiel bench` prints the selected tier
-and is the quickest packaging smoke test.
-
-The specialised functions are deliberately isolated behind
-`#[target_feature]`. Keep the baseline call path free of unconditional AVX2 or
-AVX-512 instructions. When adding another dispatched kernel, it must have a
-scalar/reference equivalence test and must be exercised on at least one
-machine that selects the new tier.
-
-PGO is a two-stage build: an instrumented binary is built with
-`-Cprofile-generate`, then `endspiel bench` is run against it to produce
-profile data, and a final build is done with `-Cprofile-use`. The x86-64
-training run exercises the best SIMD tier available on its runner while all
-dispatched implementations remain in the final binary. PGO does not change
-the x86-64-v2 compatibility floor. It is skipped for cross-built targets whose
-binaries cannot execute on their runner. The Pi 5 combines fat LTO with PGO;
-this pairing must remain benchmark-backed because fat LTO alone can be slower
-on Cortex-A76.
-
-### Releasing a new version
-
-Follow the Rust/Cargo convention of a **post-release `-dev` bump**, so
-main always advertises a version that is unambiguously *not* a release.
-
-1. On main, set `workspace.package.version` in `Cargo.toml` to the
-   release version (drop the `-dev` suffix), e.g. `1.0.1-dev` → `1.0.1`.
-2. Commit (`chore: release 1.0.1`), tag (`git tag v1.0.1`), push tag.
-   The tag push does **not** trigger CI — `release.yml` is manual-only.
-   Dispatch it explicitly with the tag as input to build the artifact
-   matrix above and publish the release:
-   `gh workflow run release.yml -f tag=v1.0.1` (or Actions > Release >
-   Run workflow in the GitHub UI).
-3. **Immediately** bump to the next patch with a `-dev` suffix
-   (`1.0.1` → `1.0.2-dev`) as a separate commit
-   (`chore: bump version to 1.0.2-dev`).
-
-Pick the next *minor* (`1.1.0-dev`) instead of the next patch only when
-the work already queued for the next cycle is known to be minor-worthy.
-
-## Testing
+## Testing / Lint
 
 ```bash
-cargo test --release --workspace
+cargo test --release --workspace          # required before merge
+cargo clippy --workspace --all-targets    # zero warnings; #[allow] only for proven false positives, with a comment
+cargo fmt                                 # on change
 ```
 
-## Clippy
+## Commit / PR conventions
 
-```bash
-cargo clippy --workspace --all-targets
-```
+[Conventional Commits](https://www.conventionalcommits.org): `<type>(<scope>): <summary>` with types `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `chore`, `ci`; scope is the crate short name (`engine`, `nnue`, `uci`, …); `!` + `BREAKING CHANGE:` footer for breaks.
 
-All clippy warnings must be resolved before merging. `#[allow(...)]` attributes are permitted only where the lint produces a false positive — add a comment explaining why.
-
-## Commit Messages
-
-Follow [Conventional Commits](https://www.conventionalcommits.org):
-
-```
-<type>(<scope>): <short summary>
-
-[optional body]
-[optional footer]
-```
-
-Types: `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `chore`, `ci`.
-Scope is the crate short name, e.g. `engine`, `nnue`, `uci`.
-
-Examples:
-```
-feat(engine): add passed pawn push extension
-fix(nnue): correct column-major weight indexing for hidden layer 2
-perf(engine): raise default hash allocation
-docs: restructure README for end users
-```
-
-Breaking changes: append `!` after the type/scope and add a `BREAKING CHANGE:` footer.
-
-## Pull Requests
-
-- All tests pass (`cargo test --release --workspace`)
-- No clippy warnings (`cargo clippy --workspace --all-targets`)
-- Bench node count is included in the PR description if search logic changed (see *Bench as a search-change diff* below)
-- One logical change per PR — separate refactors from feature additions
-- PR title follows the same Conventional Commits format as commit messages
+PR checklist:
+- Tests green, clippy clean
+- `Bench: <number>` in description when search logic changed (see below)
+- One logical change per PR; title matches commit format
 
 ### Bench as a search-change diff
 
-`endspiel bench` runs a depth-14 search across 7 fixed positions on 1
-thread with a fixed hash size. Because every input is pinned, the
-total node count it prints is **deterministic** — run it twice on the
-same binary and you get the same number.
+`endspiel bench` = depth-14 over 7 pinned positions, 1 thread, fixed hash → **deterministic** node count, used to detect whether the search tree changed:
 
-This makes bench the standard quick check for "did my change actually
-alter the search tree?":
+1. `endspiel bench` on parent commit → `Nodes: X`; build branch, same → `Nodes: Y`.
+2. `X == Y`: behaviour-neutral or dead/guarded code (investigate for features). `X != Y`: tree changed — improvement still needs game testing.
 
-1. Build the engine on the parent commit, run `endspiel bench`, note `Nodes: X`
-2. Build the engine on your branch, run `endspiel bench`, note `Nodes: Y`
-3. Interpret:
-   - **X == Y** — your change did not affect the search tree at all.
-     Either it's a behaviour-preserving refactor (good for a cleanup
-     PR), or your change is dead / guarded behind a condition that
-     never fires (bad for a feature PR — investigate).
-   - **X != Y** — your change altered the search. Whether that's an
-     *improvement* still needs game testing, but at least you know
-     it's doing something.
+## NNUE net promotion gate
 
-Include the new node count in the PR description as
-`Bench: <number>` — the chess engine convention.
-
-### Promoting a New NNUE Net
-
-A change that replaces `crates/chess-nnue/nets/default.nnue` must demonstrate
-that the candidate is stronger than the current embedded net. The promotion
-decision is made **head-to-head against the current embedded net**, by LOS:
-
-1. **Promotion gate — self-play vs the embedded net** — fastchess match,
-   candidate vs the current `default.nnue`:
-   - At least **500 games** at `tc=10+0.1`, `Hash=64`, `Threads=1`
-   - Promote only if the candidate wins with **LOS ≥ 99%**
-   - Paste the final `Games / Wins / Losses / Draws / Elo / LOS` line in the PR
-
-2. **Architecture / size changes** — if the net file size or layout changed,
-   note it in the PR (the size is also checked by `crates/chess-nnue/build.rs`).
-
-3. **WDL refit** — if the new net shifts the win-rate ↔ centipawn mapping,
-   re-fit and include the updated `WDL_A` / `WDL_B` values in the PR.
-
-The PR description, not this guide, is where the judgement call to ship lives.
+Replacing `crates/chess-nnue/nets/default.nnue` requires a fastchess self-play,
+**candidate vs current embedded net**, `tc=10+0.1`, `Hash=64`, `Threads=1`,
+**≥ 500 games**: promote only at **LOS ≥ 99%**. Paste the final `Games/Wins/Losses/Draws/Elo/LOS` line in the PR; note any architecture size change (`build.rs` checks it) and include updated `WDL_A`/`WDL_B` if the win-rate ↔ centipawn mapping shifted.
 
 ## Syzygy Tablebases
 
-Download 3–5 man tables (~350 MB):
-
 ```bash
-bash scripts/download_syzygy.sh             # WDL + DTZ
-bash scripts/download_syzygy.sh --wdl-only  # WDL only (~150 MB)
+bash scripts/download_syzygy.sh             # WDL + DTZ (~350 MB)
+bash scripts/download_syzygy.sh --wdl-only  # ~150 MB
 ```
-
-Files land in `assets/syzygy/` (gitignored).
-
-Manual probe test (KRK, should return 28000 cp from depth 1):
+Lands in `assets/syzygy/` (gitignored). KRK probe sanity check (`go movetime 500` should return 28000 cp from depth 1):
 
 ```bash
 (printf "uci\nisready\nsetoption name SyzygyPath value assets/syzygy\nucinewgame\nposition fen 8/8/8/8/4K3/8/4R3/7k w - - 0 1\ngo movetime 500\n"; sleep 2) \
   | ./target/release/endspiel
 ```
 
-## Remark — HCE Tuning (`chess-tuner`)
+## HCE Tuning (`chess-tuner`) — deprecated
 
-> The hand-crafted evaluation is largely superseded by NNUE. It still lives
-> in the tree as a fallback (`UseNNUE=false`, and when the embedded net is
-> zeroed by `build.rs`), and the tuner below is kept for completeness, but
-> it is not part of the active improvement path. New PRs should target the
-> NNUE net (see *Promoting a New NNUE Net* above) rather than HCE
-> parameters.
+Superseded by NNUE; only exists as the fallback net-zero path. Work targeting HCE parameters, not the NNUE net, is out of scope for new PRs.
 
 ```bash
 cargo build --release -p chess-tuner
 target/release/chess-tuner --data assets/lichess_db_eval.jsonl.zst --epochs 200 --output params.json
 target/release/chess-tuner --apply params.json
+# full flags: target/release/chess-tuner --help
 ```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--data PATH` | `games/lichess_db_eval.jsonl.zst` | Eval dataset (jsonl.zst) |
-| `--positions N` | 2000000 | Max positions to load |
-| `--epochs N` | 200 | Tuning epochs |
-| `--min-depth N` | 30 | Minimum dataset depth filter |
-| `--output PATH` | — | Save parameters JSON |
-| `--apply PATH` | — | Write parameters into engine source |
-| `--tune-material` | off | Also tune material values |
-| `--learning-rate F` | 2.0 | Optimizer LR |
-
-`chess-tuner` has several additional flags (PST/mobility freezing, filtering
-thresholds, SF cross-check, convergence loop). Run `chess-tuner --help` for
-the full list.

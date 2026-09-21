@@ -55,7 +55,7 @@ pub struct SearchParams {
     pub singular_ext_mode: u8,
     /// Number of best lines to search and report (MultiPV). 1 = normal PV.
     pub multi_pv: usize,
-    /// Tunable search parameters (SPSA targets).
+    /// Internal search constants (LMR, pruning margins, corrhist).
     pub tune: TuneParams,
     /// Set while this is a `go ponder` search. While the flag is true every
     /// time-based stop is suspended (the UCI layer holds the move back
@@ -69,9 +69,8 @@ pub struct SearchParams {
     pub chess960: bool,
 }
 
-/// Search parameters that can be tuned via SPSA.
-/// Exposed as UCI spin options so external tuners (weather-factory etc.)
-/// can drive them via `setoption`.
+/// Internal search constants (LMR, RFP, futility, SEE quiet, corrhist).
+/// Defaults are SPSA-tuned; not exposed as UCI options.
 #[derive(Clone, Debug)]
 pub struct TuneParams {
     /// LMR base ×100 (default 50 → 0.50)
@@ -177,7 +176,7 @@ pub struct Engine {
     syzygy_tb: Option<SyzygyTB>,
     /// Opening book loaded via `BookFile`. `None` means no book.
     book: Option<Arc<OpeningBook>>,
-    /// Tunable search parameters.
+    /// Internal search constants (LMR, pruning margins, corrhist).
     tune: TuneParams,
 }
 
@@ -280,11 +279,6 @@ impl Engine {
         self.contempt
     }
 
-    /// Set singular extension mode: 0 = off, 1 = conservative, 2 = aggressive.
-    pub fn set_singular_ext_mode(&mut self, mode: u8) {
-        self.singular_ext_mode = mode.clamp(0, 2);
-    }
-
     /// Get singular extension mode.
     pub fn singular_ext_mode(&self) -> u8 {
         self.singular_ext_mode
@@ -312,11 +306,6 @@ impl Engine {
     /// Return the loaded book handle, if any.
     pub fn book(&self) -> Option<Arc<OpeningBook>> {
         self.book.clone()
-    }
-
-    /// Set whether NNUE evaluation is used.
-    pub fn set_use_nnue(&mut self, enabled: bool) {
-        self.use_nnue = enabled;
     }
 
     /// Check if NNUE evaluation is enabled.
@@ -407,49 +396,6 @@ impl Engine {
     /// Get the current tune params.
     pub fn tune(&self) -> &TuneParams {
         &self.tune
-    }
-
-    /// Set a single tune parameter by name. Returns false if the name is unknown.
-    pub fn set_tune_param(&mut self, name: &str, value: i32) -> bool {
-        match name {
-            "lmr_base" => {
-                self.tune.lmr_base = value;
-                true
-            }
-            "lmr_div" => {
-                self.tune.lmr_div = value;
-                true
-            }
-            "hist_lmr_div" => {
-                self.tune.hist_lmr_div = value;
-                true
-            }
-            "rfp_margin_imp" => {
-                self.tune.rfp_margin_imp = value;
-                true
-            }
-            "rfp_margin_noimp" => {
-                self.tune.rfp_margin_noimp = value;
-                true
-            }
-            "fut_margin_imp" => {
-                self.tune.fut_margin_imp = value;
-                true
-            }
-            "fut_margin_noimp" => {
-                self.tune.fut_margin_noimp = value;
-                true
-            }
-            "see_quiet_margin" => {
-                self.tune.see_quiet_margin = value;
-                true
-            }
-            "corrhist_mult" => {
-                self.tune.corrhist_mult = value;
-                true
-            }
-            _ => false,
-        }
     }
 
     /// Run a search on the given position.
