@@ -47,8 +47,8 @@ pub struct SearchParams {
     /// Time management scaling factor (percentage). 100 = normal.
     pub slow_mover: u64,
     /// Contempt factor in centipawns. A positive value makes the engine
-    /// slightly prefer avoiding draws (scored as -contempt from the current
-    /// side-to-move's perspective). 0 = neutral.
+    /// slightly prefer avoiding draws (scored as -contempt from the perspective
+    /// of the side to move at the root). 0 = neutral.
     pub contempt: i32,
     /// Singular extension mode.
     /// 0 = off (default), 1 = conservative, 2 = aggressive.
@@ -164,7 +164,7 @@ pub struct Engine {
     /// Time management scaling factor (percentage). 100 = normal,
     /// >100 = think longer, <100 = think faster. Range: 10..300.
     slow_mover: u64,
-    /// Contempt factor in centipawns (draw score = -contempt from side-to-move).
+    /// Contempt factor in centipawns (draw score = -contempt for the root side).
     contempt: i32,
     /// Singular extension mode: 0 = off (default), 1 = conservative, 2 = aggressive.
     singular_ext_mode: u8,
@@ -269,7 +269,7 @@ impl Engine {
     }
 
     /// Set the contempt factor in centipawns. Draws are scored as -contempt
-    /// from the current side-to-move's perspective. Range: 0..=100.
+    /// for the side to move at the search root. Range: 0..=100.
     pub fn set_contempt(&mut self, cp: i32) {
         self.contempt = cp.clamp(0, 100);
     }

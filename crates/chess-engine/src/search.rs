@@ -2468,6 +2468,20 @@ fn alpha_beta_root(
 // Alpha-beta search
 // ---------------------------------------------------------------------------
 
+/// Draw score from the side to move at `ply`. Contempt is relative to the
+/// root side: every draw costs the side we search for `contempt`, whichever
+/// side completes the repetition. (Scoring -contempt for the side to move
+/// instead makes a draw worth +contempt to the root whenever the opponent is
+/// to move at the drawn node, so a line where the opponent can only repeat
+/// looked better than a quiet hold — Mythos–Endspiel 2026-09-18, 47...Rh1.)
+fn draw_score(state: &SearchState, ply: u8) -> i32 {
+    if ply.is_multiple_of(2) {
+        -state.contempt
+    } else {
+        state.contempt
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn alpha_beta(
     board: &mut Board,
@@ -2502,12 +2516,12 @@ fn alpha_beta(
     // Draw detection
     if ply > 0 {
         if board.halfmove_clock >= 100 {
-            return -state.contempt;
+            return draw_score(state, ply);
         }
         // Twofold in the current search path: standard practice since the
         // opponent can always force a third repetition.
         if board.is_twofold_in_search(state.game_ply) {
-            return -state.contempt;
+            return draw_score(state, ply);
         }
         // Threefold across the full history (catches game-history positions).
         // A SINGLE game-history occurrence is deliberately NOT a draw here
@@ -2518,7 +2532,7 @@ fn alpha_beta(
         // Shuffle pressure at the root comes from the TB restriction's child-
         // repetition grading instead.
         if board.is_repetition() {
-            return -state.contempt;
+            return draw_score(state, ply);
         }
     }
 
@@ -3267,7 +3281,7 @@ fn alpha_beta(
         return if in_check {
             -Score::MATE.0 + ply as i32
         } else {
-            Score::DRAW.0
+            draw_score(state, ply)
         };
     }
 
@@ -3338,13 +3352,13 @@ fn quiescence(
     // alpha_beta's draw check).
     if ply > 0 {
         if board.halfmove_clock >= 100 {
-            return -state.contempt;
+            return draw_score(state, ply);
         }
         if board.is_twofold_in_search(state.game_ply) {
-            return -state.contempt;
+            return draw_score(state, ply);
         }
         if board.is_repetition() {
-            return -state.contempt;
+            return draw_score(state, ply);
         }
     }
 
@@ -4927,10 +4941,10 @@ mod tests {
         );
     }
 
-    /// Contempt: draws at ply > 0 should be scored as -contempt from the side-to-move's
-    /// perspective.  K vs K with halfmove_clock=99 — every White king move increments the
-    /// clock to 100, triggering the 50-move-rule check at ply=1 and returning -contempt.
-    /// The parent (White, ply=0) negates that: score = +contempt.
+    /// Contempt: draws are scored as -contempt from the root side's perspective,
+    /// whichever side is to move at the drawn node.  K vs K with halfmove_clock=99 —
+    /// every White king move increments the clock to 100, triggering the 50-move-rule
+    /// check at ply=1 (Black to move), so the root sees score = -contempt.
     #[test]
     fn contempt_draw_score_fifty_move() {
         // K vs K, kings far apart, halfmove_clock = 99.
@@ -4940,11 +4954,10 @@ mod tests {
         let with_contempt = search_with_contempt(fen, 1, 20);
         let no_contempt = search_with_contempt(fen, 1, 0);
 
-        // All moves lead to a 50-move draw at ply=1.  Each draw scores -contempt from
-        // Black's perspective; the root (White) negates → +contempt.
+        // All moves lead to a 50-move draw at ply=1, which costs the root side.
         assert_eq!(
-            with_contempt.score.0, 20,
-            "draw with contempt=20 should score +20 from White's perspective, got {}",
+            with_contempt.score.0, -20,
+            "draw with contempt=20 should score -20 from White's perspective, got {}",
             with_contempt.score
         );
         assert_eq!(
@@ -4955,6 +4968,58 @@ mod tests {
         // Either way a legal move must be returned.
         assert!(!with_contempt.best_move.is_null());
         assert!(!no_contempt.best_move.is_null());
+    }
+
+    /// Stalemate is a draw like any other: with contempt it must cost the root
+    /// side, not be scored 0 while repetitions and the 50-move rule cost
+    /// `contempt` (the engine would otherwise steer into stalemates as the
+    /// cheapest draw).
+    #[test]
+    fn contempt_applies_to_stalemate() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(|| {
+                let tt = Arc::new(SharedTT::new(1));
+                let mut learning = PersistentHistory::new();
+                let mut state = SearchState::new(
+                    None,
+                    None,
+                    false,
+                    0,
+                    0,
+                    None,
+                    0,
+                    20,
+                    0,
+                    &tt,
+                    false,
+                    NnueNetwork::embedded(),
+                    None,
+                    TuneParams::default(),
+                    &mut learning,
+                );
+                // Black to move is stalemated. At ply 1 the opponent of the root
+                // is to move, so the draw is +contempt from its perspective.
+                let mut board = Board::from_fen("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1").unwrap();
+                let mut pv = PvLine::new();
+                let stop = AtomicBool::new(false);
+                let score = alpha_beta(
+                    &mut board,
+                    1,
+                    1,
+                    -32000,
+                    32000,
+                    &mut pv,
+                    &mut state,
+                    &stop,
+                    Move::NULL,
+                    Move::NULL,
+                );
+                assert_eq!(score, 20);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     /// Contempt + ply limit: an engine with non-zero contempt must not overflow the ply
