@@ -1100,7 +1100,7 @@ impl MovePicker {
                 // ── 1. Hash move ────────────────────────────────────
                 MpStage::TtMove => {
                     self.stage = MpStage::InitCaptures;
-                    if !self.tt_move.is_null() && is_move_safe(board, self.tt_move) {
+                    if chess_core::is_pseudo_legal(board, self.tt_move) {
                         return Some(self.tt_move);
                     }
                 }
@@ -1195,114 +1195,6 @@ impl MovePicker {
             }
         }
     }
-}
-
-/// Validate that a TT move is safe to pass to `make_move` (won't corrupt
-/// the board). Hash collisions can produce arbitrary 16-bit move values,
-/// so we check piece presence, color, self-capture, and flag sanity.
-#[inline]
-fn is_move_safe(board: &Board, m: Move) -> bool {
-    if m.is_null() {
-        return false;
-    }
-    let from = m.from_sq();
-    let to = m.to_sq();
-    let flag = m.flag();
-
-    // Must have a piece of our color on the source square.
-    let piece = match board.piece_at(from) {
-        Some(p) if p.color == board.side_to_move => p,
-        _ => return false,
-    };
-
-    // Must not capture own piece (castling excluded — king "captures" rook square).
-    if flag != MoveFlag::KingsideCastle
-        && flag != MoveFlag::QueensideCastle
-        && let Some(p) = board.piece_at(to)
-        && p.color == board.side_to_move
-    {
-        return false;
-    }
-
-    // Validate capture flag vs. board state: TT hash collisions can produce
-    // moves whose flag doesn't match the current position.  Making a quiet
-    // move onto an occupied square (or a capture onto an empty one) corrupts
-    // the bitboards.
-    if flag != MoveFlag::KingsideCastle && flag != MoveFlag::QueensideCastle {
-        let to_occupied = board.piece_at(to).is_some();
-        if flag == MoveFlag::EnPassant {
-            // EP destination square is always empty.
-            if to_occupied {
-                return false;
-            }
-        } else if flag.is_capture() {
-            // A capture (non-EP) must land on an enemy piece.
-            if !to_occupied {
-                return false;
-            }
-        } else {
-            // A quiet move must not land on an occupied square.
-            if to_occupied {
-                return false;
-            }
-        }
-    }
-
-    // Castling: piece must be a king on the correct square.
-    if flag == MoveFlag::KingsideCastle || flag == MoveFlag::QueensideCastle {
-        if piece.kind != PieceKind::King {
-            return false;
-        }
-        let expected_from = match board.side_to_move {
-            Color::White => Square::E1,
-            Color::Black => Square::E8,
-        };
-        if from != expected_from {
-            return false;
-        }
-    }
-
-    // Promotion: piece must be a pawn on the correct rank.
-    if flag.is_promotion() {
-        if piece.kind != PieceKind::Pawn {
-            return false;
-        }
-        let promo_rank = match board.side_to_move {
-            Color::White => 6, // rank 7 (0-indexed)
-            Color::Black => 1, // rank 2 (0-indexed)
-        };
-        if from.rank() != promo_rank {
-            return false;
-        }
-    }
-
-    // En passant: board must have an EP square set, and it must match `to`,
-    // and piece must be a pawn.
-    if flag == MoveFlag::EnPassant {
-        if piece.kind != PieceKind::Pawn {
-            return false;
-        }
-        match board.en_passant {
-            Some(ep) if ep == to => {}
-            _ => return false,
-        }
-    }
-
-    // Double pawn push: piece must be a pawn on the starting rank.
-    if flag == MoveFlag::DoublePawnPush {
-        if piece.kind != PieceKind::Pawn {
-            return false;
-        }
-        let start_rank = match board.side_to_move {
-            Color::White => 1, // rank 2 (0-indexed)
-            Color::Black => 6, // rank 7 (0-indexed)
-        };
-        if from.rank() != start_rank {
-            return false;
-        }
-    }
-
-    true
 }
 
 /// MVV-LVA score for capture ordering (higher = better).
@@ -2767,9 +2659,6 @@ fn alpha_beta(
                     let prev_halfmove = board.halfmove_clock;
 
                     state.store_ply_context(ply, m, board);
-                    if board.piece_at(m.from_sq()).is_none() {
-                        continue;
-                    }
                     let captured = board.make_move(m);
 
                     if move_is_illegal(board, pc_us) {
@@ -2996,12 +2885,6 @@ fn alpha_beta(
 
         // Store ply context BEFORE make_move (piece is still on from_sq)
         state.store_ply_context(ply, m, board);
-
-        // Safety guard: skip move if from-square is empty (board corruption
-        // from a hash-collision TT move that slipped past is_move_safe).
-        if board.piece_at(m.from_sq()).is_none() {
-            continue;
-        }
 
         let captured = board.make_move(m);
 
@@ -3409,10 +3292,6 @@ fn quiescence(
         let mut any_legal = false;
 
         for &m in pseudo.iter() {
-            // Safety guard: skip if from-square is empty
-            if board.piece_at(m.from_sq()).is_none() {
-                continue;
-            }
             let prev_castling = board.castling;
             let prev_ep = board.en_passant;
             let prev_halfmove = board.halfmove_clock;
@@ -3564,11 +3443,6 @@ fn quiescence(
         let prev_castling = board.castling;
         let prev_ep = board.en_passant;
         let prev_halfmove = board.halfmove_clock;
-
-        // Safety guard: skip if from-square is empty
-        if board.piece_at(m.from_sq()).is_none() {
-            continue;
-        }
         let captured = board.make_move(m);
 
         // Inline legality check
@@ -3637,9 +3511,6 @@ fn quiescence(
     if generate_checks {
         let quiets = chess_core::generate_pseudo_legal_quiets(board);
         for &m in quiets.iter() {
-            if board.piece_at(m.from_sq()).is_none() {
-                continue;
-            }
             if !see::see_ge(board, m, 0) {
                 continue;
             }

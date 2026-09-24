@@ -34,6 +34,18 @@ fn is_legal(board: &mut Board, m: Move, us: Color) -> bool {
     !in_check
 }
 
+/// Whether `m` is a pseudo-legal move in this position, i.e. one the move
+/// generator would produce. Used to vet moves from untrusted sources such as
+/// transposition-table entries, whose 16-bit moves can come from a colliding
+/// position and must never reach `make_move` unchecked.
+pub fn is_pseudo_legal(board: &Board, m: Move) -> bool {
+    !m.is_null()
+        && board
+            .piece_at(m.from_sq())
+            .is_some_and(|p| p.color == board.side_to_move)
+        && generate_pseudo_legal_moves(board).iter().any(|&x| x == m)
+}
+
 /// Generate all pseudo-legal moves for the current position.
 /// These moves may leave the king in check (caller must filter).
 pub fn generate_pseudo_legal_moves(board: &Board) -> MoveList {
@@ -568,6 +580,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn is_pseudo_legal_matches_generator() {
+        for fen in [
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+            "rnbqkbnr/ppp1pppp/8/3pP3/8/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 3",
+        ] {
+            let board = Board::from_fen(fen).unwrap();
+            for &m in generate_pseudo_legal_moves(&board).iter() {
+                assert!(is_pseudo_legal(&board, m), "{fen}: {}", m.to_uci());
+            }
+        }
+    }
+
+    #[test]
+    fn is_pseudo_legal_rejects_foreign_moves() {
+        let board = Board::from_fen("4k3/8/8/8/8/8/8/R3K3 w Q - 0 1").unwrap();
+        // A rook "moving" diagonally has a piece, a colour, and an empty target.
+        assert!(!is_pseudo_legal(
+            &board,
+            Move::new(Square::A1, Square(9), MoveFlag::Normal)
+        ));
+        // The opponent's king.
+        assert!(!is_pseudo_legal(
+            &board,
+            Move::new(Square::E8, Square(59), MoveFlag::Normal)
+        ));
+        assert!(!is_pseudo_legal(&board, Move::NULL));
+    }
+
+    #[test]
+    fn is_pseudo_legal_accepts_chess960_castling() {
+        let board = Board::from_fen("4k3/8/8/8/8/8/8/1K5R w H - 0 1").unwrap();
+        let castle = generate_pseudo_legal_moves(&board)
+            .iter()
+            .copied()
+            .find(|m| m.flag() == MoveFlag::KingsideCastle)
+            .expect("b1 king with h1 rook can castle");
+        assert!(is_pseudo_legal(&board, castle));
+    }
+
+    #[test]
     fn test_starting_position_moves() {
         let board = Board::starting_position();
         let moves = generate_legal_moves(&board);
@@ -773,10 +826,9 @@ mod tests {
     // Chess960 perft positions from chessprogramming.org (Andrew Grant / Ethereal).
     #[test]
     fn test_perft_chess960_grant_1() {
-        let board = Board::from_fen(
-            "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9",
-        )
-        .unwrap();
+        let board =
+            Board::from_fen("bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9")
+                .unwrap();
         assert_eq!(perft(&board, 1), 21);
         assert_eq!(perft(&board, 2), 528);
         assert_eq!(perft(&board, 3), 12_189);
@@ -786,8 +838,7 @@ mod tests {
     fn test_perft_chess960_king_on_rook_file() {
         // King already on f, rooks on e and g: G/E castling, rook already on dest.
         let board =
-            Board::from_fen("b1q1rrkb/pppppppp/3nn3/8/P7/1PPP4/4PPPP/BQNNRKRB w GE - 1 9")
-                .unwrap();
+            Board::from_fen("b1q1rrkb/pppppppp/3nn3/8/P7/1PPP4/4PPPP/BQNNRKRB w GE - 1 9").unwrap();
         assert_eq!(perft(&board, 1), 20);
         assert_eq!(perft(&board, 2), 479);
         assert_eq!(perft(&board, 3), 10_471);

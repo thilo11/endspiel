@@ -27,6 +27,11 @@ pub fn generate_pseudo_legal_moves(board: &Board) -> MoveList {
     movegen::generate_pseudo_legal_moves(board)
 }
 
+/// Check if a move is one the pseudo-legal generator would produce.
+pub fn is_pseudo_legal(board: &Board, m: Move) -> bool {
+    movegen::is_pseudo_legal(board, m)
+}
+
 /// Check if a move is legal in the given position.
 pub fn is_legal_move(board: &Board, m: Move) -> bool {
     validate::is_legal_move(board, m)
