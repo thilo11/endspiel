@@ -51,7 +51,7 @@ pub struct SearchParams {
     /// of the side to move at the root). 0 = neutral.
     pub contempt: i32,
     /// Singular extension mode.
-    /// 0 = off (default), 1 = conservative, 2 = aggressive.
+    /// 0 = off, 1 = conservative (default), 2 = aggressive.
     pub singular_ext_mode: u8,
     /// Number of best lines to search and report (MultiPV). 1 = normal PV.
     pub multi_pv: usize,
@@ -125,7 +125,7 @@ impl Default for SearchParams {
             move_overhead_ms: 20,
             slow_mover: 100,
             contempt: 20,
-            singular_ext_mode: 0,
+            singular_ext_mode: 1,
             multi_pv: 1,
             tune: TuneParams::default(),
             ponder: None,
@@ -209,7 +209,7 @@ impl Engine {
             move_overhead_ms: 20,
             slow_mover: 100,
             contempt: 20,
-            singular_ext_mode: 0,
+            singular_ext_mode: 1,
             nnue_net: NnueNetwork::embedded(),
             use_nnue: NnueNetwork::embedded().is_trained(),
             syzygy_tb: None,

@@ -3840,7 +3840,7 @@ mod tests {
     }
 
     /// Mythos–Endspiel, 2026-09-18, after 47.Ke2. With singular extension
-    /// off (the default), 3M nodes still returns 47...Rh1; 10M finds Rd8.
+    /// off (forced below), 3M nodes still returns 47...Rh1; 10M finds Rd8.
     #[test]
     #[cfg(not(debug_assertions))]
     fn mythos_endgame_finds_rd8_with_bounded_nodes() {
