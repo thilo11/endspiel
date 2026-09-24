@@ -112,13 +112,18 @@ fn score_from_tt(score: i32, ply: u8) -> i32 {
     }
 }
 
-/// Continuation history: indexed by [piece_kind][to_sq][cur_piece_kind][cur_to_sq].
-/// This tracks how good a move is in the context of the previous move.
-type ContHistory = Box<[[[[i32; 64]; 6]; 64]; 6]>;
+/// Continuation history: indexed by
+/// [cur_color][piece_kind][to_sq][cur_piece_kind][cur_to_sq]. The earlier
+/// move's colour follows from the lookback distance, so the mover's colour is
+/// enough to keep White's and Black's contexts apart.
+type ContHistory = Box<[[[[[i32; 64]; 6]; 64]; 6]; 2]>;
 
 fn new_cont_history() -> ContHistory {
-    Box::new([[[[0i32; 64]; 6]; 64]; 6])
+    Box::new([[[[[0i32; 64]; 6]; 64]; 6]; 2])
 }
+
+/// Quiet-move history: indexed by [color][from_sq][to_sq].
+type QuietHistory = [[[i32; 64]; 64]; 2];
 
 /// Per-ply move context for continuation history lookback.
 #[derive(Clone, Copy)]
@@ -170,7 +175,7 @@ fn new_cont_corr_table() -> ContCorrTable {
 /// `ply_context`, `static_evals`, accumulators) stays per-search and is *not*
 /// carried here.
 pub struct PersistentHistory {
-    history: [[i32; 64]; 64],
+    history: QuietHistory,
     capture_history: CaptureHistory,
     counter_moves: [[Move; 64]; 64],
     cont_history: ContHistory,
@@ -185,7 +190,7 @@ pub struct PersistentHistory {
 impl PersistentHistory {
     pub fn new() -> Self {
         Self {
-            history: [[0; 64]; 64],
+            history: [[[0; 64]; 64]; 2],
             capture_history: new_capture_history(),
             counter_moves: [[Move::NULL; 64]; 64],
             cont_history: new_cont_history(),
@@ -373,7 +378,8 @@ impl<'a> SearchState<'a> {
 
         // Regular from-to history (gravity formula)
         let max_val = 16384;
-        let entry = &mut self.learning.history[from][to];
+        let us = board.side_to_move.index();
+        let entry = &mut self.learning.history[us][from][to];
         *entry += bonus - *entry * bonus.abs() / max_val;
         *entry = (*entry).clamp(-max_val, max_val);
 
@@ -384,16 +390,16 @@ impl<'a> SearchState<'a> {
             // 1-ply lookback
             if ply >= 1 && (ply as usize - 1) < MAX_PLY {
                 let ctx = self.ply_context[ply as usize - 1];
-                let entry =
-                    &mut self.learning.cont_history[ctx.piece_kind][ctx.to_sq][cur_kind][cur_to];
+                let entry = &mut self.learning.cont_history[us][ctx.piece_kind][ctx.to_sq]
+                    [cur_kind][cur_to];
                 *entry += bonus - *entry * bonus.abs() / max_val;
                 *entry = (*entry).clamp(-max_val, max_val);
             }
             // 2-ply lookback
             if ply >= 2 && (ply as usize - 2) < MAX_PLY {
                 let ctx = self.ply_context[ply as usize - 2];
-                let entry =
-                    &mut self.learning.cont_history[ctx.piece_kind][ctx.to_sq][cur_kind][cur_to];
+                let entry = &mut self.learning.cont_history[us][ctx.piece_kind][ctx.to_sq]
+                    [cur_kind][cur_to];
                 *entry += bonus - *entry * bonus.abs() / max_val;
                 *entry = (*entry).clamp(-max_val, max_val);
             }
@@ -407,7 +413,8 @@ impl<'a> SearchState<'a> {
 
         // Regular history malus (gravity formula)
         let max_val = 16384;
-        let entry = &mut self.learning.history[from][to];
+        let us = board.side_to_move.index();
+        let entry = &mut self.learning.history[us][from][to];
         *entry += -malus - *entry * malus.abs() / max_val;
         *entry = (*entry).clamp(-max_val, max_val);
 
@@ -418,16 +425,16 @@ impl<'a> SearchState<'a> {
             // 1-ply lookback
             if ply >= 1 && (ply as usize - 1) < MAX_PLY {
                 let ctx = self.ply_context[ply as usize - 1];
-                let entry =
-                    &mut self.learning.cont_history[ctx.piece_kind][ctx.to_sq][cur_kind][cur_to];
+                let entry = &mut self.learning.cont_history[us][ctx.piece_kind][ctx.to_sq]
+                    [cur_kind][cur_to];
                 *entry += -malus - *entry * malus.abs() / max_val;
                 *entry = (*entry).clamp(-max_val, max_val);
             }
             // 2-ply lookback
             if ply >= 2 && (ply as usize - 2) < MAX_PLY {
                 let ctx = self.ply_context[ply as usize - 2];
-                let entry =
-                    &mut self.learning.cont_history[ctx.piece_kind][ctx.to_sq][cur_kind][cur_to];
+                let entry = &mut self.learning.cont_history[us][ctx.piece_kind][ctx.to_sq]
+                    [cur_kind][cur_to];
                 *entry += -malus - *entry * malus.abs() / max_val;
                 *entry = (*entry).clamp(-max_val, max_val);
             }
@@ -503,6 +510,7 @@ impl<'a> SearchState<'a> {
             Some(p) => p,
             None => return 0,
         };
+        let us = piece.color.index();
         let cur_kind = piece.kind.index();
         let cur_to = m.to_sq().index();
 
@@ -510,12 +518,13 @@ impl<'a> SearchState<'a> {
         // 1-ply lookback
         if ply >= 1 && (ply as usize - 1) < MAX_PLY {
             let ctx = self.ply_context[ply as usize - 1];
-            bonus += self.learning.cont_history[ctx.piece_kind][ctx.to_sq][cur_kind][cur_to];
+            bonus += self.learning.cont_history[us][ctx.piece_kind][ctx.to_sq][cur_kind][cur_to];
         }
         // 2-ply lookback (follow-up history)
         if ply >= 2 && (ply as usize - 2) < MAX_PLY {
             let ctx = self.ply_context[ply as usize - 2];
-            bonus += self.learning.cont_history[ctx.piece_kind][ctx.to_sq][cur_kind][cur_to] / 2;
+            bonus +=
+                self.learning.cont_history[us][ctx.piece_kind][ctx.to_sq][cur_kind][cur_to] / 2;
         }
         bonus
     }
@@ -1149,7 +1158,8 @@ impl MovePicker {
                         if m == self.tt_move {
                             continue;
                         }
-                        let hist = state.learning.history[m.from_sq().index()][m.to_sq().index()];
+                        let hist = state.learning.history[board.side_to_move.index()]
+                            [m.from_sq().index()][m.to_sq().index()];
                         let cont = state.get_cont_history_bonus(m, board, ply);
                         let score = if m == killers[0] {
                             900_000
@@ -2820,9 +2830,11 @@ fn alpha_beta(
 
         // Store ply context BEFORE make_move (piece is still on from_sq)
         state.store_ply_context(ply, m, board);
-        // Continuation history is keyed on the moving piece, so read it while the
-        // piece is still on from_sq; pruning and LMR below run after make_move.
+        // Both histories are keyed on the mover, so read them while the piece is
+        // still on from_sq and before the side to move flips; pruning and LMR
+        // below run after make_move.
         let cont = state.get_cont_history_bonus(m, board, ply);
+        let hist = state.learning.history[us.index()][m.from_sq().index()][m.to_sq().index()];
 
         let captured = board.make_move(m);
 
@@ -2881,12 +2893,10 @@ fn alpha_beta(
                 && !m.is_capture()
                 && !m.is_promotion()
                 && !searching_for_mate
+                && hist + cont / 2 < -3000 * depth as i32
             {
-                let hist = state.learning.history[m.from_sq().index()][m.to_sq().index()];
-                if hist + cont / 2 < -3000 * depth as i32 {
-                    board.unmake_move(m, captured, prev_castling, prev_ep, prev_halfmove);
-                    continue;
-                }
+                board.unmake_move(m, captured, prev_castling, prev_ep, prev_halfmove);
+                continue;
             }
         }
 
@@ -2958,7 +2968,6 @@ fn alpha_beta(
                 }
                 // Continuous history-based reduction with continuation history:
                 // good history → less reduction, bad history → more reduction.
-                let hist = state.learning.history[m.from_sq().index()][m.to_sq().index()];
                 reduction -= ((hist + cont / 2) / state.tune.hist_lmr_div) as i8;
                 // Extra reduction for very negative history
                 if hist < -4000 {
