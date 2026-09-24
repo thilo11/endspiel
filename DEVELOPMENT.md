@@ -23,7 +23,7 @@
 Alpha-beta with iterative deepening and PVS:
 
 - **Pruning**: null move, reverse futility, futility, razoring, SEE (captures + quiets), history pruning, ProbCut
-- **Extensions**: check, passed-pawn push. Singular extension is disabled (`singular_ext_mode = 0`): a 2026-09 h2h (same net, 10+0.1, 500 rounds, `default.nnue`) measured it at −18.4 ± 11.6 elo with LOS 0.09% for conservative (mode 1) vs off
+- **Extensions**: passed-pawn push (7th rank / promotion). No check extension: an in-check node is only floored at depth 1, and checking moves are merely exempt from LMR and quiet pruning. A 2026-09 probe of a real check extension was mixed on the 47...Rh1 family and grew bench nodes ~58%. Singular extension is disabled (`singular_ext_mode = 0`): a 2026-09 h2h (same net, 10+0.1, 500 rounds, `default.nnue`) measured it at −18.4 ± 11.6 elo with LOS 0.09% for conservative (mode 1) vs off
 - **Reductions**: LMR, IIR
 - **Move ordering**: TT → good captures (MVV-LVA) → killers → counter → history-sorted quiets → bad captures
 - **Quiescence**: SEE-based pruning; **SMP**: Lazy SMP with depth diversity
@@ -98,7 +98,7 @@ cargo fmt                                 # on change
 
 ## Commit / PR conventions
 
-[Conventional Commits](https://www.conventionalcommits.org): `<type>(<scope>): <summary>` with types `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `chore`, `ci`; scope is the crate short name (`engine`, `nnue`, `uci`, …); `!` + `BREAKING CHANGE:` footer for breaks.
+[Conventional Commits](https://www.conventionalcommits.org) **one-liners only** — a single subject line, no body or footers: `<type>(<scope>): <summary>` with types `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `chore`, `ci`; scope is the crate short name (`engine`, `nnue`, `uci`, …).
 
 PR checklist:
 - Tests green, clippy clean
