@@ -312,15 +312,25 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
 
+    /// Thread 0 searches on the calling thread, so give it the same 4 MB stack
+    /// the UCI search thread has; libtest's 2 MB default overflows in debug
+    /// builds on Windows.
     fn run_search(threads: usize, params: SearchParams) -> super::SearchResult {
-        let board = Board::starting_position();
-        let net = NnueNetwork::embedded();
-        let pool = ThreadPool::new(threads);
-        let tt = Arc::new(SharedTT::new(16));
-        let stop = Arc::new(AtomicBool::new(false));
-        pool.search(
-            &board, &params, &stop, &tt, None, &net, None, None, None, None,
-        )
+        std::thread::Builder::new()
+            .stack_size(4 * 1024 * 1024)
+            .spawn(move || {
+                let board = Board::starting_position();
+                let net = NnueNetwork::embedded();
+                let pool = ThreadPool::new(threads);
+                let tt = Arc::new(SharedTT::new(16));
+                let stop = Arc::new(AtomicBool::new(false));
+                pool.search(
+                    &board, &params, &stop, &tt, None, &net, None, None, None, None,
+                )
+            })
+            .unwrap()
+            .join()
+            .unwrap()
     }
 
     /// `max_nodes` is a GLOBAL budget: adding threads must not multiply the node
