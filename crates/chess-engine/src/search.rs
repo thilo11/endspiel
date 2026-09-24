@@ -2820,6 +2820,9 @@ fn alpha_beta(
 
         // Store ply context BEFORE make_move (piece is still on from_sq)
         state.store_ply_context(ply, m, board);
+        // Continuation history is keyed on the moving piece, so read it while the
+        // piece is still on from_sq; pruning and LMR below run after make_move.
+        let cont = state.get_cont_history_bonus(m, board, ply);
 
         let captured = board.make_move(m);
 
@@ -2880,7 +2883,6 @@ fn alpha_beta(
                 && !searching_for_mate
             {
                 let hist = state.learning.history[m.from_sq().index()][m.to_sq().index()];
-                let cont = state.get_cont_history_bonus(m, board, ply);
                 if hist + cont / 2 < -3000 * depth as i32 {
                     board.unmake_move(m, captured, prev_castling, prev_ep, prev_halfmove);
                     continue;
@@ -2957,7 +2959,6 @@ fn alpha_beta(
                 // Continuous history-based reduction with continuation history:
                 // good history → less reduction, bad history → more reduction.
                 let hist = state.learning.history[m.from_sq().index()][m.to_sq().index()];
-                let cont = state.get_cont_history_bonus(m, board, ply);
                 reduction -= ((hist + cont / 2) / state.tune.hist_lmr_div) as i8;
                 // Extra reduction for very negative history
                 if hist < -4000 {
