@@ -108,13 +108,28 @@ PR checklist:
 `endspiel bench` = depth-14 over 7 pinned positions, 1 thread, fixed hash → **deterministic** node count, used to detect whether the search tree changed:
 
 1. `endspiel bench` on parent commit → `Nodes: X`; build branch, same → `Nodes: Y`.
-2. `X == Y`: behaviour-neutral or dead/guarded code (investigate for features). `X != Y`: tree changed — improvement still needs game testing.
+2. `X == Y`: behaviour-neutral or dead/guarded code (investigate for features). `X != Y`: tree changed — improvement still needs game testing (see **Promotion gate**).
 
-## NNUE net promotion gate
+## Promotion gate (nets and engine changes)
 
-Replacing `crates/chess-nnue/nets/default.nnue` requires a fastchess self-play,
-**candidate vs current embedded net**, `tc=10+0.1`, `Hash=64`, `Threads=1`,
-**≥ 500 games**: promote only at **LOS ≥ 99%**. Paste the final `Games/Wins/Losses/Draws/Elo/LOS` line in the PR; note any architecture size change (`build.rs` checks it) and include updated `WDL_A`/`WDL_B` if the win-rate ↔ centipawn mapping shifted.
+Every candidate — a replacement `crates/chess-nnue/nets/default.nnue` or a search/eval
+change — is gated by one fastchess run: **candidate vs Stockfish 19 at a fixed
+`nodes=10000` per move, 1000 games, no opening book** (startpos only; the candidate uses
+`OpeningVariety=110` for variety since Stockfish is deterministic at fixed nodes).
+`tc=10+0.1` for the candidate, `Hash=64`, `Threads=1` on both, concurrency 16.
+**Promote only if the candidate scores ≥ 45%.** Reference: `d665032` scored 42.5%
+(−52.5 ± 14.2 Elo) on 2026-09-24.
+
+```bash
+fastchess \
+  -engine cmd=target/release/endspiel name=candidate option.Hash=64 option.Threads=1 option.OpeningVariety=110 \
+  -engine cmd=stockfish name=sf19-n10000 nodes=10000 option.Hash=64 option.Threads=1 \
+  -each tc=10+0.1 -rounds 500 -games 2 -concurrency 16 -recover
+```
+
+Paste the final `Games/Wins/Losses/Draws/Points/Elo` line in the commit or PR. For a net,
+note any architecture size change (`build.rs` checks it) and include updated
+`WDL_A`/`WDL_B` if the win-rate ↔ centipawn mapping shifted.
 
 ## Syzygy Tablebases
 
