@@ -1535,14 +1535,6 @@ pub fn iterative_deepening(
         }
     }
 
-    // EWMA (exponentially weighted moving average) of each root move's score
-    // across all completed depth iterations. Used for best-move persistence:
-    // if a move was consistently best for many depths but gets displaced at
-    // the final depth due to search instability, the EWMA will still reflect
-    // its historical strength.
-    let mut root_move_ewma: Vec<(Move, f64)> = root_moves.iter().map(|&m| (m, 0.0f64)).collect();
-    let mut ewma_initialized = false;
-
     // Set ENDSPIEL_TM_DEBUG=1 to dump the time manager's per-iteration reasoning
     // (which difficulty terms fired, and the soft/hard budgets). Probing a position
     // by bare FEN gives `game_ply == 0`, which silently trips the early-opening cap
@@ -1557,9 +1549,6 @@ pub fn iterative_deepening(
     let mut recent_score_swing = 0i32;
     // Track last iteration duration for next-iteration prediction
     let mut last_iter_ms: u64;
-    // Best-move persistence: remember the last highly stable move
-    let mut stable_move = Move::NULL;
-    let mut stable_move_stability = 0u32;
 
     for base_depth in 1..=max_depth {
         // Apply depth offset for helper threads (Lazy SMP depth diversity)
@@ -1800,11 +1789,6 @@ pub fn iterative_deepening(
         };
         if base_depth > 1 && new_best != best_move {
             recent_pv_changes = update_recent_pv_changes(recent_pv_changes, true);
-            // Save the stable move before resetting
-            if best_move_stability >= 6 {
-                stable_move = best_move;
-                stable_move_stability = best_move_stability;
-            }
             best_move_stability = 0;
         } else if base_depth > 1 {
             recent_pv_changes = update_recent_pv_changes(recent_pv_changes, false);
@@ -1814,18 +1798,6 @@ pub fn iterative_deepening(
         best_score = Score(score);
         best_pv = line_results[0].1.clone();
         best_depth = depth;
-
-        // Update EWMA for all root moves after each completed depth
-        {
-            let alpha_coeff = if ewma_initialized { 0.2 } else { 1.0 };
-            for (ewma_move, ewma_val) in root_move_ewma.iter_mut() {
-                if let Some(&(_, score_val)) = root_move_scores.iter().find(|(m, _)| m == ewma_move)
-                {
-                    *ewma_val = alpha_coeff * score_val as f64 + (1.0 - alpha_coeff) * *ewma_val;
-                }
-            }
-            ewma_initialized = true;
-        }
 
         if let Some(ref cb) = info_callback {
             let elapsed = state.elapsed_ms();
@@ -2079,43 +2051,6 @@ pub fn iterative_deepening(
             {
                 break;
             }
-        }
-    }
-
-    // Best-move persistence using EWMA: if a highly stable move was
-    // displaced and its EWMA (score averaged across all depths) is
-    // significantly higher than the current best move's EWMA, revert.
-    // This handles search instability where a tactically complex move
-    // scores well for many depths but then drops at the final depth.
-    // Not in TB-restricted mode: a displacement there is a deliberate
-    // demotion/promotion, and cp EWMAs must not resurrect a demoted move.
-    if !tb_win_restricted
-        && !stable_move.is_null()
-        && best_move != stable_move
-        && stable_move_stability >= 6
-    {
-        let stable_ewma = root_move_ewma
-            .iter()
-            .find(|(m, _)| *m == stable_move)
-            .map(|(_, e)| *e);
-        let best_ewma = root_move_ewma
-            .iter()
-            .find(|(m, _)| *m == best_move)
-            .map(|(_, e)| *e);
-        if let (Some(se), Some(be)) = (stable_ewma, best_ewma)
-            && se > be + 50.0
-        {
-            log::info!(
-                "EWMA persistence: {} (ewma {:.0}) over {} (ewma {:.0}), stability was {}",
-                stable_move.to_uci(),
-                se,
-                best_move.to_uci(),
-                be,
-                stable_move_stability
-            );
-            best_move = stable_move;
-            // Report the EWMA as the score (better reflects the move's value)
-            best_score = Score(se as i32);
         }
     }
 
