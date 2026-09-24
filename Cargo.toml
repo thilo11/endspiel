@@ -13,9 +13,7 @@ chess-common = { path = "crates/chess-common" }
 chess-core = { path = "crates/chess-core" }
 chess-engine = { path = "crates/chess-engine" }
 chess-nnue = { path = "crates/chess-nnue" }
-chess-tuner = { path = "crates/chess-tuner" }
 chess-uci = { path = "crates/chess-uci" }
-bulletformat = "1.8.0"
 log = "0.4.34"
 env_logger = "0.11.11"
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }

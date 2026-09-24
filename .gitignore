@@ -17,7 +17,7 @@ __pycache__/
 *.pyc
 .venv/
 
-# ── Local environment & config (incl. chess-tuner output) ──
+# ── Local environment & config ──
 .envrc
 config.json
 tuned_params.json

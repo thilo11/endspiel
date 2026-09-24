@@ -403,12 +403,6 @@ pub fn evaluate(board: &Board) -> Score {
     Score(breakdown.final_score)
 }
 
-/// Evaluate using custom parameters (for the tuner). No pawn hash caching.
-pub fn evaluate_with_params(board: &Board, params: &EvalParams) -> Score {
-    let breakdown = evaluate_impl(board, params, false, false);
-    Score(breakdown.final_score)
-}
-
 // ---------------------------------------------------------------------------
 // Game phase (0 = pure middlegame, 256 = pure endgame)
 // ---------------------------------------------------------------------------
@@ -462,10 +456,8 @@ fn mirror_square(sq: Square) -> usize {
     sq.index() ^ 56
 }
 
-// @tuner:material_start
 const _MATERIAL_MG: [i32; 6] = [82, 337, 365, 477, 1025, 0]; // P N B R Q K
 const MATERIAL_EG: [i32; 6] = [94, 281, 297, 512, 936, 0];
-// @tuner:material_end
 
 const ALL_PIECE_KINDS: [PieceKind; 6] = [
     PieceKind::Pawn,
@@ -476,7 +468,6 @@ const ALL_PIECE_KINDS: [PieceKind; 6] = [
     PieceKind::King,
 ];
 
-// @tuner:pst_start
 #[rustfmt::skip]
 const PST_PAWN_MG: [i32; 64] = [
        0,    0,    0,    0,    0,    0,    0,    0,
@@ -638,11 +629,9 @@ const PST_EG: [[i32; 64]; 6] = [
     PST_QUEEN_EG,
     PST_KING_EG,
 ];
-// @tuner:pst_end
 
 // ---------------------------------------------------------------------------
-// EvalParams: all tunable evaluation parameters in one struct.
-// Used by the Texel tuner to optimize eval constants.
+// EvalParams: all evaluation parameters in one struct.
 // ---------------------------------------------------------------------------
 
 #[derive(Clone)]
@@ -771,7 +760,6 @@ pub struct EvalParams {
     pub imbalance_queen_vs_minors_eg: i32,
 }
 
-// @tuner:defaults_start
 impl Default for EvalParams {
     fn default() -> Self {
         Self {
@@ -864,385 +852,6 @@ impl Default for EvalParams {
             imbalance_knight_pair_eg: -25,
             imbalance_queen_vs_minors_mg: 27,
             imbalance_queen_vs_minors_eg: 11,
-        }
-    }
-}
-// @tuner:defaults_end
-
-/// Piece names for PST parameter naming.
-const PIECE_NAMES: [&str; 6] = ["pawn", "knight", "bishop", "rook", "queen", "king"];
-
-/// Number of scalar params (after material and PSTs).
-const NUM_SCALAR_PARAMS: usize = 85;
-
-impl EvalParams {
-    /// Total number of tunable parameters.
-    pub fn param_count() -> usize {
-        // 5 material_mg + 5 material_eg + 384 pst_mg + 384 pst_eg + scalars
-        10 + 768 + NUM_SCALAR_PARAMS
-    }
-
-    /// Get the value of parameter at index `idx`.
-    pub fn get_param(&self, idx: usize) -> i32 {
-        match idx {
-            0..5 => self.material_mg[idx],
-            5..10 => self.material_eg[idx - 5],
-            10..394 => {
-                let off = idx - 10;
-                self.pst_mg[off / 64][off % 64]
-            }
-            394..778 => {
-                let off = idx - 394;
-                self.pst_eg[off / 64][off % 64]
-            }
-            _ => self.get_scalar(idx - 778),
-        }
-    }
-
-    /// Set the value of parameter at index `idx`.
-    pub fn set_param(&mut self, idx: usize, val: i32) {
-        match idx {
-            0..5 => self.material_mg[idx] = val,
-            5..10 => self.material_eg[idx - 5] = val,
-            10..394 => {
-                let off = idx - 10;
-                self.pst_mg[off / 64][off % 64] = val;
-            }
-            394..778 => {
-                let off = idx - 394;
-                self.pst_eg[off / 64][off % 64] = val;
-            }
-            _ => self.set_scalar(idx - 778, val),
-        }
-    }
-
-    /// Human-readable name for parameter at index `idx`.
-    pub fn param_name(&self, idx: usize) -> String {
-        match idx {
-            0..5 => format!("material_mg_{}", PIECE_NAMES[idx]),
-            5..10 => format!("material_eg_{}", PIECE_NAMES[idx - 5]),
-            10..394 => {
-                let off = idx - 10;
-                format!("pst_mg_{}_{}", PIECE_NAMES[off / 64], off % 64)
-            }
-            394..778 => {
-                let off = idx - 394;
-                format!("pst_eg_{}_{}", PIECE_NAMES[off / 64], off % 64)
-            }
-            _ => self.scalar_name(idx - 778),
-        }
-    }
-
-    fn get_scalar(&self, idx: usize) -> i32 {
-        match idx {
-            0 => self.doubled_pawn_mg,
-            1 => self.doubled_pawn_eg,
-            2 => self.isolated_pawn_mg,
-            3 => self.isolated_pawn_eg,
-            4 => self.doubled_isolated_mg,
-            5 => self.doubled_isolated_eg,
-            6 => self.backward_pawn_mg,
-            7 => self.backward_pawn_eg,
-            8 => self.passed_pawn_base_mg,
-            9 => self.passed_pawn_base_eg,
-            10 => self.passed_pawn_adv_mg,
-            11 => self.passed_pawn_adv_eg,
-            12 => self.connected_passer_base_mg,
-            13 => self.connected_passer_base_eg,
-            14 => self.connected_passer_adv_mg,
-            15 => self.connected_passer_adv_eg,
-            16 => self.rook_behind_passer_mg,
-            17 => self.rook_behind_passer_eg,
-            18 => self.blocked_passer_mg,
-            19 => self.blocked_passer_eg,
-            20 => self.bishop_pair_base_mg,
-            21 => self.bishop_pair_base_eg,
-            22 => self.rook_open_file_mg,
-            23 => self.rook_open_file_eg,
-            24 => self.rook_semi_open_mg,
-            25 => self.rook_semi_open_eg,
-            26 => self.rook_seventh_mg,
-            27 => self.rook_seventh_eg,
-            28 => self.ks_shield_1,
-            29 => self.ks_shield_2,
-            30 => self.ks_open_file,
-            31 => self.ks_semi_open,
-            32 => self.ks_center_king,
-            33 => self.ks_knight_weight,
-            34 => self.ks_bishop_weight,
-            35 => self.ks_rook_weight,
-            36 => self.ks_queen_weight,
-            37 => self.mobility_knight_mg,
-            38 => self.mobility_knight_eg,
-            39 => self.mobility_bishop_mg,
-            40 => self.mobility_bishop_eg,
-            41 => self.mobility_rook_mg,
-            42 => self.mobility_rook_eg,
-            43 => self.mobility_queen_mg,
-            44 => self.mobility_queen_eg,
-            45 => self.center_pawn_bonus,
-            46 => self.center_knight_bonus,
-            47 => self.center_bishop_bonus,
-            48 => self.pawn_protected_knight,
-            49 => self.knight_outpost,
-            50 => self.threat_pawn_minor_mg,
-            51 => self.threat_pawn_minor_eg,
-            52 => self.threat_pawn_rook_mg,
-            53 => self.threat_pawn_rook_eg,
-            54 => self.threat_minor_rook_mg,
-            55 => self.threat_minor_rook_eg,
-            56 => self.threat_piece_queen_mg,
-            57 => self.threat_piece_queen_eg,
-            58 => self.threat_hanging_mg,
-            59 => self.threat_hanging_eg,
-            60 => self.tempo,
-            61 => self.bad_bishop_mg,
-            62 => self.bad_bishop_eg,
-            63 => self.knight_closed_bonus,
-            64 => self.bishop_open_bonus,
-            65 => self.pawn_islands_mg,
-            66 => self.pawn_islands_eg,
-            67 => self.ocb_scale_factor,
-            68 => self.king_passer_own_eg,
-            69 => self.king_passer_enemy_eg,
-            70 => self.connected_passer_sq_mg,
-            71 => self.connected_passer_sq_eg,
-            72 => self.imbalance_exchange_mg,
-            73 => self.imbalance_exchange_eg,
-            74 => self.imbalance_rook_pair_mg,
-            75 => self.imbalance_rook_pair_eg,
-            76 => self.imbalance_knight_pair_eg,
-            77 => self.imbalance_queen_vs_minors_mg,
-            78 => self.imbalance_queen_vs_minors_eg,
-            79 => self.doubled_rook_file_mg,
-            80 => self.doubled_rook_file_eg,
-            81 => self.doubled_rook_7th_mg,
-            82 => self.doubled_rook_7th_eg,
-            83 => self.trapped_bishop_mg,
-            84 => self.trapped_bishop_eg,
-            _ => panic!("scalar index {idx} out of range"),
-        }
-    }
-
-    fn set_scalar(&mut self, idx: usize, val: i32) {
-        match idx {
-            0 => self.doubled_pawn_mg = val,
-            1 => self.doubled_pawn_eg = val,
-            2 => self.isolated_pawn_mg = val,
-            3 => self.isolated_pawn_eg = val,
-            4 => self.doubled_isolated_mg = val,
-            5 => self.doubled_isolated_eg = val,
-            6 => self.backward_pawn_mg = val,
-            7 => self.backward_pawn_eg = val,
-            8 => self.passed_pawn_base_mg = val,
-            9 => self.passed_pawn_base_eg = val,
-            10 => self.passed_pawn_adv_mg = val,
-            11 => self.passed_pawn_adv_eg = val,
-            12 => self.connected_passer_base_mg = val,
-            13 => self.connected_passer_base_eg = val,
-            14 => self.connected_passer_adv_mg = val,
-            15 => self.connected_passer_adv_eg = val,
-            16 => self.rook_behind_passer_mg = val,
-            17 => self.rook_behind_passer_eg = val,
-            18 => self.blocked_passer_mg = val,
-            19 => self.blocked_passer_eg = val,
-            20 => self.bishop_pair_base_mg = val,
-            21 => self.bishop_pair_base_eg = val,
-            22 => self.rook_open_file_mg = val,
-            23 => self.rook_open_file_eg = val,
-            24 => self.rook_semi_open_mg = val,
-            25 => self.rook_semi_open_eg = val,
-            26 => self.rook_seventh_mg = val,
-            27 => self.rook_seventh_eg = val,
-            28 => self.ks_shield_1 = val,
-            29 => self.ks_shield_2 = val,
-            30 => self.ks_open_file = val,
-            31 => self.ks_semi_open = val,
-            32 => self.ks_center_king = val,
-            33 => self.ks_knight_weight = val,
-            34 => self.ks_bishop_weight = val,
-            35 => self.ks_rook_weight = val,
-            36 => self.ks_queen_weight = val,
-            37 => self.mobility_knight_mg = val,
-            38 => self.mobility_knight_eg = val,
-            39 => self.mobility_bishop_mg = val,
-            40 => self.mobility_bishop_eg = val,
-            41 => self.mobility_rook_mg = val,
-            42 => self.mobility_rook_eg = val,
-            43 => self.mobility_queen_mg = val,
-            44 => self.mobility_queen_eg = val,
-            45 => self.center_pawn_bonus = val,
-            46 => self.center_knight_bonus = val,
-            47 => self.center_bishop_bonus = val,
-            48 => self.pawn_protected_knight = val,
-            49 => self.knight_outpost = val,
-            50 => self.threat_pawn_minor_mg = val,
-            51 => self.threat_pawn_minor_eg = val,
-            52 => self.threat_pawn_rook_mg = val,
-            53 => self.threat_pawn_rook_eg = val,
-            54 => self.threat_minor_rook_mg = val,
-            55 => self.threat_minor_rook_eg = val,
-            56 => self.threat_piece_queen_mg = val,
-            57 => self.threat_piece_queen_eg = val,
-            58 => self.threat_hanging_mg = val,
-            59 => self.threat_hanging_eg = val,
-            60 => self.tempo = val,
-            61 => self.bad_bishop_mg = val,
-            62 => self.bad_bishop_eg = val,
-            63 => self.knight_closed_bonus = val,
-            64 => self.bishop_open_bonus = val,
-            65 => self.pawn_islands_mg = val,
-            66 => self.pawn_islands_eg = val,
-            67 => self.ocb_scale_factor = val,
-            68 => self.king_passer_own_eg = val,
-            69 => self.king_passer_enemy_eg = val,
-            70 => self.connected_passer_sq_mg = val,
-            71 => self.connected_passer_sq_eg = val,
-            72 => self.imbalance_exchange_mg = val,
-            73 => self.imbalance_exchange_eg = val,
-            74 => self.imbalance_rook_pair_mg = val,
-            75 => self.imbalance_rook_pair_eg = val,
-            76 => self.imbalance_knight_pair_eg = val,
-            77 => self.imbalance_queen_vs_minors_mg = val,
-            78 => self.imbalance_queen_vs_minors_eg = val,
-            79 => self.doubled_rook_file_mg = val,
-            80 => self.doubled_rook_file_eg = val,
-            81 => self.doubled_rook_7th_mg = val,
-            82 => self.doubled_rook_7th_eg = val,
-            83 => self.trapped_bishop_mg = val,
-            84 => self.trapped_bishop_eg = val,
-            _ => panic!("scalar index {idx} out of range"),
-        }
-    }
-
-    fn scalar_name(&self, idx: usize) -> String {
-        const NAMES: [&str; NUM_SCALAR_PARAMS] = [
-            "doubled_pawn_mg",
-            "doubled_pawn_eg",
-            "isolated_pawn_mg",
-            "isolated_pawn_eg",
-            "doubled_isolated_mg",
-            "doubled_isolated_eg",
-            "backward_pawn_mg",
-            "backward_pawn_eg",
-            "passed_pawn_base_mg",
-            "passed_pawn_base_eg",
-            "passed_pawn_adv_mg",
-            "passed_pawn_adv_eg",
-            "connected_passer_base_mg",
-            "connected_passer_base_eg",
-            "connected_passer_adv_mg",
-            "connected_passer_adv_eg",
-            "rook_behind_passer_mg",
-            "rook_behind_passer_eg",
-            "blocked_passer_mg",
-            "blocked_passer_eg",
-            "bishop_pair_base_mg",
-            "bishop_pair_base_eg",
-            "rook_open_file_mg",
-            "rook_open_file_eg",
-            "rook_semi_open_mg",
-            "rook_semi_open_eg",
-            "rook_seventh_mg",
-            "rook_seventh_eg",
-            "ks_shield_1",
-            "ks_shield_2",
-            "ks_open_file",
-            "ks_semi_open",
-            "ks_center_king",
-            "ks_knight_weight",
-            "ks_bishop_weight",
-            "ks_rook_weight",
-            "ks_queen_weight",
-            "mobility_knight_mg",
-            "mobility_knight_eg",
-            "mobility_bishop_mg",
-            "mobility_bishop_eg",
-            "mobility_rook_mg",
-            "mobility_rook_eg",
-            "mobility_queen_mg",
-            "mobility_queen_eg",
-            "center_pawn_bonus",
-            "center_knight_bonus",
-            "center_bishop_bonus",
-            "pawn_protected_knight",
-            "knight_outpost",
-            "threat_pawn_minor_mg",
-            "threat_pawn_minor_eg",
-            "threat_pawn_rook_mg",
-            "threat_pawn_rook_eg",
-            "threat_minor_rook_mg",
-            "threat_minor_rook_eg",
-            "threat_piece_queen_mg",
-            "threat_piece_queen_eg",
-            "threat_hanging_mg",
-            "threat_hanging_eg",
-            "tempo",
-            "bad_bishop_mg",
-            "bad_bishop_eg",
-            "knight_closed_bonus",
-            "bishop_open_bonus",
-            "pawn_islands_mg",
-            "pawn_islands_eg",
-            "ocb_scale_factor",
-            "king_passer_own_eg",
-            "king_passer_enemy_eg",
-            "connected_passer_sq_mg",
-            "connected_passer_sq_eg",
-            "imbalance_exchange_mg",
-            "imbalance_exchange_eg",
-            "imbalance_rook_pair_mg",
-            "imbalance_rook_pair_eg",
-            "imbalance_knight_pair_eg",
-            "imbalance_queen_vs_minors_mg",
-            "imbalance_queen_vs_minors_eg",
-            "doubled_rook_file_mg",
-            "doubled_rook_file_eg",
-            "doubled_rook_7th_mg",
-            "doubled_rook_7th_eg",
-            "trapped_bishop_mg",
-            "trapped_bishop_eg",
-        ];
-        NAMES[idx].to_string()
-    }
-
-    /// Print parameters as Rust code suitable for pasting into eval.rs.
-    pub fn print_rust_code(&self) {
-        println!("// Material values (P, N, B, R, Q)");
-        println!("material_mg: {:?},", self.material_mg);
-        println!("material_eg: {:?},", self.material_eg);
-
-        println!("\n// Piece-square tables (MG)");
-        for (i, name) in PIECE_NAMES.iter().enumerate() {
-            println!("#[rustfmt::skip]");
-            println!("// PST MG {name}");
-            print!("[");
-            for sq in 0..64 {
-                if sq % 8 == 0 {
-                    print!("\n    ");
-                }
-                print!("{:4},", self.pst_mg[i][sq]);
-            }
-            println!("\n],");
-        }
-
-        println!("\n// Piece-square tables (EG)");
-        for (i, name) in PIECE_NAMES.iter().enumerate() {
-            println!("#[rustfmt::skip]");
-            println!("// PST EG {name}");
-            print!("[");
-            for sq in 0..64 {
-                if sq % 8 == 0 {
-                    print!("\n    ");
-                }
-                print!("{:4},", self.pst_eg[i][sq]);
-            }
-            println!("\n],");
-        }
-
-        println!("\n// Scalar parameters");
-        for i in 0..NUM_SCALAR_PARAMS {
-            println!("{}: {},", self.scalar_name(i), self.get_scalar(i));
         }
     }
 }

@@ -10,8 +10,7 @@
 │   ├── chess-core/               # Move generation, attack tables, validation
 │   ├── chess-engine/             # Search, HCE evaluation, Syzygy WDL probing
 │   ├── chess-nnue/               # NNUE inference + embedded net (build.rs)
-│   ├── chess-uci/                # UCI protocol handler
-│   └── chess-tuner/              # HCE parameter tuner (deprecated — see below)
+│   └── chess-uci/                # UCI protocol handler
 ├── scripts/                      # build & setup helpers (Android, Syzygy download)
 └── assets/                       # Gitignored — local resources
 ```
@@ -33,7 +32,7 @@ Alpha-beta with iterative deepening and PVS:
 Two backends:
 
 - **NNUE** (default): HalfKP 785×32→(1024 pairwise 512)×2→16→32→1, 32 king buckets × 8 material output stacks. Embedded at compile time via `include_bytes!`; dense L1/L2 read from the net header (`1..=64`) so architecture-trial nets load without a rebuild.
-- **HCE**: tapered MG/EG with pawn, mobility, king safety, pawn structure, threat, center, connectivity, space, and material-imbalance terms. Fallback when the embedded net is zeroed by `build.rs`.
+- **HCE**: tapered MG/EG with pawn, mobility, king safety, pawn structure, threat, center, connectivity, space, and material-imbalance terms. Fallback when the embedded net is zeroed by `build.rs`. Superseded by NNUE; HCE parameter work is out of scope for new PRs.
 
 ### NNUE net embedding
 
@@ -51,7 +50,6 @@ WDL probing via `pyrrhic-rs` at alpha-beta nodes when castling rights are gone a
 
 ```bash
 cargo build --release              # endspiel binary
-cargo build --release --workspace  # engine + chess-tuner
 ```
 
 ### Native CPU optimisation / release contract
@@ -129,15 +127,4 @@ Lands in `assets/syzygy/` (gitignored). KRK probe sanity check (`go movetime 500
 ```bash
 (printf "uci\nisready\nsetoption name SyzygyPath value assets/syzygy\nucinewgame\nposition fen 8/8/8/8/4K3/8/4R3/7k w - - 0 1\ngo movetime 500\n"; sleep 2) \
   | ./target/release/endspiel
-```
-
-## HCE Tuning (`chess-tuner`) — deprecated
-
-Superseded by NNUE; only exists as the fallback net-zero path. Work targeting HCE parameters, not the NNUE net, is out of scope for new PRs.
-
-```bash
-cargo build --release -p chess-tuner
-target/release/chess-tuner --data assets/lichess_db_eval.jsonl.zst --epochs 200 --output params.json
-target/release/chess-tuner --apply params.json
-# full flags: target/release/chess-tuner --help
 ```
