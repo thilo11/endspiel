@@ -355,18 +355,6 @@ fn evaluate_impl(
     }
 }
 
-/// Apply the endgame scale factor to an externally-computed score (e.g. NNUE).
-///
-/// `score_from_white` must be from **White's perspective** (positive = White winning),
-/// because `endgame_scale_factor` uses the sign to identify the winning side in
-/// no-pawn endings.  Returns the scaled score, still from White's perspective.
-#[inline]
-pub(crate) fn scale_for_endgame(board: &Board, score_from_white: i32) -> i32 {
-    let phase = game_phase(board);
-    let scale = endgame_scale_factor(board, default_params(), score_from_white, phase);
-    score_from_white * scale / 128
-}
-
 #[inline]
 fn soft_cap_signed(value: i32, cap: i32) -> i32 {
     if cap <= 0 || value == 0 {
@@ -2560,6 +2548,13 @@ fn chebyshev_distance(a: Square, b: Square) -> u8 {
 mod tests {
     use super::*;
     use chess_common::Board;
+
+    /// The HCE endgame scale applied to a White-perspective score.
+    fn scale_for_endgame(board: &Board, score_from_white: i32) -> i32 {
+        let scale =
+            endgame_scale_factor(board, default_params(), score_from_white, game_phase(board));
+        score_from_white * scale / 128
+    }
 
     #[test]
     fn r_minor_vs_r_scale_respects_pawn_count() {
