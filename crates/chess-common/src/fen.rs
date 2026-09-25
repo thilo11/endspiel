@@ -262,9 +262,7 @@ fn parse_castling_field(board: &mut Board, field: &str) -> Result<(), FenError> 
             'A'..='H' => rook_file_castle(board, Color::White, c as u8 - b'A')?,
             'a'..='h' => rook_file_castle(board, Color::Black, c as u8 - b'a')?,
             _ => {
-                return Err(FenError::Invalid(format!(
-                    "bad castling rights: {field}"
-                )));
+                return Err(FenError::Invalid(format!("bad castling rights: {field}")));
             }
         };
         let flag = castle_flag(color, kingside);
@@ -318,18 +316,12 @@ fn outer_rook_file(board: &Board, color: Color, kingside: bool) -> Result<u8, Fe
         }
     }
     found.ok_or_else(|| {
-        FenError::Invalid(
-            "castling right has no rook on that side of the king".to_string(),
-        )
+        FenError::Invalid("castling right has no rook on that side of the king".to_string())
     })
 }
 
 /// Shredder-FEN / X-FEN file letter: the rook on that back-rank file.
-fn rook_file_castle(
-    board: &Board,
-    color: Color,
-    file: u8,
-) -> Result<(Color, bool, u8), FenError> {
+fn rook_file_castle(board: &Board, color: Color, file: u8) -> Result<(Color, bool, u8), FenError> {
     let king = board.king_square(color);
     let rank = back_rank(color);
     if king.rank() != rank {

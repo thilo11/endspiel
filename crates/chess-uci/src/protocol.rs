@@ -43,7 +43,10 @@ pub struct GoParams {
 /// A response sent from the engine to the GUI.
 #[derive(Debug, Clone)]
 pub enum UciResponse {
-    Id { name: String, author: String },
+    Id {
+        name: String,
+        author: String,
+    },
     UciOk,
     ReadyOk,
     BestMove {

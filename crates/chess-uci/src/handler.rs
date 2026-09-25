@@ -381,8 +381,7 @@ impl UciHandler {
         // junk. The men >= 24 guard keeps this out of endgames and TB positions
         // even for bare-FEN probes, where game_ply reads 0.
         let opening_variety = self.opening_variety;
-        let variety_active =
-            opening_variety_active(opening_variety, self.chess960, &self.board);
+        let variety_active = opening_variety_active(opening_variety, self.chess960, &self.board);
         let effective_multi_pv = if variety_active {
             self.multi_pv.max(4)
         } else {
@@ -964,8 +963,8 @@ mod tests {
         let board = Board::starting_position();
         let best = mv("e2e4");
         for pv in [vec![best], Vec::new()] {
-            let ponder = validated_ponder_move(&board, best, &pv)
-                .expect("fallback ponder for short PV");
+            let ponder =
+                validated_ponder_move(&board, best, &pv).expect("fallback ponder for short PV");
             let mut after = board.clone();
             after.make_move(best);
             assert!(chess_core::is_legal_move(&after, ponder));
@@ -979,8 +978,7 @@ mod tests {
     #[test]
     fn ponder_move_falls_back_in_short_tb_style_endgame() {
         // K+P vs K+B (4-man): search may resolve with a single-move PV.
-        let board =
-            Board::from_fen("8/8/6K1/5P2/8/3k4/1b6/8 w - - 0 66").expect("valid fen");
+        let board = Board::from_fen("8/8/6K1/5P2/8/3k4/1b6/8 w - - 0 66").expect("valid fen");
         let legal = chess_core::generate_legal_moves(&board);
         let best = *legal.as_slice().first().expect("has moves");
         let ponder = validated_ponder_move(&board, best, &[best])
@@ -1029,9 +1027,7 @@ mod tests {
             "g1"
         );
         assert_eq!(
-            board
-                .piece_at(chess_common::Square::F1)
-                .map(|p| p.kind),
+            board.piece_at(chess_common::Square::F1).map(|p| p.kind),
             Some(chess_common::PieceKind::Rook)
         );
         assert_eq!(
@@ -1054,8 +1050,7 @@ mod tests {
 
     #[test]
     fn chess960_uci_encodes_castle_as_king_takes_rook() {
-        let board =
-            Board::from_fen("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1").unwrap();
+        let board = Board::from_fen("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1").unwrap();
         let castle = chess_core::generate_legal_moves(&board)
             .iter()
             .copied()

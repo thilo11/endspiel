@@ -56,9 +56,9 @@ pub fn is_legal_move(board: &Board, m: Move) -> bool {
     let to = m.to_sq();
     let promo = m.flag().promotion_piece();
 
-    legal_moves.iter().any(|legal| {
-        move_matches_uci(board, *legal, from, to, promo)
-    })
+    legal_moves
+        .iter()
+        .any(|legal| move_matches_uci(board, *legal, from, to, promo))
 }
 
 /// Find the legal move matching the given from/to/promotion, returning the
@@ -208,8 +208,7 @@ mod tests {
 
     #[test]
     fn chess960_king_takes_rook_matches_castle() {
-        let board =
-            Board::from_fen("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1").unwrap();
+        let board = Board::from_fen("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1").unwrap();
         let rook_uci = Move::from_uci("e1h1").unwrap();
         let dest_uci = Move::from_uci("e1g1").unwrap();
         let via_rook = find_legal_move_uci(&board, rook_uci, true).unwrap();

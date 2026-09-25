@@ -33,8 +33,7 @@ pub struct Board {
 
 impl Board {
     /// Standard-chess rook origins (H1, A1, H8, A8).
-    pub const STANDARD_CASTLE_ROOKS: [Square; 4] =
-        [Square::H1, Square::A1, Square::H8, Square::A8];
+    pub const STANDARD_CASTLE_ROOKS: [Square; 4] = [Square::H1, Square::A1, Square::H8, Square::A8];
 
     #[inline]
     pub fn castle_rook_index(color: Color, kingside: bool) -> usize {
@@ -169,8 +168,7 @@ impl Board {
             }
         }
 
-        let is_castle =
-            matches!(flag, MoveFlag::KingsideCastle | MoveFlag::QueensideCastle);
+        let is_castle = matches!(flag, MoveFlag::KingsideCastle | MoveFlag::QueensideCastle);
 
         // Safety: clear any piece at `to` not already removed by the explicit capture
         // handling above.  In a legal game this is always a no-op.  Under a TT hash
@@ -181,9 +179,7 @@ impl Board {
         // wrong TB entry → sq=64 from poplsb(0) → OOB in OFF_DIAG / BINOMIAL → SEGV).
         // Skip for castling: Chess960 can have from==to (king already on c/g),
         // and the destination may still hold the castling rook.
-        if !is_castle
-            && let Some(ghost) = self.piece_at(to)
-        {
+        if !is_castle && let Some(ghost) = self.piece_at(to) {
             self.remove_piece(to, ghost);
         }
 
@@ -273,8 +269,7 @@ impl Board {
                 let rook_from = self.castle_rook(us, kingside);
                 let rook_to = Self::rook_castle_to(us, kingside);
                 if rook_from != rook_to {
-                    self.hash ^=
-                        z.piece_sq[us.index()][PieceKind::Rook.index()][rook_from.index()];
+                    self.hash ^= z.piece_sq[us.index()][PieceKind::Rook.index()][rook_from.index()];
                     self.hash ^= z.piece_sq[us.index()][PieceKind::Rook.index()][rook_to.index()];
                 }
             }
@@ -321,8 +316,7 @@ impl Board {
             self.fullmove_number -= 1;
         }
 
-        let is_castle =
-            matches!(flag, MoveFlag::KingsideCastle | MoveFlag::QueensideCastle);
+        let is_castle = matches!(flag, MoveFlag::KingsideCastle | MoveFlag::QueensideCastle);
 
         if is_castle {
             let kingside = flag == MoveFlag::KingsideCastle;
