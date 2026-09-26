@@ -2862,7 +2862,8 @@ fn alpha_beta(
                 } else {
                     state.tune.fut_margin_noimp
                 }) * depth as i32
-                    + 50;
+                    + 50
+                    + (hist + cont / 2) / 64;
                 if static_eval + futility_margin <= alpha {
                     board.unmake_move(m, captured, prev_castling, prev_ep, prev_halfmove);
                     continue;
