@@ -2880,7 +2880,7 @@ fn alpha_beta(
                 let lmp_threshold = if improving {
                     3 + depth as usize * depth as usize
                 } else {
-                    (3 + depth as usize * depth as usize) / 2
+                    (3 + depth as usize * depth as usize) * 2 / 3
                 };
                 if moves_searched as usize >= lmp_threshold {
                     board.unmake_move(m, captured, prev_castling, prev_ep, prev_halfmove);
