@@ -340,6 +340,12 @@ fn dtz_is_progress(board: &Board) -> bool {
     our_pawns || their_material
 }
 
+/// True when we have at least two non-king pieces, so one can be shed while
+/// the rest still wins.
+fn has_spare_piece(board: &Board) -> bool {
+    board.occupancy[board.side_to_move.index()].0.count_ones() > 2
+}
+
 fn chebyshev(a: Square, b: Square) -> u8 {
     a.file().abs_diff(b.file()).max(a.rank().abs_diff(b.rank()))
 }
@@ -515,8 +521,11 @@ pub fn rank_root_moves(tb: &SyzygyTB, board: &Board) -> Option<RootTbRanking> {
         // Unique non-hanging DTZ-minimum (071AfrC4 78...Nf1+): delayed give-away
         // that is not an immediate hang, but is the only min-DTZ win. Deprioritise
         // it; do not drop it, so a proven shorter mate can still promote it.
+        // Only with a piece to spare: a single piece (KRvK, KQvK) can never be
+        // given away in a win, so DTZ counts down to mate and the unique minimum
+        // is the fastest mate (lichess RTRQmcfr: 81.Kf5 skipped, mate at hmc 99).
         let mut unique_min_dtz: Option<u16> = None;
-        if !progress {
+        if !progress && has_spare_piece(board) {
             let min_keep = scored.iter().filter(|s| !s.hang).map(|s| s.dtz).min();
             if let Some(min_dtz) = min_keep {
                 let count = scored
@@ -837,5 +846,28 @@ mod tests {
             let i = moves.iter().position(|m| m == k).expect(k);
             assert!(i < nf1, "{k} must outrank Nf1+, got {moves:?}");
         }
+    }
+
+    #[test]
+    fn rank_root_moves_heads_krvk_with_unique_min_dtz_rtrqmcfr() {
+        // lichess RTRQmcfr: in KRvK the unique DTZ-minimum is the fastest mate,
+        // not a give-away. Sorting it last (81.Re2 instead of Kf5, 88.Ke4
+        // instead of Rg2+) stretched a 16-move mate to 50 moves (mate at hmc 99).
+        let _guard = syzygy_test_lock().lock().expect("lock syzygy test mutex");
+        let path = syzygy_path();
+        if !path.exists() {
+            return;
+        }
+        let tb = SyzygyTB::new(path.to_string_lossy().as_ref()).expect("load syzygy tables");
+        let (head, _) = ranking_head(&tb, "8/5k2/4R3/8/6K1/8/8/8 w - - 23 81");
+        assert_eq!(
+            head, "g4f5",
+            "expected 81.Kf5 (DTZ 10) at the head, got {head}"
+        );
+        let (head, _) = ranking_head(&tb, "8/8/8/4K1k1/8/8/4R3/8 w - - 37 88");
+        assert_eq!(
+            head, "e2g2",
+            "expected 88.Rg2+ (DTZ 12) at the head, got {head}"
+        );
     }
 }
