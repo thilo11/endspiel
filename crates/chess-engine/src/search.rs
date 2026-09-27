@@ -2822,7 +2822,15 @@ fn alpha_beta(
             if depth <= 5
                 && !m.is_capture()
                 && !m.is_promotion()
-                && !see::see_ge(board, m, -state.tune.see_quiet_margin * depth as i32)
+                && !see::see_ge(
+                    board,
+                    m,
+                    -state.tune.see_quiet_margin * depth as i32
+                        - state.learning.history[us.index()][m.from_sq().index()]
+                            [m.to_sq().index()]
+                        .max(0)
+                            / 64,
+                )
             {
                 continue;
             }
