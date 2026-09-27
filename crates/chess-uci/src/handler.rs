@@ -55,9 +55,43 @@ fn engine_name_string() -> String {
 }
 
 /// Final-depth MultiPV lines captured from the info stream for the opening
-/// variety draw: (depth, [(raw score, pv)]). Reset whenever a deeper
-/// iteration starts reporting.
-type VarietyLines = Arc<Mutex<(u8, Vec<(i32, Vec<Move>)>)>>;
+/// variety draw: (depth, lines). Reset whenever a deeper iteration starts
+/// reporting.
+type VarietyLines = Arc<Mutex<(u8, Vec<SearchInfo>)>>;
+
+/// UCI `info` line for one search line. The WDL uses the raw score (the sigmoid
+/// is calibrated against it); the displayed cp score is normalized so that 100
+/// cp ≈ one "WDL pawn" (Stockfish's convention). Mate scores pass through.
+fn uci_info_line(
+    info: &SearchInfo,
+    board: &Board,
+    chess960: bool,
+    show_wdl: bool,
+    multipv: Option<usize>,
+) -> UciInfo {
+    let wdl = if show_wdl && !info.score.is_mate() {
+        Some(score_to_wdl(info.score.centipawns()))
+    } else {
+        None
+    };
+    UciInfo {
+        depth: Some(info.depth),
+        seldepth: Some(info.seldepth),
+        multipv,
+        score: Some(normalize_display_score(info.score)),
+        nodes: Some(info.nodes),
+        time: Some(info.time_ms),
+        pv: info
+            .pv
+            .iter()
+            .map(|m| board.move_to_uci(*m, chess960))
+            .collect(),
+        hashfull: Some(info.hashfull),
+        nps: (info.nodes * 1000).checked_div(info.time_ms),
+        wdl,
+        string: None,
+    }
+}
 
 /// The main UCI protocol handler.
 pub struct UciHandler {
@@ -453,7 +487,10 @@ impl UciHandler {
         let syzygy_tb = self.engine.syzygy_tb().cloned();
         let book = self.engine.book();
         let show_wdl = self.show_wdl;
-        let multi_pv = effective_multi_pv;
+        // Report only the lines the GUI asked for. Opening variety widens the
+        // search to 4 lines internally; exposing them made GUIs (lichess-bot
+        // keeps the last line) display the WORST candidate as the engine's line.
+        let shown_multi_pv = self.multi_pv.max(1);
         let variety_lines: VarietyLines = Arc::new(Mutex::new((0, Vec::new())));
         let variety_lines_cb = Arc::clone(&variety_lines);
         let stop = Arc::new(AtomicBool::new(false));
@@ -474,42 +511,20 @@ impl UciHandler {
                                 *vl = (info.depth, Vec::new());
                             }
                             if info.depth == vl.0 && !info.pv.is_empty() {
-                                vl.1.push((info.score.0, info.pv.clone()));
+                                vl.1.push(info.clone());
                             }
                         }
-                        let nps = (info.nodes * 1000).checked_div(info.time_ms);
-                        // WDL uses the raw score (sigmoid formula is calibrated against it).
-                        let wdl = if show_wdl && !info.score.is_mate() {
-                            Some(score_to_wdl(info.score.centipawns()))
-                        } else {
-                            None
-                        };
-                        // Normalize displayed cp score: divide raw score by WDL_B/100 so that
-                        // 100 displayed cp ≈ 1 "WDL pawn" (consistent with Stockfish's convention).
-                        // Mate scores are passed through unchanged.
-                        let displayed_score = normalize_display_score(info.score);
-                        let uci_info = UciInfo {
-                            depth: Some(info.depth),
-                            seldepth: Some(info.seldepth),
-                            multipv: if multi_pv > 1 {
-                                Some(info.multipv_line)
-                            } else {
-                                None
-                            },
-                            score: Some(displayed_score),
-                            nodes: Some(info.nodes),
-                            time: Some(info.time_ms),
-                            pv: info
-                                .pv
-                                .iter()
-                                .map(|m| board_for_uci.move_to_uci(*m, chess960))
-                                .collect(),
-                            hashfull: Some(info.hashfull),
-                            nps,
-                            wdl,
-                            string: None,
-                        };
-                        send_response(&UciResponse::Info(uci_info));
+                        if info.multipv_line > shown_multi_pv {
+                            return;
+                        }
+                        let multipv = (shown_multi_pv > 1).then_some(info.multipv_line);
+                        send_response(&UciResponse::Info(uci_info_line(
+                            info,
+                            &board_for_uci,
+                            chess960,
+                            show_wdl,
+                            multipv,
+                        )));
                     });
 
                     let pool = chess_engine::threads::ThreadPool::new(num_threads);
@@ -553,14 +568,14 @@ impl UciHandler {
                 let mut result = result;
                 if variety_active && !result.score.is_mate() && !result.best_move.is_null() {
                     let vl = variety_lines.lock().unwrap_or_else(|p| p.into_inner());
-                    let top = vl.1.iter().map(|(s, _)| *s).max().unwrap_or(result.score.0);
-                    let eligible: Vec<&(i32, Vec<Move>)> = vl
+                    let top = vl.1.iter().map(|l| l.score.0).max().unwrap_or(result.score.0);
+                    let eligible: Vec<&SearchInfo> = vl
                         .1
                         .iter()
-                        .filter(|(s, pv)| {
-                            !pv.is_empty()
-                                && !chess_common::Score(*s).is_mate()
-                                && *s >= top - opening_variety
+                        .filter(|l| {
+                            !l.pv.is_empty()
+                                && !l.score.is_mate()
+                                && l.score.0 >= top - opening_variety
                         })
                         .collect();
                     if eligible.len() > 1 {
@@ -573,20 +588,37 @@ impl UciHandler {
                         x ^= x >> 7;
                         x ^= x << 17;
                         let pick = eligible[(x as usize) % eligible.len()];
-                        if pick.1[0] != result.best_move {
-                            log::info!(
+                        if pick.pv[0] != result.best_move {
+                            let note = format!(
                                 "opening variety: playing {} ({}cp) over {} ({}cp), {} candidates in {}cp window",
-                                pick.1[0].to_uci(),
-                                pick.0,
-                                result.best_move.to_uci(),
+                                board.move_to_uci(pick.pv[0], chess960),
+                                pick.score.0,
+                                board.move_to_uci(result.best_move, chess960),
                                 result.score.0,
                                 eligible.len(),
                                 opening_variety
                             );
+                            log::info!("{note}");
+                            // The last reported line must be the one we play: GUIs
+                            // show the final `info` as the engine's choice.
+                            send_response(&UciResponse::Info(UciInfo {
+                                string: Some(note),
+                                ..UciInfo::default()
+                            }));
+                            let latest = vl.1.iter().map(|l| (l.nodes, l.time_ms)).max();
+                            let mut line = pick.clone();
+                            if let Some((nodes, time_ms)) = latest {
+                                line.nodes = nodes;
+                                line.time_ms = time_ms;
+                            }
+                            let multipv = (shown_multi_pv > 1).then_some(1);
+                            send_response(&UciResponse::Info(uci_info_line(
+                                &line, &board, chess960, show_wdl, multipv,
+                            )));
                         }
-                        result.score = chess_common::Score(pick.0);
-                        result.pv = pick.1.clone();
-                        result.best_move = pick.1[0];
+                        result.score = pick.score;
+                        result.pv = pick.pv.clone();
+                        result.best_move = pick.pv[0];
                     }
                 }
 
