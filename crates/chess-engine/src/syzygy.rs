@@ -306,6 +306,15 @@ pub(crate) fn syzygy_test_lock() -> &'static std::sync::Mutex<()> {
     LOCK.get_or_init(|| std::sync::Mutex::new(()))
 }
 
+/// Serialise Syzygy tests. A panicking test poisons the mutex; recover the
+/// guard so one failure does not cascade into every later Syzygy test.
+#[cfg(test)]
+pub(crate) fn syzygy_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    syzygy_test_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Probe DTZ information for the root position.
 ///
 /// This requires exclusive access to the underlying Syzygy handle.
@@ -579,7 +588,7 @@ pub fn rank_root_moves(tb: &SyzygyTB, board: &Board) -> Option<RootTbRanking> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SyzygyTB, TB_WIN_SCORE, rank_root_moves, syzygy_test_lock};
+    use super::{SyzygyTB, TB_WIN_SCORE, rank_root_moves, syzygy_test_guard};
     use chess_common::Board;
     use pyrrhic_rs::WdlProbeResult;
     use std::path::PathBuf;
@@ -593,7 +602,7 @@ mod tests {
         // A losing root: DTZ used to mint a (negative) mate score here. The
         // ranker must classify it as a loss in the TB band — never a mate — and
         // offer no winning moves; defence is left to the search.
-        let _guard = syzygy_test_lock().lock().expect("lock syzygy test mutex");
+        let _guard = syzygy_test_guard();
         let path = syzygy_path();
         if !path.exists() {
             return;
@@ -632,7 +641,7 @@ mod tests {
     fn rank_root_moves_ranks_precapture_tb_win() {
         // A winning root whose best move is the pawn-capturing a8c6. The ranker
         // must report a TB-win-band score (not a mate) and list a8c6 first.
-        let _guard = syzygy_test_lock().lock().expect("lock syzygy test mutex");
+        let _guard = syzygy_test_guard();
         let path = syzygy_path();
         if !path.exists() {
             return;
@@ -667,7 +676,7 @@ mod tests {
     fn rank_root_moves_returns_none_when_root_is_out_of_tb_range() {
         // The 32-piece start position is outside any loaded Syzygy table; the
         // ranker must report no guidance rather than fabricate one.
-        let _guard = syzygy_test_lock().lock().expect("lock syzygy test mutex");
+        let _guard = syzygy_test_guard();
         let path = syzygy_path();
         if !path.exists() {
             return;
@@ -698,7 +707,7 @@ mod tests {
         // lichess RBmggG2n, Black to move 202: K+B+2P vs K+B is a 6-man draw.
         // Only Bd8 and Kb7 hold; Ka8 (played live) loses. The ranker must
         // expose the holders and omit the losing king step.
-        let _guard = syzygy_test_lock().lock().expect("lock syzygy test mutex");
+        let _guard = syzygy_test_guard();
         let path = syzygy_path();
         if !path.exists() {
             return;
@@ -743,7 +752,7 @@ mod tests {
         // lichess 071AfrC4 move 72: d1=Q and d1=N are both DTZ 1 wins. The
         // tablebase-recommended underpromotion used to sort first and was
         // played. Queen-preferring DTZ ties keep the faster mate at the head.
-        let _guard = syzygy_test_lock().lock().expect("lock syzygy test mutex");
+        let _guard = syzygy_test_guard();
         let path = syzygy_path();
         if !path.exists() {
             return;
@@ -763,7 +772,7 @@ mod tests {
     #[test]
     fn rank_root_moves_does_not_head_with_queen_hang_071afrc4_m74() {
         // 74...Qg3+ is the min-DTZ win only because 75.Kxg3 zeroes the clock.
-        let _guard = syzygy_test_lock().lock().expect("lock syzygy test mutex");
+        let _guard = syzygy_test_guard();
         let path = syzygy_path();
         if !path.exists() {
             return;
@@ -792,7 +801,7 @@ mod tests {
         // 78...Nf1+ is the unique DTZ-3 win (mate in 12). King moves at DTZ 7
         // mate in 8. Deprioritising the unique min-DTZ outlier puts a king
         // approach first without inverting the rest of the list (Ra4 is DTZ 9).
-        let _guard = syzygy_test_lock().lock().expect("lock syzygy test mutex");
+        let _guard = syzygy_test_guard();
         let path = syzygy_path();
         if !path.exists() {
             return;
@@ -825,7 +834,7 @@ mod tests {
 
     #[test]
     fn rank_root_moves_does_not_head_with_nf1_check_071afrc4_m82() {
-        let _guard = syzygy_test_lock().lock().expect("lock syzygy test mutex");
+        let _guard = syzygy_test_guard();
         let path = syzygy_path();
         if !path.exists() {
             return;
@@ -853,7 +862,7 @@ mod tests {
         // lichess RTRQmcfr: in KRvK the unique DTZ-minimum is the fastest mate,
         // not a give-away. Sorting it last (81.Re2 instead of Kf5, 88.Ke4
         // instead of Rg2+) stretched a 16-move mate to 50 moves (mate at hmc 99).
-        let _guard = syzygy_test_lock().lock().expect("lock syzygy test mutex");
+        let _guard = syzygy_test_guard();
         let path = syzygy_path();
         if !path.exists() {
             return;

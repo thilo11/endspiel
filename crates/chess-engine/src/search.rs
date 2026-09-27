@@ -4422,9 +4422,7 @@ mod tests {
     fn avoids_perpetual_trap_from_lichess_r2kln7mg() {
         // lichess.org/R2KlN7mg: Q+K vs K+a4 after 68...Ke5 — must not play Qe7+
         // into a threefold repetition while believing it is mating.
-        let _guard = crate::syzygy::syzygy_test_lock()
-            .lock()
-            .expect("lock syzygy test mutex");
+        let _guard = crate::syzygy::syzygy_test_guard();
         let path = syzygy_path();
         if !path.exists() {
             return;
@@ -4516,9 +4514,7 @@ mod tests {
         // repetition budget away (77.Kg4, 79.Kg4, 81.Kh5) instead of
         // converting. At move 81 the DTZ-progress move is Nf4 (dtz 16, fresh
         // child); the shuffles Kg4/Kh5 (dtz 20/22) must stay behind it.
-        let _guard = crate::syzygy::syzygy_test_lock()
-            .lock()
-            .expect("lock syzygy test mutex");
+        let _guard = crate::syzygy::syzygy_test_guard();
         let path = syzygy_path();
         if !path.exists() {
             return;
@@ -4562,9 +4558,7 @@ mod tests {
         // 81 the DTZ head is Kf4 (dtz 43, fresh child, the probe's own
         // recommendation); the game played Qa7+ (dtz 49). The choice must
         // follow the tablebase order, not the cp ordering.
-        let _guard = crate::syzygy::syzygy_test_lock()
-            .lock()
-            .expect("lock syzygy test mutex");
+        let _guard = crate::syzygy::syzygy_test_guard();
         let path = syzygy_path();
         if !path.exists() {
             return;
@@ -4629,9 +4623,7 @@ mod tests {
         // and play a mate-optimal king move at the later roots. Search is
         // sticky to that order below mate-finding depth, so both 1 and 4
         // threads have to agree on the property.
-        let _guard = crate::syzygy::syzygy_test_lock()
-            .lock()
-            .expect("lock syzygy test mutex");
+        let _guard = crate::syzygy::syzygy_test_guard();
         let path = syzygy_path();
         if !path.exists() {
             return;
@@ -4711,12 +4703,26 @@ mod tests {
                 "m78 / {threads}t must not play Nf1+, score={}",
                 m78.score
             );
-            assert!(
-                M78_KINGS.contains(&m78.best_move.to_uci().as_str()),
-                "m78 / {threads}t expected a mate-optimal king move, got {} score={}",
-                m78.best_move.to_uci(),
-                m78.score
-            );
+            // One thread follows the DTZ order deterministically. With helpers,
+            // a thread can prove a mate for another material-keeping win first
+            // (82...Kb1, also DTZ 6) and a proven mate rightly outranks an
+            // unproven win, so there only the win must be kept.
+            if threads == 1 {
+                assert!(
+                    M78_KINGS.contains(&m78.best_move.to_uci().as_str()),
+                    "m78 / 1t expected a mate-optimal king move, got {} score={}",
+                    m78.best_move.to_uci(),
+                    m78.score
+                );
+            } else {
+                assert!(
+                    r78.as_ref()
+                        .is_some_and(|r| r.winning_moves.contains(&m78.best_move)),
+                    "m78 / {threads}t must keep the TB win, got {} score={}",
+                    m78.best_move.to_uci(),
+                    m78.score
+                );
+            }
 
             let m82 =
                 search_fen_with_syzygy_threads(M82, 16, threads, tb.clone(), r82.clone(), true);
@@ -4726,12 +4732,26 @@ mod tests {
                 "m82 / {threads}t must not play Nf1+, score={}",
                 m82.score
             );
-            assert!(
-                M82_KINGS.contains(&m82.best_move.to_uci().as_str()),
-                "m82 / {threads}t expected a mate-optimal king move, got {} score={}",
-                m82.best_move.to_uci(),
-                m82.score
-            );
+            // One thread follows the DTZ order deterministically. With helpers,
+            // a thread can prove a mate for another material-keeping win first
+            // (82...Kb1, also DTZ 6) and a proven mate rightly outranks an
+            // unproven win, so there only the win must be kept.
+            if threads == 1 {
+                assert!(
+                    M82_KINGS.contains(&m82.best_move.to_uci().as_str()),
+                    "m82 / 1t expected a mate-optimal king move, got {} score={}",
+                    m82.best_move.to_uci(),
+                    m82.score
+                );
+            } else {
+                assert!(
+                    r82.as_ref()
+                        .is_some_and(|r| r.winning_moves.contains(&m82.best_move)),
+                    "m82 / {threads}t must keep the TB win, got {} score={}",
+                    m82.best_move.to_uci(),
+                    m82.score
+                );
+            }
         }
     }
 
@@ -4874,9 +4894,7 @@ mod tests {
 
     #[test]
     fn syzygy_guides_precapture_transition_to_bxc6() {
-        let _guard = crate::syzygy::syzygy_test_lock()
-            .lock()
-            .expect("lock syzygy test mutex");
+        let _guard = crate::syzygy::syzygy_test_guard();
         let path = syzygy_path();
         if !path.exists() {
             return;
@@ -4898,9 +4916,7 @@ mod tests {
     fn syzygy_does_not_play_losing_ka8_in_kbppvkb_draw() {
         // lichess RBmggG2n: drawn 6-man KBPPvKB, live game played 202...Ka8
         // and was mated. With TB restriction the root must stay in {Bd8, Kb7}.
-        let _guard = crate::syzygy::syzygy_test_lock()
-            .lock()
-            .expect("lock syzygy test mutex");
+        let _guard = crate::syzygy::syzygy_test_guard();
         let path = syzygy_path();
         if !path.exists() {
             return;
