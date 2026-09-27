@@ -10,6 +10,16 @@ software it depends on and ideas it borrows. This file documents those sources.
   own network loading and inference code; bullet is not linked into or
   distributed with endspiel.
 
+## Training data
+
+- **[Leela Chess Zero](https://lczero.org)** — since 2026-09, endspiel's net is
+  trained partly on position scores from Leela's public **T80** training data
+  (January–June 2024, via the Stockfish-binpack conversion published as
+  [`linrock/test80-2024`](https://huggingface.co/datasets/linrock/test80-2024)).
+  Only positions and scores are used, as score-only labels next to endspiel's own
+  self-play data; no Leela network or code is included. Thanks to the Leela
+  project and everyone who contributed games to it.
+
 ## Endgame tablebase probing
 
 - **[pyrrhic-rs](https://github.com/Algorhythm-sxv/pyrrhic-rs)** (MIT) by

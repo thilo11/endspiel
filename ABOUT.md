@@ -47,8 +47,11 @@ the active pipeline.
 
 That is not “zero external data.” Opening FENs seed games; they are not
 eval targets. The current embedded net's mix also includes a public eval
-dump as one source. What we do *not* do is ship someone else's network
-file or train only on another engine's labels. The trainer is
+dump and — since 2026-09 — position scores from **Leela Chess Zero**'s
+publicly released T80 training data (about two thirds of the rows of the
+current net's corpus, used as score-only labels next to our own). Our thanks
+to the Leela project and its contributors. What we do *not* do is ship
+someone else's network file or train only on another engine's labels. The trainer is
 [Bullet](https://github.com/jw1912/bullet); Syzygy probing is
 `pyrrhic-rs`. Everything else — bitboards, move generation, search, NNUE
 inference, UCI — is hand-written.
