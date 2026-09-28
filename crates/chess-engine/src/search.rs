@@ -794,11 +794,9 @@ fn compute_time_limit(
         let inc = inc_ms.unwrap_or(0);
         let game_ply = board.position_history.len() as u64;
 
-        // Estimate moves remaining in this time control period
-        let mut moves_left = if let Some(mtg) = params.moves_to_go {
-            // Known time control (e.g., "40 moves in 90 min")
-            (mtg as u64).max(1)
-        } else {
+        // Sudden death: estimate the moves remaining in the game. A repeating
+        // control (`movestogo`) overrides the whole allocation below.
+        let mut moves_left: u64 = {
             // Game phase-aware estimate based on piece count
             let total_pieces = (board.occupancy[0] | board.occupancy[1]).count();
             let base_moves = match total_pieces {
@@ -881,9 +879,7 @@ fn compute_time_limit(
             3_000
         };
         let usable_bank = time.saturating_sub(target_bank_ms);
-        let burn_horizon = if let Some(mtg) = params.moves_to_go {
-            (mtg as u64).clamp(4, 16)
-        } else if game_ply < 20 {
+        let burn_horizon: u64 = if game_ply < 20 {
             18
         } else if game_ply < 40 {
             14
@@ -923,6 +919,23 @@ fn compute_time_limit(
         // Long-game safety: keep enough clock in reserve for a long game (incl.
         // long endgame conversions) on every clock control. See fn docs.
         let target = long_game_time_cap(target, inc, time, game_ply);
+
+        // Repeating control ("40 moves in 15 min"): the clock is refilled after
+        // `movestogo` moves, so the sudden-death reserves above (bank term, long-game
+        // cap) do not apply — they left 27-39% of every 40/15 period unused. Spread
+        // the whole clock over the moves left with one move in reserve; the search
+        // stops at ~0.65-1.0x of the soft target, and `max`/`hard` below still bound
+        // every single move.
+        let (target, base) = match params.moves_to_go {
+            Some(mtg) => {
+                let per_move = time / ((mtg as u64).clamp(1, 50) + 1);
+                (
+                    (per_move + inc * 9 / 10) * params.slow_mover / 100,
+                    per_move,
+                )
+            }
+            None => (target, base),
+        };
 
         // Hard maximum with stronger low-time safety to reduce flags.
         let mut max = if time <= 30_000 {
@@ -4140,6 +4153,45 @@ mod tests {
                 hard < time,
                 "with {time}ms on the clock the hard limit is {hard}ms — that flags"
             );
+        }
+    }
+
+    #[test]
+    fn repeating_control_spends_the_period_without_flagging() {
+        // CCRL 40/15: the clock is refilled every 40 moves. The sudden-death caps
+        // (long-game cap, bank term) used to apply here too and left 27-39% of every
+        // period unused. Spending the soft target on every move must now use most of
+        // the period, while no single move's hard limit can take the clock to zero.
+        for (period_ms, inc) in [(900_000u64, 0u64), (60_000, 0), (900_000, 2_000)] {
+            let mut time = period_ms;
+            for m in 1u64..=120 {
+                let mtg = 40 - (m - 1) % 40;
+                let mut board = Board::starting_position();
+                board.position_history = vec![0; (2 * (m - 1)) as usize];
+                let params = SearchParams {
+                    white_time_ms: Some(time),
+                    black_time_ms: Some(time),
+                    white_inc_ms: Some(inc),
+                    black_inc_ms: Some(inc),
+                    moves_to_go: Some(mtg as u32),
+                    ..Default::default()
+                };
+                let (soft, hard, _, _, _) = compute_time_limit(&params, &board);
+                let (soft, hard) = (soft.expect("timed"), hard.expect("timed"));
+                assert!(
+                    hard < time,
+                    "move {m}: hard {hard}ms with {time}ms left flags"
+                );
+                time = time - soft + inc;
+                if mtg == 1 {
+                    let unused = time.saturating_sub(inc * 40) * 100 / period_ms;
+                    assert!(
+                        unused <= 20,
+                        "{period_ms}+{inc}: {unused}% of the period unused after move {m}"
+                    );
+                    time += period_ms;
+                }
+            }
         }
     }
 
