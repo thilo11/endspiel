@@ -31,7 +31,7 @@ Alpha-beta with iterative deepening and PVS:
 
 Two backends:
 
-- **NNUE** (default): HalfKP 785×32→(1024 pairwise 512)×2→16→32→1, 32 king buckets × 8 material output stacks. Embedded at compile time via `include_bytes!`; dense L1/L2 read from the net header (`1..=64`) so architecture-trial nets load without a rebuild.
+- **NNUE** (default): HalfKP 785×32→(1536 pairwise 768)×2→16→32→1, 32 king buckets × 8 material output stacks. Embedded at compile time via `include_bytes!`; dense L1/L2 read from the net header (`1..=64`) so architecture-trial nets load without a rebuild.
 - **HCE**: tapered MG/EG with pawn, mobility, king safety, pawn structure, threat, center, connectivity, space, and material-imbalance terms. Fallback when the embedded net is zeroed by `build.rs`. Superseded by NNUE; HCE parameter work is out of scope for new PRs.
 
 ### NNUE net embedding

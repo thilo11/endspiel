@@ -320,7 +320,7 @@ impl UciHandler {
             opt_type: UciOptionType::Check { default: false },
         }));
         let eval_mode = if self.engine.use_nnue() {
-            "NNUE (state-aware HalfKP 785\u{00d7}32\u{2192}(1024 pairwise 512)\u{00d7}2\u{2192}16\u{2192}32\u{2192}1)".to_string()
+            "NNUE (state-aware HalfKP 785\u{00d7}32\u{2192}(1536 pairwise 768)\u{00d7}2\u{2192}16\u{2192}32\u{2192}1)".to_string()
         } else {
             "HCE (no trained NNUE net)".to_string()
         };

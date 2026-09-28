@@ -30,7 +30,7 @@ engine lists; details in [ABOUT.md](ABOUT.md).
   uses `pyrrhic-rs`. Those are the only third-party pieces in the pipeline.
 - **Full UCI compliance** — works in any UCI GUI (Arena, CuteChess, Fritz, Banksia, Scid, …)
 - **Chess960** — Fischer Random / Freestyle: X-FEN and Shredder-FEN, `UCI_Chess960` king-takes-rook castling
-- **NNUE evaluation** (default) — state-aware HalfKP 785×32→(1024 pairwise 512)×2→16→32→1 (8 material-keyed output buckets), with castling rights and en passant in the input. Trained on Endspiel self-play (search scores as labels) and a public eval dump; since 2026-09 the mix also includes score labels from [Leela Chess Zero](https://lczero.org)'s public T80 training data (see [CREDITS.md](CREDITS.md)). The net is embedded in the binary. Older piece-only nets still load. `EvalFile` nets may use dense L1/L2 widths other than 16/32 (up to 64), taken from the ESPNNUE2 header.
+- **NNUE evaluation** (default) — state-aware HalfKP 785×32→(1536 pairwise 768)×2→16→32→1 (8 material-keyed output buckets), with castling rights and en passant in the input. Trained on Endspiel self-play (search scores as labels) and a public eval dump; since 2026-09 the mix also includes score labels from [Leela Chess Zero](https://lczero.org)'s public T80 training data (see [CREDITS.md](CREDITS.md)). The net is embedded in the binary. `EvalFile` nets must match the 1536-wide feature transformer (1024-wide and piece-only nets no longer load). `EvalFile` nets may use dense L1/L2 widths other than 16/32 (up to 64), taken from the ESPNNUE2 header.
 - **HCE fallback** — tapered hand-crafted evaluation used when no trained
   NNUE net is available, with pawn hash, mobility, king safety, pawn
   structure, threats, space, and endgame scaling

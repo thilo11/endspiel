@@ -2,7 +2,7 @@ fn main() {
     const MAGIC: &[u8; 8] = b"ESPNNUE2";
     const OLD_INPUT_SIZE: usize = 768 * 32;
     const INPUT_SIZE: usize = 785 * 32;
-    const FT_SIZE: usize = 1024;
+    const FT_SIZE: usize = 1536;
     const OUTPUT_BUCKETS: usize = 8;
     const L1_SIZE: usize = 16;
     const L2_SIZE: usize = 32;
