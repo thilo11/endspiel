@@ -26,6 +26,7 @@ Alpha-beta with iterative deepening and PVS:
 - **Reductions**: LMR, IIR
 - **Move ordering**: TT → good captures (MVV-LVA) → killers → counter → history-sorted quiets → bad captures
 - **Quiescence**: SEE-based pruning; **SMP**: Lazy SMP with depth diversity
+- **Time management** (`compute_time_limit`, `long_game_time_cap` in `search.rs`): two budgets per move — a soft target (a typical position; the ID loop stops at ~0.35–3× of it depending on PV stability, score drops and node concentration) and a hard limit (≤ 3× soft, ≤ 80% of the clock). Clock controls are capped per move: above 5 min at `inc + time/20` early (17/14/12 later in the game), sudden death keeping that slice down to 400 s and blending to `time/34` by 300 s, so blitz (≤ 5 min) keeps the flag-safe cap. Repeating controls (`movestogo`, e.g. CCRL 40/15) skip those sudden-death caps and spread the clock over the moves left (`time/(movestogo+1)`); at 40/60 that used 79% of each period instead of 56% and measured +19.1 ± 11.1 Elo (782 games). Regression tests: `repeating_control_spends_the_period_without_flagging`, `ten_minute_sudden_death_spends_the_clock_without_flagging`
 
 ### Evaluation
 

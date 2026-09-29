@@ -50,7 +50,7 @@ engine lists; details in [ABOUT.md](ABOUT.md).
 - **Opening books** — load Polyglot `.bin`, EPD (`.epd`, with `bm` opcodes), or PGN (`.pgn`) at runtime; format is auto-detected by extension
 - **WDL output** — optional `wdl W D L` annotation on each `info` line
   (`UCI_ShowWDL`), with the win/draw/loss mapping fit per net
-- **Contempt** and configurable time management (`Move Overhead`, `Slow Mover`)
+- **Contempt** and configurable time management (`Move Overhead`, `Slow Mover`); repeating time controls (`movestogo`, e.g. 40 moves in 15 min) are budgeted per period
 - **Performance** — one universal x86-64 executable detects the host CPU at
   startup and dispatches its hot NNUE inference and accumulator operations to
   AVX512ICL, AVX-512, AVX2, or the portable fallback. AArch64 uses NEON;
