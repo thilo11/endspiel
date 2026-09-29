@@ -628,6 +628,17 @@ impl<'a> SearchState<'a> {
 ///
 /// Sudden death keeps a reserve at every clock: there a flag is fatal, not
 /// merely expensive.
+///
+/// Above a 5-minute clock the bank slice is `time/(2N/3)` (20/17/14/12 by phase),
+/// with or without an increment. Sudden death keeps that slice down to 400 s and
+/// only then blends to the flag-safe `time/34` at 300 s, so 3+0 and 5+0 never see
+/// it; blending from ten minutes changed nothing in a 10+0 game, which leaves
+/// ten minutes after a few moves (187 s and 248 s of 600 unused in QQHtFZaq and
+/// 5bjcnIB6, 2026-09-29).
+/// With an increment, at `time/N` rapid under-spent badly: after the search's own stability stop
+/// and next-iteration prediction the bot averaged ~`time/43` per move — 16.6s
+/// against the opponent's 32.6s over the first 18 moves of a 900+3 game
+/// (ELg7ivU3), and 9:16 left at move 27 of evhAQeHC (2026-09-27).
 fn long_game_time_cap(target_ms: u64, inc_ms: u64, time_ms: u64, game_ply: u64) -> u64 {
     let phase_divisor = match game_ply {
         0..40 => 30u64,
@@ -637,16 +648,17 @@ fn long_game_time_cap(target_ms: u64, inc_ms: u64, time_ms: u64, game_ply: u64) 
     };
 
     if inc_ms == 0 {
-        // Smoothly increase the reserve from the phase-aware classical value
-        // to the flag-safe sudden-death value as the clock approaches 5 min.
-        let divisor = if time_ms >= 600_000 {
-            phase_divisor
+        // Keep the long-clock slice down to 400 s, then blend to the flag-safe
+        // sudden-death value by 5 min (see fn docs).
+        let long_divisor = phase_divisor * 2 / 3;
+        let divisor = if time_ms >= 400_000 {
+            long_divisor
         } else if time_ms <= 300_000 {
             34
         } else {
             let classical_weight = time_ms - 300_000;
-            let reserve_weight = 600_000 - time_ms;
-            (phase_divisor * classical_weight + 34 * reserve_weight) / 300_000
+            let reserve_weight = 400_000 - time_ms;
+            (long_divisor * classical_weight + 34 * reserve_weight) / 100_000
         };
         return target_ms.min(time_ms / divisor);
     }
@@ -655,7 +667,9 @@ fn long_game_time_cap(target_ms: u64, inc_ms: u64, time_ms: u64, game_ply: u64) 
         return target_ms;
     }
 
-    let sustainable = inc_ms.saturating_add(time_ms / phase_divisor);
+    // The increment refunds every move, so the bank may drain faster than in
+    // sudden death (see fn docs).
+    let sustainable = inc_ms.saturating_add(time_ms / (phase_divisor * 2 / 3));
     if time_ms >= 600_000 {
         return target_ms.min(sustainable);
     }
@@ -3984,27 +3998,62 @@ mod tests {
         // 180+0: an over-large target is capped to time/34.
         assert_eq!(long_game_time_cap(15_000, 0, 180_000, 0), 180_000 / 34);
         // At ten minutes the phase-aware classical reserve is fully active.
-        assert_eq!(long_game_time_cap(40_000, 0, 600_000, 0), 600_000 / 30);
+        assert_eq!(long_game_time_cap(40_000, 0, 600_000, 0), 600_000 / 20);
+        // 10+0 keeps it down to 400 s; 5+0 and 3+0 start at the flag-safe cap.
+        assert_eq!(long_game_time_cap(40_000, 0, 450_000, 0), 450_000 / 20);
+        assert_eq!(long_game_time_cap(40_000, 0, 300_000, 0), 300_000 / 34);
+    }
+
+    #[test]
+    fn ten_minute_sudden_death_spends_the_clock_without_flagging() {
+        // 600+0 (QQHtFZaq, 5bjcnIB6): at time/30 the bot finished with 187 s and
+        // 248 s of 600 unused. Spending the soft target on every move must now
+        // reach move 20 with under 300 s left (the old cap: ~325 s), and no hard
+        // limit may ever reach the clock over a 150-move game.
+        let mut time = 600_000u64;
+        for m in 1u64..=150 {
+            let mut board = Board::starting_position();
+            board.position_history = vec![0; (2 * (m - 1)) as usize];
+            let params = SearchParams {
+                white_time_ms: Some(time),
+                black_time_ms: Some(time),
+                ..Default::default()
+            };
+            let (soft, hard, _, _, _) = compute_time_limit(&params, &board);
+            let (soft, hard) = (soft.expect("timed"), hard.expect("timed"));
+            assert!(
+                hard < time,
+                "move {m}: hard {hard}ms with {time}ms left flags"
+            );
+            time -= soft;
+            if m == 20 {
+                assert!(
+                    time < 300_000,
+                    "{time}ms of 600000 still unused after 20 moves"
+                );
+            }
+        }
+        assert!(time > 0);
     }
 
     #[test]
     fn long_game_cap_spends_more_of_the_bank_as_the_game_advances() {
         // The increment is free, so it is spendable above the bank slice.
         assert_eq!(
-            long_game_time_cap(120_000, 5_000, 1_800_000, 0),
-            5_000 + 1_800_000 / 30
+            long_game_time_cap(200_000, 5_000, 1_800_000, 0),
+            5_000 + 1_800_000 / 20
         );
         assert_eq!(
-            long_game_time_cap(120_000, 5_000, 1_800_000, 40),
-            5_000 + 1_800_000 / 26
+            long_game_time_cap(200_000, 5_000, 1_800_000, 40),
+            5_000 + 1_800_000 / 17
         );
         assert_eq!(
-            long_game_time_cap(120_000, 5_000, 1_800_000, 80),
-            5_000 + 1_800_000 / 22
+            long_game_time_cap(200_000, 5_000, 1_800_000, 80),
+            5_000 + 1_800_000 / 14
         );
         assert_eq!(
-            long_game_time_cap(120_000, 5_000, 1_800_000, 120),
-            5_000 + 1_800_000 / 18
+            long_game_time_cap(200_000, 5_000, 1_800_000, 120),
+            5_000 + 1_800_000 / 12
         );
         // Target already under the cap is returned unchanged.
         assert_eq!(long_game_time_cap(1_000, 0, 180_000, 0), 1_000);
@@ -4024,11 +4073,11 @@ mod tests {
         // target and the phase-aware sustainable allocation.
         assert_eq!(
             long_game_time_cap(80_000, 5_000, 450_000, 80),
-            (80_000 + (5_000 + 450_000 / 22)) / 2
+            (80_000 + (5_000 + 450_000 / 14)) / 2
         );
         assert_eq!(
             long_game_time_cap(80_000, 5_000, 600_000, 80),
-            5_000 + 600_000 / 22
+            5_000 + 600_000 / 14
         );
         // Sudden death is capped at ANY clock — a flag there is fatal, and the
         // 180+0 mate-at-move-90 flag is what the cap originally fixed.
@@ -4297,8 +4346,10 @@ mod tests {
         };
         let alloc = allocated_move_time_ms(&params, &board).expect("timed search");
         assert!(alloc >= 5_000, "allocated {alloc} below the free increment");
+        // The increment bank slice is time/20 early on (see `long_game_time_cap`):
+        // ~31s here, under half the 72s that drained the clock.
         assert!(
-            alloc <= 5_000 + 628_000 / 26,
+            alloc <= 5_000 + 628_000 / 20,
             "allocated {alloc} drains the clock faster than the increment refunds it"
         );
     }
