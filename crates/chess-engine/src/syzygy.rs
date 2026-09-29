@@ -349,10 +349,33 @@ fn dtz_is_progress(board: &Board) -> bool {
     our_pawns || their_material
 }
 
-/// True when we have at least two non-king pieces, so one can be shed while
-/// the rest still wins.
+/// True when one of our pieces can be shed and the rest still mates a bare king
+/// (pawnless). Two pieces are not enough on their own: in KBNvK neither piece
+/// mates alone, so no winning move can give one away and the unique DTZ-minimum
+/// is the fastest mate (lichess p6A7eOCI: skipping it every move drew KBNvK by
+/// the 50-move rule).
 fn has_spare_piece(board: &Board) -> bool {
-    board.occupancy[board.side_to_move.index()].0.count_ones() > 2
+    const LIGHT: u64 = 0x55AA_55AA_55AA_55AA;
+    let ours = &board.pieces[board.side_to_move.index()];
+    let count = |kind: PieceKind| ours[kind.index()].0.count_ones();
+    let bishops = ours[PieceKind::Bishop.index()].0;
+    let (q, r, n) = (
+        count(PieceKind::Queen),
+        count(PieceKind::Rook),
+        count(PieceKind::Knight),
+    );
+    let (light, dark) = (
+        (bishops & LIGHT).count_ones(),
+        (bishops & !LIGHT).count_ones(),
+    );
+    let mates = |q: u32, r: u32, light: u32, dark: u32, n: u32| {
+        q > 0 || r > 0 || (light > 0 && dark > 0) || (light + dark > 0 && n > 0) || n >= 3
+    };
+    (q > 0 && mates(q - 1, r, light, dark, n))
+        || (r > 0 && mates(q, r - 1, light, dark, n))
+        || (light > 0 && mates(q, r, light - 1, dark, n))
+        || (dark > 0 && mates(q, r, light, dark - 1, n))
+        || (n > 0 && mates(q, r, light, dark, n - 1))
 }
 
 fn chebyshev(a: Square, b: Square) -> u8 {
@@ -530,9 +553,10 @@ pub fn rank_root_moves(tb: &SyzygyTB, board: &Board) -> Option<RootTbRanking> {
         // Unique non-hanging DTZ-minimum (071AfrC4 78...Nf1+): delayed give-away
         // that is not an immediate hang, but is the only min-DTZ win. Deprioritise
         // it; do not drop it, so a proven shorter mate can still promote it.
-        // Only with a piece to spare: a single piece (KRvK, KQvK) can never be
-        // given away in a win, so DTZ counts down to mate and the unique minimum
-        // is the fastest mate (lichess RTRQmcfr: 81.Kf5 skipped, mate at hmc 99).
+        // Only with a piece to spare: a single piece (KRvK, KQvK) or a pair that
+        // cannot mate after losing either one (KBNvK) can never be given away in
+        // a win, so DTZ counts down to mate and the unique minimum is the fastest
+        // mate (lichess RTRQmcfr: 81.Kf5 skipped, mate at hmc 99; p6A7eOCI).
         let mut unique_min_dtz: Option<u16> = None;
         if !progress && has_spare_piece(board) {
             let min_keep = scored.iter().filter(|s| !s.hang).map(|s| s.dtz).min();
@@ -878,5 +902,29 @@ mod tests {
             head, "e2g2",
             "expected 88.Rg2+ (DTZ 12) at the head, got {head}"
         );
+    }
+
+    #[test]
+    fn rank_root_moves_heads_kbnvk_with_unique_min_dtz_p6a7eoci() {
+        // lichess p6A7eOCI: KBNvK from move 69, drawn by the 50-move rule. Losing
+        // either piece draws, so the unique DTZ-minimum is the fastest mate — but
+        // it was sorted last as a possible give-away, every time it was unique.
+        let _guard = syzygy_test_guard();
+        let path = syzygy_path();
+        if !path.exists() {
+            return;
+        }
+        let tb = SyzygyTB::new(path.to_string_lossy().as_ref()).expect("load syzygy tables");
+        for (fen, want) in [
+            ("8/8/3k4/5n2/8/5b2/5K2/8 b - - 4 71", "f3e4"), // not 71...Bh1
+            ("8/8/8/8/1k2b3/4n3/K7/8 b - - 14 76", "b4c3"), // not 76...Kc4
+            ("8/8/3Kb3/8/3n4/3k4/8/8 b - - 42 90", "d3e4"), // not 90...Ke2
+        ] {
+            let (head, _) = ranking_head(&tb, fen);
+            assert_eq!(
+                head, want,
+                "{fen}: expected the unique min-DTZ {want}, got {head}"
+            );
+        }
     }
 }
