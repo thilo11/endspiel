@@ -1,3 +1,4 @@
+pub mod endgame;
 pub mod eval;
 pub mod polyglot;
 pub mod search;

@@ -3603,6 +3603,11 @@ fn capture_value(board: &Board, m: Move) -> i32 {
 // ---------------------------------------------------------------------------
 
 fn evaluate_for_side(board: &Board, state: &mut SearchState, ply: u8) -> i32 {
+    // Hand-crafted endings (K+B+N vs K, K+Q vs K+R, dead draws) replace the net:
+    // it has no gradient there without tablebases (see endgame.rs).
+    if let Some(eval) = crate::endgame::evaluate(board) {
+        return eval;
+    }
     let eval = if state.use_nnue && (ply as usize) < MAX_PLY {
         // Lazy per-perspective refresh: a king move changes only its own HalfKP
         // bucket. The other perspective remains incrementally updated.
