@@ -707,6 +707,23 @@ fn ponder_fresh_time_ms(
     (soft_target_ms / divisor).clamp(1_000, 12_000)
 }
 
+/// Opening ramp for long clocks, in permille of the soft target: 40% at ply 0,
+/// rising linearly to 100% by ply 20.
+///
+/// The `time/20` bank slice (see `long_game_time_cap`) applies from move 1, so the
+/// Pi spent a median ~20 s per move on plies 3-8 at 10+x after it (vs ~10 s
+/// before) — on known openings where `OpeningVariety` then picks within 15 cp
+/// anyway — and entered the middlegame ~70 s poorer (2026-09-30). The saved time
+/// stays in the bank. Clocks under 400 s (blitz, 5+x) and Chess960 keep the full
+/// target; repeating controls are budgeted separately (`movestogo`).
+fn opening_ramp_permille(game_ply: u64, time_ms: u64, chess960: bool) -> u64 {
+    const RAMP_PLIES: u64 = 20;
+    if chess960 || time_ms < 400_000 || game_ply >= RAMP_PLIES {
+        return 1000;
+    }
+    400 + 600 * game_ply / RAMP_PLIES
+}
+
 /// Early-opening soft-limit discount in permille points (negative = stop sooner).
 /// Chess960 returns 0: there is no book, and the first moves need the long think.
 fn opening_time_adjust(game_ply: usize, time_remaining_ms: u64, chess960: bool) -> i64 {
@@ -933,6 +950,9 @@ fn compute_time_limit(
         // Long-game safety: keep enough clock in reserve for a long game (incl.
         // long endgame conversions) on every clock control. See fn docs.
         let target = long_game_time_cap(target, inc, time, game_ply);
+
+        // Spend the long-clock slice on the middlegame, not on known openings.
+        let target = target * opening_ramp_permille(game_ply, time, params.chess960) / 1000;
 
         // Repeating control ("40 moves in 15 min"): the clock is refilled after
         // `movestogo` moves, so the sudden-death reserves above (bank term, long-game
@@ -4007,6 +4027,39 @@ mod tests {
         // 10+0 keeps it down to 400 s; 5+0 and 3+0 start at the flag-safe cap.
         assert_eq!(long_game_time_cap(40_000, 0, 450_000, 0), 450_000 / 20);
         assert_eq!(long_game_time_cap(40_000, 0, 300_000, 0), 300_000 / 34);
+    }
+
+    #[test]
+    fn long_clock_opening_ramps_up_the_soft_target() {
+        // Same clock and material at every ply: only the ramp differs.
+        let soft_at = |ply: usize, time: u64, inc: u64| {
+            let mut board = Board::starting_position();
+            board.position_history = vec![0; ply];
+            let params = SearchParams {
+                white_time_ms: Some(time),
+                black_time_ms: Some(time),
+                white_inc_ms: Some(inc),
+                black_inc_ms: Some(inc),
+                ..Default::default()
+            };
+            compute_time_limit(&params, &board).0.expect("timed")
+        };
+        for inc in [0, 5_000] {
+            let (p2, p10, p20) = (
+                soft_at(2, 600_000, inc),
+                soft_at(10, 600_000, inc),
+                soft_at(20, 600_000, inc),
+            );
+            // 600+5, ply 2: 30 s before the ramp; now ~16 s.
+            assert!(p2 < p10 && p10 < p20, "600+{inc}: {p2} / {p10} / {p20}");
+            assert!(p2 <= 20_000, "600+{inc}: {p2}ms at ply 2");
+        }
+        // Blitz clocks keep the full target.
+        assert_eq!(opening_ramp_permille(2, 180_000, false), 1000);
+        assert_eq!(opening_ramp_permille(2, 300_000, false), 1000);
+        assert_eq!(opening_ramp_permille(2, 600_000, true), 1000);
+        assert_eq!(opening_ramp_permille(0, 600_000, false), 400);
+        assert_eq!(opening_ramp_permille(20, 600_000, false), 1000);
     }
 
     #[test]
