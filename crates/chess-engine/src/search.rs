@@ -2995,7 +2995,8 @@ fn alpha_beta(
         // Search this move
         // -------------------------------------------------------------------
         let search_depth = (effective_depth as i8 - 1 + extension - iir_reduction).max(0) as u8;
-        state.double_exts[ply as usize + 1] = state.double_exts[ply as usize] + (extension == 2) as u8;
+        state.double_exts[ply as usize + 1] =
+            state.double_exts[ply as usize] + (extension == 2) as u8;
 
         let score = if moves_searched == 0 {
             // First move: full window
