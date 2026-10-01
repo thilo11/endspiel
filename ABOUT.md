@@ -25,8 +25,8 @@ AI-assisted development**, with two goals running in parallel:
 The engine plays a strong game. It is well above the level of any human
 player — including masters — and is comfortably useful for position
 analysis. For practice games it can play below full strength: `UCI_LimitStrength`
-and `UCI_Elo` offer a beginner, hobby, club and strong-club class (about 1000,
-1500, 2000 and 2500 on Stockfish's `UCI_Elo` scale; see the README).
+and `UCI_Elo` offer a beginner, hobby, club and strong-club class, intended to
+roughly match human Elo 1000, 1500, 2000 and 2500 (see the README).
 
 Endspiel's bet is a from-scratch chess stack (no board library), a
 layer-stacked king-bucketed net rather than a tiny `(768→N)×2→1` perspective

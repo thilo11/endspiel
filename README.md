@@ -55,9 +55,8 @@ engine lists; details in [ABOUT.md](ABOUT.md).
   still advertised when the PV is only one ply (book, tablebase, forced lines)
 - **Multi-threading** — Lazy SMP with depth diversity (`Threads` UCI option)
 - **MultiPV** — up to 256 principal variations for analysis (`MultiPV` UCI option)
-- **Strength limit** — `UCI_LimitStrength` + `UCI_Elo` play as a beginner (1000), hobby player
-  (1500), club player (2000) or strong club player (2500), calibrated against Stockfish's own
-  `UCI_Elo`; full strength by default
+- **Adjustable strength** — `UCI_LimitStrength` + `UCI_Elo` play as a beginner (1000), hobby player
+  (1500), club player (2000) or strong club player (2500); full strength by default
 - **Syzygy tablebases** — WDL/DTZ probing (up to 7-man) via `pyrrhic-rs`; at the root the engine stays on win- or draw-preserving moves instead of drifting into a loss
 - **Opening books** — load Polyglot `.bin`, EPD (`.epd`, with `bm` opcodes), or PGN (`.pgn`) at runtime; format is auto-detected by extension
 - **WDL output** — optional `wdl W D L` annotation on each `info` line
@@ -183,13 +182,7 @@ Set `BookFile` or `SyzygyPath` to a valid path to enable; clear to disable. No s
 - **`Hash`** — increase for long time controls or analysis; watch `hashfull` in engine output (permille, so 950 = 95%). The default adapts to the machine: ~128 MB per search thread (more threads fill the table faster), capped at ~1/16 of available RAM, floor 16 MB. So it grows with both core count and RAM, and tracks an explicit `Threads` setting.
 - **`Threads`** — Lazy SMP; scaling is sub-linear. Stick to physical core count. On Linux/Android the default is the performance-core count (the top CPU-frequency tier), which avoids the slow LITTLE cores and the thermal throttling they invite; elsewhere it's `min(available, 16)`.
 - **`EvalFile`** — load an alternate net at runtime without rebuilding. Clear to revert to the embedded net.
-- **`UCI_LimitStrength` / `UCI_Elo`** — each class caps the nodes per move and draws its move
-  among the best few lines, weaker classes taking worse moves more often (Stockfish's skill-level
-  rule). A limited search uses one thread, no tablebases and no `OpeningVariety`. Measured against
-  Stockfish 19 with `UCI_LimitStrength` at 60+0.6, 100 games per class (2026-10-01): 1000 → ≈ 965,
-  1500 → ≈ 1475, 2000 → ≈ 1945, 2500 → ≈ 2480 (±50–70). The scale is Stockfish's (anchored to
-  engine rating lists), so treat the classes as rough guides to human strength, not FIDE ratings.
-  Limited classes move quickly whatever the clock, because the node cap ends the search early.
+- **`UCI_LimitStrength` / `UCI_Elo`** — see *Playing at reduced strength* below.
 - **`UCI_Chess960`** — Chess960 positions (including Double Fischer Random) are accepted as X-FEN or
   Shredder-FEN either way; the option only changes how castling is written. The net has no Chess960
   opening training, so its evaluations right after the start are less reliable than in standard
@@ -206,15 +199,15 @@ Set `BookFile` or `SyzygyPath` to a valid path to enable; clear to disable. No s
 
 For practice games, switch on `UCI_LimitStrength` and pick a class with `UCI_Elo`:
 
-| `UCI_Elo` | Class | Measured (Stockfish scale) |
-|-----------|-------|----------------------------|
-| 1000 | beginner | ≈ 965 |
-| 1500 | hobby player | ≈ 1475 |
-| 2000 | club / tournament player | ≈ 1945 |
-| 2500 | strong club / tournament player | ≈ 2480 |
-| 3000 (default) | full strength | — |
+| `UCI_Elo` | Class |
+|-----------|-------|
+| 1000 | beginner |
+| 1500 | hobby player |
+| 2000 | club / tournament player |
+| 2500 | strong club / tournament player |
+| 3000 (default) | full strength |
 
-Values in between snap to the nearest class. Most GUIs show both options in the engine settings;
+The classes are intended to roughly match human Elo; values in between snap to the nearest class. Most GUIs show both options in the engine settings;
 from a terminal:
 
 ```
@@ -222,9 +215,9 @@ setoption name UCI_LimitStrength value true
 setoption name UCI_Elo value 1500
 ```
 
-Weaker classes miss tactics and occasionally blunder outright — the beginner can overlook a
-mate in one. Tablebases are not used at reduced strength, so endgames are played from the
-class's own judgement.
+Weaker classes miss tactics and occasionally blunder — the beginner can overlook a mate in one.
+At reduced strength the engine moves quickly whatever the clock, uses a single thread and no
+tablebases, and ignores `OpeningVariety`.
 
 ## Build from Source
 
