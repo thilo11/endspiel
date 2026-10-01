@@ -46,6 +46,9 @@ engine lists; details in [ABOUT.md](ABOUT.md).
   still advertised when the PV is only one ply (book, tablebase, forced lines)
 - **Multi-threading** — Lazy SMP with depth diversity (`Threads` UCI option)
 - **MultiPV** — up to 256 principal variations for analysis (`MultiPV` UCI option)
+- **Strength limit** — `UCI_LimitStrength` + `UCI_Elo` play as a beginner (1000), hobby player
+  (1500), club player (2000) or strong club player (2500), calibrated against Stockfish's own
+  `UCI_Elo`; full strength by default
 - **Syzygy tablebases** — WDL/DTZ probing (up to 7-man) via `pyrrhic-rs`; at the root the engine stays on win- or draw-preserving moves instead of drifting into a loss
 - **Opening books** — load Polyglot `.bin`, EPD (`.epd`, with `bm` opcodes), or PGN (`.pgn`) at runtime; format is auto-detected by extension
 - **WDL output** — optional `wdl W D L` annotation on each `info` line
@@ -159,6 +162,8 @@ an opening line such as `Running bench: ... (NNUE: AVX512ICL)`.
 | `MultiPV` | 1 | Number of principal variations to report (1–256) |
 | `OpeningVariety` | 0 | Opening spice: 0 = off; otherwise pick at random among MultiPV moves within this many centipawns of the best, for the first 8 plies of standard chess (ignored in Chess960) |
 | `UCI_ShowWDL` | false | Append `wdl <win> <draw> <loss>` (0–1000) to each info line |
+| `UCI_LimitStrength` | false | Play at the `UCI_Elo` class instead of full strength |
+| `UCI_Elo` | 3000 | Strength class when `UCI_LimitStrength` is on: snaps to the nearest of 1000 / 1500 / 2000 / 2500; 3000 = full strength |
 
 Set `BookFile` or `SyzygyPath` to a valid path to enable; clear to disable. No separate toggle is needed.
 
@@ -167,6 +172,12 @@ Set `BookFile` or `SyzygyPath` to a valid path to enable; clear to disable. No s
 - **`Hash`** — increase for long time controls or analysis; watch `hashfull` in engine output (permille, so 950 = 95%). The default adapts to the machine: ~128 MB per search thread (more threads fill the table faster), capped at ~1/16 of available RAM, floor 16 MB. So it grows with both core count and RAM, and tracks an explicit `Threads` setting.
 - **`Threads`** — Lazy SMP; scaling is sub-linear. Stick to physical core count. On Linux/Android the default is the performance-core count (the top CPU-frequency tier), which avoids the slow LITTLE cores and the thermal throttling they invite; elsewhere it's `min(available, 16)`.
 - **`EvalFile`** — load an alternate net at runtime without rebuilding. Clear to revert to the embedded net.
+- **`UCI_LimitStrength` / `UCI_Elo`** — each class caps the nodes per move and draws its move
+  among the best few lines, weaker classes taking worse moves more often (Stockfish's skill-level
+  rule). A limited search uses one thread, no tablebases and no `OpeningVariety`. Measured against
+  Stockfish 19 with `UCI_LimitStrength` at 60+0.6, 100 games per class (2026-10-01): 1000 → ≈ 965,
+  1500 → ≈ 1475, 2000 → ≈ 1945, 2500 → ≈ 2480 (±50–70). The scale is Stockfish's (anchored to
+  engine rating lists), so treat the classes as rough guides to human strength, not FIDE ratings.
 - **`SyzygyPath`** — WDL/DTZ probing for up to 7-man endgames. Multiple directories: `:` on Linux/macOS, `;` on Windows.
 - **`OpeningVariety`** — only affects the first 8 plies of standard chess; 0 (default) always plays the best move. Chess960 always plays the best move, and also skips the early-opening time throttle so the first moves use the normal clock budget.
 

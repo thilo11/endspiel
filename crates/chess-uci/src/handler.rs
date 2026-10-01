@@ -139,6 +139,11 @@ pub struct UciHandler {
     position_error: Option<String>,
     /// UCI_Chess960: castling is printed/parsed as king-takes-own-rook.
     chess960: bool,
+    /// UCI_LimitStrength: play at the [`Self::uci_elo`] class instead of full strength.
+    limit_strength: bool,
+    /// UCI_Elo: snapped to a class by [`chess_engine::strength::level_for_elo`];
+    /// only used while `limit_strength` is set.
+    uci_elo: i32,
 }
 
 impl Default for UciHandler {
@@ -166,6 +171,8 @@ impl UciHandler {
             history: Arc::new(Mutex::new(PersistentHistory::new())),
             position_error: None,
             chess960: false,
+            limit_strength: false,
+            uci_elo: chess_engine::strength::ELO_MAX,
         }
     }
 
@@ -319,6 +326,18 @@ impl UciHandler {
             name: "UCI_Chess960".to_string(),
             opt_type: UciOptionType::Check { default: false },
         }));
+        send_response(&UciResponse::Option(UciOptionDef {
+            name: "UCI_LimitStrength".to_string(),
+            opt_type: UciOptionType::Check { default: false },
+        }));
+        send_response(&UciResponse::Option(UciOptionDef {
+            name: "UCI_Elo".to_string(),
+            opt_type: UciOptionType::Spin {
+                default: chess_engine::strength::ELO_MAX as i64,
+                min: chess_engine::strength::ELO_MIN as i64,
+                max: chess_engine::strength::ELO_MAX as i64,
+            },
+        }));
         let eval_mode = if self.engine.use_nnue() {
             "NNUE (state-aware HalfKP 785\u{00d7}32\u{2192}(1536 pairwise 768)\u{00d7}2\u{2192}16\u{2192}32\u{2192}1)".to_string()
         } else {
@@ -414,17 +433,35 @@ impl UciHandler {
         // because the net has no 960 opening prior, so the window fills with
         // junk. The men >= 24 guard keeps this out of endgames and TB positions
         // even for bare-FEN probes, where game_ply reads 0.
+        // Strength limit (UCI_LimitStrength + UCI_Elo below full strength): a
+        // node cap, a widened MultiPV and a weighted random draw among the
+        // final lines (see `chess_engine::strength`). Single-threaded and
+        // without tablebases, so the class plays like itself in every phase.
+        // Its draw replaces opening variety.
+        let strength = if self.limit_strength {
+            chess_engine::strength::level_for_elo(self.uci_elo)
+        } else {
+            None
+        };
         let opening_variety = self.opening_variety;
-        let variety_active = opening_variety_active(opening_variety, self.chess960, &self.board);
-        let effective_multi_pv = if variety_active {
+        let variety_active = strength.is_none()
+            && opening_variety_active(opening_variety, self.chess960, &self.board);
+        let effective_multi_pv = if let Some(level) = strength {
+            self.multi_pv.max(level.multi_pv)
+        } else if variety_active {
             self.multi_pv.max(4)
         } else {
             self.multi_pv
         };
+        let max_nodes = match (params.nodes, strength) {
+            (Some(n), Some(level)) => Some(n.min(level.max_nodes)),
+            (None, Some(level)) => Some(level.max_nodes),
+            (n, None) => n,
+        };
 
         let mut search_params = SearchParams {
             max_depth: params.depth.unwrap_or(64),
-            max_nodes: params.nodes,
+            max_nodes,
             move_time_ms: params.movetime,
             white_time_ms: params.wtime,
             black_time_ms: params.btime,
@@ -475,16 +512,26 @@ impl UciHandler {
         // (important for analysis mode where many positions are evaluated
         // sequentially). Create a fresh stop handle for this search.
         let tt = self.engine.shared_tt();
-        let num_threads = self.engine.num_threads();
+        let num_threads = if strength.is_some() {
+            1
+        } else {
+            self.engine.num_threads()
+        };
         let net = Arc::clone(self.engine.nnue_net());
-        let root_tb_ranking = if let Some(tb) = self.engine.take_syzygy_tb() {
+        let root_tb_ranking = if strength.is_some() {
+            None
+        } else if let Some(tb) = self.engine.take_syzygy_tb() {
             let ranking = chess_engine::syzygy::rank_root_moves(&tb, &board);
             self.engine.set_syzygy_tb(Some(tb));
             ranking
         } else {
             None
         };
-        let syzygy_tb = self.engine.syzygy_tb().cloned();
+        let syzygy_tb = if strength.is_some() {
+            None
+        } else {
+            self.engine.syzygy_tb().cloned()
+        };
         let book = self.engine.book();
         let show_wdl = self.show_wdl;
         // Report only the lines the GUI asked for. Opening variety widens the
@@ -562,33 +609,58 @@ impl UciHandler {
                     }
                 };
 
-                // Opening variety draw: uniform pick among the final-depth
-                // MultiPV lines scoring within the window of the best. Mate
-                // scores are never randomized (neither giving nor defending).
+                // Move draw over the final-depth MultiPV lines. Opening variety:
+                // uniform among the lines within the window of the best, never
+                // with mate scores (neither giving nor defending). Strength limit:
+                // the weighted draw of `chess_engine::strength::pick_line` over
+                // every line, mates included (weak classes may miss one).
                 let mut result = result;
-                if variety_active && !result.score.is_mate() && !result.best_move.is_null() {
+                if !result.best_move.is_null() && (variety_active || strength.is_some()) {
                     let vl = variety_lines.lock().unwrap_or_else(|p| p.into_inner());
-                    let top = vl.1.iter().map(|l| l.score.0).max().unwrap_or(result.score.0);
-                    let eligible: Vec<&SearchInfo> = vl
-                        .1
-                        .iter()
-                        .filter(|l| {
-                            !l.pv.is_empty()
-                                && !l.score.is_mate()
-                                && l.score.0 >= top - opening_variety
+                    let pick: Option<(SearchInfo, String)> = if let Some(level) = strength {
+                        let lines: Vec<&SearchInfo> =
+                            vl.1.iter().filter(|l| !l.pv.is_empty()).collect();
+                        (lines.len() > 1).then(|| {
+                            let scores: Vec<i32> = lines
+                                .iter()
+                                .map(|l| match (l.score.is_mate(), l.score.0 > 0) {
+                                    (true, true) => i32::MAX / 2,
+                                    (true, false) => i32::MIN / 2,
+                                    (false, _) => l.score.0,
+                                })
+                                .collect();
+                            let mut rng = chess_engine::strength::Rng::from_time();
+                            let i = chess_engine::strength::pick_line(
+                                &scores,
+                                level.weakness,
+                                || rng.next_u64(),
+                            );
+                            let note = format!(
+                                "strength {} ({}): playing {} ({}cp) over {} ({}cp), {} candidates",
+                                level.elo,
+                                level.name,
+                                board.move_to_uci(lines[i].pv[0], chess960),
+                                lines[i].score.0,
+                                board.move_to_uci(result.best_move, chess960),
+                                result.score.0,
+                                lines.len()
+                            );
+                            (lines[i].clone(), note)
                         })
-                        .collect();
-                    if eligible.len() > 1 {
-                        let seed = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| (u64::from(d.subsec_nanos()) << 20) ^ d.as_secs())
-                            .unwrap_or(0x9E37_79B9_7F4A_7C15);
-                        let mut x = seed | 1;
-                        x ^= x << 13;
-                        x ^= x >> 7;
-                        x ^= x << 17;
-                        let pick = eligible[(x as usize) % eligible.len()];
-                        if pick.pv[0] != result.best_move {
+                    } else if !result.score.is_mate() {
+                        let top = vl.1.iter().map(|l| l.score.0).max().unwrap_or(result.score.0);
+                        let eligible: Vec<&SearchInfo> = vl
+                            .1
+                            .iter()
+                            .filter(|l| {
+                                !l.pv.is_empty()
+                                    && !l.score.is_mate()
+                                    && l.score.0 >= top - opening_variety
+                            })
+                            .collect();
+                        (eligible.len() > 1).then(|| {
+                            let mut rng = chess_engine::strength::Rng::from_time();
+                            let pick = eligible[(rng.next_u64() as usize) % eligible.len()];
                             let note = format!(
                                 "opening variety: playing {} ({}cp) over {} ({}cp), {} candidates in {}cp window",
                                 board.move_to_uci(pick.pv[0], chess960),
@@ -598,6 +670,13 @@ impl UciHandler {
                                 eligible.len(),
                                 opening_variety
                             );
+                            (pick.clone(), note)
+                        })
+                    } else {
+                        None
+                    };
+                    if let Some((pick, note)) = pick {
+                        if pick.pv[0] != result.best_move {
                             log::info!("{note}");
                             // The last reported line must be the one we play: GUIs
                             // show the final `info` as the engine's choice.
@@ -838,6 +917,23 @@ impl UciHandler {
                 if let Some(v) = value {
                     self.chess960 = v.trim().eq_ignore_ascii_case("true");
                     log::info!("UCI_Chess960 set to {}", self.chess960);
+                }
+            }
+            "uci_limitstrength" => {
+                if let Some(v) = value {
+                    self.limit_strength = v.trim().eq_ignore_ascii_case("true");
+                    log::info!("UCI_LimitStrength set to {}", self.limit_strength);
+                }
+            }
+            "uci_elo" => {
+                if let Some(v) = value
+                    && let Ok(elo) = v.trim().parse::<i32>()
+                {
+                    self.uci_elo = elo.clamp(
+                        chess_engine::strength::ELO_MIN,
+                        chess_engine::strength::ELO_MAX,
+                    );
+                    log::info!("UCI_Elo set to {}", self.uci_elo);
                 }
             }
             _ => {

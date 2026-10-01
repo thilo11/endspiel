@@ -3,6 +3,7 @@ pub mod eval;
 pub mod polyglot;
 pub mod search;
 pub mod see;
+pub mod strength;
 pub mod syzygy;
 pub mod threads;
 pub mod tt;
