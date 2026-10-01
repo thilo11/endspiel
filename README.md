@@ -177,7 +177,7 @@ Set `BookFile` or `SyzygyPath` to a valid path to enable; clear to disable. No s
 
 ## Build from Source
 
-Requires Rust 1.98.1+.
+Requires Rust 1.99+.
 
 ```bash
 cargo build --release
