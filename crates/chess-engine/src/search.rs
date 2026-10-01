@@ -2819,6 +2819,10 @@ fn alpha_beta(
 
             if se_score < se_beta {
                 extension = 1;
+            } else if !is_pv && se_beta >= beta {
+                // Multi-cut: even without the TT move another move beats beta,
+                // so this node fails high on more than one move.
+                return se_beta;
             }
         }
 
