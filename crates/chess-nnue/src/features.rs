@@ -5,7 +5,8 @@ use crate::{FEATURES_PER_BUCKET, PIECE_FEATURES};
 // FILE_FOLD maps file 0-7 → half_file 0-3, mirroring kingside onto queenside.
 const FILE_FOLD: [usize; 8] = [0, 1, 2, 3, 3, 2, 1, 0];
 
-/// Compute the feature index for a piece using king-relative (HalfKP) encoding.
+/// Compute the feature index for a piece using king-bucketed HalfKA encoding
+/// (all pieces, both kings included, relative to the perspective's king bucket).
 ///
 /// Uses 32 fine-grained king buckets — one per half-board king square — with a
 /// 768-feature base that keeps the two king roles distinct:

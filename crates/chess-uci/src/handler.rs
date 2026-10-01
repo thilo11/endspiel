@@ -339,7 +339,7 @@ impl UciHandler {
             },
         }));
         let eval_mode = if self.engine.use_nnue() {
-            "NNUE (state-aware HalfKP 785\u{00d7}32\u{2192}(1536 pairwise 768)\u{00d7}2\u{2192}16\u{2192}32\u{2192}1)".to_string()
+            "NNUE (king-bucketed HalfKA + castling/en-passant state, (32\u{00d7}785\u{2192}1536 pairwise 768)\u{00d7}2\u{2192}16\u{2192}32\u{2192}1, 8 output buckets)".to_string()
         } else {
             "HCE (no trained NNUE net)".to_string()
         };

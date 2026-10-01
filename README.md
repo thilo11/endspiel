@@ -12,8 +12,9 @@
 
 A UCI chess engine written in Rust. Bitboards, move generation, search,
 NNUE inference, and the UCI front end are hand-written — no external chess
-libraries. The eval is a layer-stacked, state-aware HalfKP net trained
-mostly on Endspiel's own self-play, not a borrowed network file. It ships
+libraries. The eval is a layer-stacked, king-bucketed HalfKA net with
+castling and en-passant inputs, trained mostly on Endspiel's own self-play,
+not a borrowed network file. It ships
 as a self-contained binary (embedded net, Pi / Android / universal x86-64 builds).
 
 Rust NNUE bots on Lichess are common. What is less common is a from-scratch
@@ -29,14 +30,22 @@ engine lists; details in [ABOUT.md](ABOUT.md).
   training uses [Bullet](https://github.com/jw1912/bullet); Syzygy probing
   uses `pyrrhic-rs`. Those are the only third-party pieces in the pipeline.
 - **Full UCI compliance** — works in any UCI GUI (Arena, CuteChess, Fritz, Banksia, Scid, …)
-- **Chess960** — Fischer Random / Freestyle: X-FEN and Shredder-FEN, `UCI_Chess960` king-takes-rook castling
-- **NNUE evaluation** (default) — state-aware HalfKP 785×32→(1536 pairwise 768)×2→16→32→1 (8 material-keyed output buckets), with castling rights and en passant in the input. Trained on Endspiel self-play (search scores as labels) and a public eval dump; since 2026-09 the mix also includes score labels from [Leela Chess Zero](https://lczero.org)'s public T80 training data (see [CREDITS.md](CREDITS.md)). The net is embedded in the binary. `EvalFile` nets must match the 1536-wide feature transformer (1024-wide and piece-only nets no longer load). `EvalFile` nets may use dense L1/L2 widths other than 16/32 (up to 64), taken from the ESPNNUE2 header.
+- **Chess960** — Fischer Random / Freestyle chess and Double Fischer Random (different setups for
+  White and Black): X-FEN and Shredder-FEN, king-takes-own-rook castling with `UCI_Chess960`.
+  Support is basic: the rules are complete, but the net was trained on standard-chess openings, so
+  expect Chess960 opening play to be weaker than its standard play (see **Notes**)
+- **NNUE evaluation** (default) — king-bucketed HalfKA with game state: 32 king buckets (board
+  mirrored so the king is on files a–d) × (768 piece features, both kings included, + 17
+  castling/en-passant features) → 1536-wide feature transformer per side → pairwise CReLU product
+  (768 per side, both sides concatenated) → 16 → 32 → 1 (SCReLU), with a separate 16/32/1 stack for
+  each of 8 piece-count buckets. Trained on Endspiel self-play (search scores as labels) and a public eval dump; since 2026-09 the mix also includes score labels from [Leela Chess Zero](https://lczero.org)'s public T80 training data (see [CREDITS.md](CREDITS.md)). The net is embedded in the binary. `EvalFile` nets must match the 1536-wide feature transformer (1024-wide and piece-only nets no longer load). `EvalFile` nets may use dense L1/L2 widths other than 16/32 (up to 64), taken from the ESPNNUE2 header.
 - **HCE fallback** — tapered hand-crafted evaluation used when no trained
   NNUE net is available, with pawn hash, mobility, king safety, pawn
   structure, threats, space, and endgame scaling
 - **Modern search** — alpha-beta + PVS with iterative deepening and
   aspiration windows, null move, reverse futility, futility, razoring,
-  ProbCut, SEE pruning, LMR, LMP, IIR, and passed-pawn extensions,
+  ProbCut, SEE pruning, LMR, LMP, IIR, singular extensions (with double
+  extensions and multi-cut) and passed-pawn extensions,
   1- and 2-ply continuation history, capture history, and multi-facet
   correction history (pawn, non-pawn, minor/major, and continuation keys).
   History and correction tables persist across moves within a game
@@ -102,8 +111,9 @@ command to verify the selected backend; it is printed on the first line.
 | Android arm64 | `endspiel-android-arm64.apk` | `arm64-v8a`, minSdk 24 — installs like an app; pick "Endspiel" as a UCI engine in DroidFish / Chess for Android |
 
 **Raspberry Pi 5.** Any RAM tier runs the engine; hash size is the only
-thing that scales with it. Set `Hash` in your GUI rather than relying on
-the 256 MB default:
+thing that scales with it. The default is 128 MB per thread, capped at 1/16 of
+the RAM available at startup — on a Pi 5 typically 200–500 MB — so set `Hash`
+in your GUI to use more:
 
 | Pi 5 RAM | Recommended `Hash` | Notes |
 |----------|--------------------|-------|
@@ -162,6 +172,7 @@ an opening line such as `Running bench: ... (NNUE: AVX512ICL)`.
 | `MultiPV` | 1 | Number of principal variations to report (1–256) |
 | `OpeningVariety` | 0 | Opening spice: 0 = off; otherwise pick at random among MultiPV moves within this many centipawns of the best, for the first 8 plies of standard chess (ignored in Chess960) |
 | `UCI_ShowWDL` | false | Append `wdl <win> <draw> <loss>` (0–1000) to each info line |
+| `UCI_Chess960` | false | Chess960 move notation: castling is sent and read as king-takes-own-rook (GUIs set this for Chess960 games) |
 | `UCI_LimitStrength` | false | Play at the `UCI_Elo` class instead of full strength |
 | `UCI_Elo` | 3000 | Strength class when `UCI_LimitStrength` is on: snaps to the nearest of 1000 / 1500 / 2000 / 2500; 3000 = full strength |
 
@@ -178,6 +189,11 @@ Set `BookFile` or `SyzygyPath` to a valid path to enable; clear to disable. No s
   Stockfish 19 with `UCI_LimitStrength` at 60+0.6, 100 games per class (2026-10-01): 1000 → ≈ 965,
   1500 → ≈ 1475, 2000 → ≈ 1945, 2500 → ≈ 2480 (±50–70). The scale is Stockfish's (anchored to
   engine rating lists), so treat the classes as rough guides to human strength, not FIDE ratings.
+  Limited classes move quickly whatever the clock, because the node cap ends the search early.
+- **`UCI_Chess960`** — Chess960 positions (including Double Fischer Random) are accepted as X-FEN or
+  Shredder-FEN either way; the option only changes how castling is written. The net has no Chess960
+  opening training, so its evaluations right after the start are less reliable than in standard
+  chess. `OpeningVariety` is ignored in Chess960, and a standard-chess `BookFile` finds no moves there.
 - **`SyzygyPath`** — WDL/DTZ probing for up to 7-man endgames. Multiple directories: `:` on Linux/macOS, `;` on Windows.
 - **`OpeningVariety`** — only affects the first 8 plies of standard chess; 0 (default) always plays the best move. Chess960 always plays the best move, and also skips the early-opening time throttle so the first moves use the normal clock budget.
 
@@ -185,6 +201,30 @@ Set `BookFile` or `SyzygyPath` to a valid path to enable; clear to disable. No s
 > Set the tablebase path in Fritz's settings — it forwards it to Endspiel automatically.
 > To let Endspiel use its own `BookFile`, disable Fritz's opening book in the match settings.
 > Verify loading via View → Engine Output: a successful load prints `info string BookFile loaded from '...'`.
+
+### Playing at reduced strength
+
+For practice games, switch on `UCI_LimitStrength` and pick a class with `UCI_Elo`:
+
+| `UCI_Elo` | Class | Measured (Stockfish scale) |
+|-----------|-------|----------------------------|
+| 1000 | beginner | ≈ 965 |
+| 1500 | hobby player | ≈ 1475 |
+| 2000 | club / tournament player | ≈ 1945 |
+| 2500 | strong club / tournament player | ≈ 2480 |
+| 3000 (default) | full strength | — |
+
+Values in between snap to the nearest class. Most GUIs show both options in the engine settings;
+from a terminal:
+
+```
+setoption name UCI_LimitStrength value true
+setoption name UCI_Elo value 1500
+```
+
+Weaker classes miss tactics and occasionally blunder outright — the beginner can overlook a
+mate in one. Tablebases are not used at reduced strength, so endgames are played from the
+class's own judgement.
 
 ## Build from Source
 

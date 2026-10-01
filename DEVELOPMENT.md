@@ -21,18 +21,18 @@
 
 Alpha-beta with iterative deepening and PVS:
 
-- **Pruning**: null move, reverse futility, futility, razoring, SEE (captures + quiets), history pruning, ProbCut
-- **Extensions**: passed-pawn push (7th rank / promotion). No check extension: an in-check node is only floored at depth 1, and checking moves are merely exempt from LMR and quiet pruning. A 2026-09 probe of a real check extension was mixed on the 47...Rh1 family and grew bench nodes ~58%. Singular extension is conservative (`singular_ext_mode = 1`), chosen for style: vs Stockfish 19 @ 10k nodes (1000 games) it scored the same as off (42.70% vs 42.50%) but cut draws from 552 to 476, and off was what raised draws after v1.7.0. An earlier h2h had measured it at −18.4 ± 11.6 vs off; it does not help the quiet-move suite (+16/424 at 4M nodes)
+- **Pruning**: null move, reverse futility, futility, razoring, SEE (captures + quiets), history pruning, LMP, ProbCut, singular multi-cut
+- **Extensions**: singular extension, passed-pawn push (7th rank / promotion). No check extension: an in-check node is only floored at depth 1, and checking moves are merely exempt from LMR and quiet pruning. A 2026-09 probe of a real check extension was mixed on the 47...Rh1 family and grew bench nodes ~58%. Singular extension runs in conservative mode (`singular_ext_mode = 1`: non-PV nodes, depth ≥ 8, lower-bound TT entry) and has two follow-ups, both SPRT-tested on 2026-10-01: **multi-cut** (a non-PV node returns `se_beta` when the singular search also fails high above beta, +6.1 ± 3.9 Elo) and **double extensions** (+2 plies when every alternative fails ≥ 25 cp below `se_beta`, at most 8 per root path via `SearchState::double_exts`, +9.5 ± 5.2 Elo). A negative extension (−1 when not singular and `tt_score ≥ beta`) and four LMR terms (cut-node, tt-pv, tt-capture, late-capture LMR) failed or showed no gain
 - **Reductions**: LMR, IIR
 - **Move ordering**: TT → good captures (MVV-LVA) → killers → counter → history-sorted quiets → bad captures
 - **Quiescence**: SEE-based pruning; **SMP**: Lazy SMP with depth diversity
-- **Time management** (`compute_time_limit`, `long_game_time_cap` in `search.rs`): two budgets per move — a soft target (a typical position; the ID loop stops at ~0.35–3× of it depending on PV stability, score drops and node concentration) and a hard limit (≤ 3× soft, ≤ 80% of the clock). Clock controls are capped per move: above 5 min at `inc + time/20` early (17/14/12 later in the game), sudden death keeping that slice down to 400 s and blending to `time/34` by 300 s, so blitz (≤ 5 min) keeps the flag-safe cap. Repeating controls (`movestogo`, e.g. CCRL 40/15) skip those sudden-death caps and spread the clock over the moves left (`time/(movestogo+1)`); at 40/60 that used 79% of each period instead of 56% and measured +19.1 ± 11.1 Elo (782 games). Regression tests: `repeating_control_spends_the_period_without_flagging`, `ten_minute_sudden_death_spends_the_clock_without_flagging`
+- **Time management** (`compute_time_limit`, `long_game_time_cap` in `search.rs`): two budgets per move — a soft target (a typical position; the ID loop stops at ~0.35–3× of it depending on PV stability, score drops and node concentration) and a hard limit (≤ 3× soft, ≤ 80% of the clock). Clock controls are capped per move: above 5 min at `inc + time/20` early (17/14/12 later in the game), sudden death keeping that slice down to 400 s and blending to `time/34` by 300 s, so blitz (≤ 5 min) keeps the flag-safe cap. Repeating controls (`movestogo`, e.g. CCRL 40/15) skip those sudden-death caps and spread the clock over the moves left (`time/(movestogo+1)`); at 40/60 that used 79% of each period instead of 56% and measured +19.1 ± 11.1 Elo (782 games). On clocks of 400 s and more (not Chess960, not `movestogo`), `opening_ramp_permille` scales the soft target from 40% to 100% over plies 0–20, so the bank slice is not spent on known opening moves. Regression tests: `repeating_control_spends_the_period_without_flagging`, `ten_minute_sudden_death_spends_the_clock_without_flagging`
 
 ### Evaluation
 
 Two backends:
 
-- **NNUE** (default): HalfKP 785×32→(1536 pairwise 768)×2→16→32→1, 32 king buckets × 8 material output stacks. Embedded at compile time via `include_bytes!`; dense L1/L2 read from the net header (`1..=64`) so architecture-trial nets load without a rebuild.
+- **NNUE** (default): king-bucketed HalfKA with state features (`crates/chess-nnue`). Input per perspective: 32 king buckets (half-board king square; the board is mirrored when the king is on files e–h) × 785 features = 768 piece-square (12 piece types incl. both kings, unmerged) + 17 state (4 friendly + 4 enemy castling-rights combinations, 9 en-passant categories). Feature transformer 1536 (i16, QA 127) → pairwise CReLU product of the two halves → 768 per side, side to move first → L1 16 → L2 32 → 1, SCReLU on L1/L2 (QB 64), one L1/L2/output stack per output bucket `min((pieces − 2) / 4, 7)`; output ×400. Embedded at compile time via `include_bytes!`; dense L1/L2 read from the net header (`1..=64`) so architecture-trial nets load without a rebuild.
 - **HCE**: tapered MG/EG with pawn, mobility, king safety, pawn structure, threat, center, connectivity, space, and material-imbalance terms. Fallback when the embedded net is zeroed by `build.rs`. Superseded by NNUE; HCE parameter work is out of scope for new PRs.
 
 ### NNUE net embedding
@@ -41,7 +41,20 @@ Two backends:
 
 ### Chess960
 
-Rook origins live on `Board::castle_rooks` unless a FEN overrides them; internal castling still moves king→c/g and rook→d/f. FEN parsing accepts KQkq, X-FEN, and Shredder (`AHah`); emission is X-FEN. With `UCI_Chess960=true`, the UCI layer prints and parses king-takes-own-rook moves.
+Rook origins live on `Board::castle_rooks` (one per colour and side, so Double Fischer Random works) unless a FEN overrides them; internal castling still moves king→c/g and rook→d/f. FEN parsing accepts KQkq, X-FEN, and Shredder (`AHah`); emission is X-FEN. With `UCI_Chess960=true`, the UCI layer prints and parses king-takes-own-rook moves. Chess960 skips `OpeningVariety` and the opening time ramp. The net has no Chess960 opening data: a capped SF-labelled 960-opening overlay (endspiel-tools `chess960_opening_campaign.sh`) cut the net's 960 static error from 95 to 63 cp but lost 35 Elo in 960 games (2026-09-29, parked).
+
+### Strength limit (`chess-engine/src/strength.rs`)
+
+`UCI_LimitStrength` + `UCI_Elo` (1000–3000, default 3000 = full strength) snap to five classes. A limited class caps nodes per move, widens MultiPV, and draws the move among the final-depth lines with Stockfish's skill rule (push = `(weakness·(top − score) + delta·rand(weakness)) / 128`, scores clamped to ±2000); it searches with one thread, without tablebases and without `OpeningVariety`.
+
+| Class | `max_nodes` | `multi_pv` | `weakness` | Measured vs SF19 `UCI_Elo` (60+0.6, 100 games) |
+|-------|-------------|------------|------------|-----------------------------------------------|
+| 1000 | 150 | 6 | 121 | 11.5% vs SF 1320 → ≈ 965 |
+| 1500 | 500 | 6 | 85 | 46.5% → ≈ 1475 |
+| 2000 | 2000 | 4 | 55 | 42.5% → ≈ 1945 |
+| 2500 | 6000 | 3 | 30 | 47.5% → ≈ 2480 |
+
+Recalibrate after a net or major search change with endspiel-tools `scripts/strength_calibrate.sh <binary>` (about an hour at 16 cores). Weakness near 128 is very sensitive (beginner: 117 ≈ 1180, 121 ≈ 965, 125 ≈ 500); the stronger classes are tuned mainly through `max_nodes`.
 
 ### Syzygy (`chess-engine/src/syzygy.rs`)
 
@@ -118,8 +131,9 @@ change — is gated by one fastchess run: **candidate vs Stockfish 19 at a fixed
 `nodes=10000` per move, 1000 games, no opening book** (startpos only; the candidate uses
 `OpeningVariety=110` for variety since Stockfish is deterministic at fixed nodes).
 `tc=10+0.1` for the candidate, `Hash=64`, `Threads=1` on both, concurrency 16.
-**Promote only if the candidate scores ≥ 45%.** Reference: `d665032` scored 42.5%
-(−52.5 ± 14.2 Elo) on 2026-09-24.
+**Promote only if the candidate scores ≥ 45%.** Reference: `c5e2aaf` scored 55.55%
+(+38.7 ± 13.9 Elo) on 2026-09-27; `d665032` had scored 42.5% on 2026-09-24. Single search
+changes are filtered first by SPRT against their parent (endspiel-tools `scripts/sprt.sh`).
 
 ```bash
 fastchess \

@@ -36,9 +36,11 @@ community, several of which were pioneered or popularised by
 
 - Lazy SMP with per-helper-thread depth diversity ("Stockfish-style" offsets);
 - the usual pruning/reduction toolkit — null-move pruning, late move reductions,
-  futility / reverse-futility pruning, razoring, singular extensions, and
-  correction & continuation history;
-- the displayed-centipawn convention (~100 cp ≈ one "WDL pawn").
+  futility / reverse-futility pruning, razoring, singular extensions with
+  multi-cut and double extensions, and correction & continuation history;
+- the displayed-centipawn convention (~100 cp ≈ one "WDL pawn");
+- the skill-level move draw behind `UCI_LimitStrength` / `UCI_Elo`. The strength
+  classes are calibrated against Stockfish's own `UCI_Elo` levels.
 
 These are algorithmic ideas and conventions, re-implemented from scratch in Rust.
 **No Stockfish source code is included or ported into endspiel.**

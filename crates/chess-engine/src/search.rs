@@ -3651,7 +3651,7 @@ fn evaluate_for_side(board: &Board, state: &mut SearchState, ply: u8) -> i32 {
         return eval;
     }
     let eval = if state.use_nnue && (ply as usize) < MAX_PLY {
-        // Lazy per-perspective refresh: a king move changes only its own HalfKP
+        // Lazy per-perspective refresh: a king move changes only its own HalfKA
         // bucket. The other perspective remains incrementally updated.
         // The board is at position P_ply so refresh is valid at this call site.
         let refresh_white = state.accumulators[ply as usize].needs_refresh(Color::White);
