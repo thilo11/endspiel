@@ -36,6 +36,10 @@ fn build_lmr_table(base_x100: i32, div_x100: i32) -> [[u8; 64]; 64] {
 // ---------------------------------------------------------------------------
 
 const MAX_PLY: usize = 128;
+/// The TT move gets +2 plies when every alternative fails this far below the singular beta.
+const DOUBLE_EXT_MARGIN: i32 = 25;
+/// Cap on double extensions along one root-to-leaf path, so forcing lines cannot explode.
+const MAX_DOUBLE_EXTS: u8 = 8;
 const MAX_KILLERS: usize = 2;
 const MATE_THRESHOLD: i32 = 29_000;
 
@@ -216,6 +220,8 @@ struct SearchState<'a> {
     killers: [[Move; MAX_KILLERS]; MAX_PLY],
     ply_context: [PlyContext; MAX_PLY],
     static_evals: [i32; MAX_PLY],
+    /// Double singular extensions taken on the path from the root to each ply.
+    double_exts: [u8; MAX_PLY + 1],
     accumulators: Box<[Accumulator; MAX_PLY]>,
     use_nnue: bool,
     net: Arc<NnueNetwork>,
@@ -284,6 +290,7 @@ impl<'a> SearchState<'a> {
             killers: [[Move::NULL; MAX_KILLERS]; MAX_PLY],
             ply_context: [NULL_PLY_CONTEXT; MAX_PLY],
             static_evals: [0; MAX_PLY],
+            double_exts: [0; MAX_PLY + 1],
             accumulators,
             use_nnue,
             net,
@@ -2610,6 +2617,7 @@ fn alpha_beta(
             }
 
             let mut null_pv = PvLine::new();
+            state.double_exts[ply as usize + 1] = state.double_exts[ply as usize];
             let null_score = -alpha_beta(
                 board,
                 null_depth,
@@ -2686,6 +2694,7 @@ fn alpha_beta(
                     );
 
                     let score = if score >= probcut_beta {
+                        state.double_exts[ply as usize + 1] = state.double_exts[ply as usize];
                         -alpha_beta(
                             board,
                             probcut_depth,
@@ -2818,7 +2827,14 @@ fn alpha_beta(
             );
 
             if se_score < se_beta {
-                extension = 1;
+                extension = if !is_pv
+                    && se_score < se_beta - DOUBLE_EXT_MARGIN
+                    && state.double_exts[ply as usize] < MAX_DOUBLE_EXTS
+                {
+                    2
+                } else {
+                    1
+                };
             } else if !is_pv && se_beta >= beta {
                 // Multi-cut: even without the TT move another move beats beta,
                 // so this node fails high on more than one move.
@@ -2979,6 +2995,7 @@ fn alpha_beta(
         // Search this move
         // -------------------------------------------------------------------
         let search_depth = (effective_depth as i8 - 1 + extension - iir_reduction).max(0) as u8;
+        state.double_exts[ply as usize + 1] = state.double_exts[ply as usize] + (extension == 2) as u8;
 
         let score = if moves_searched == 0 {
             // First move: full window
