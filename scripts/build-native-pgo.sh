@@ -2,10 +2,13 @@
 
 set -euo pipefail
 
-if [[ "$(uname -m)" != "x86_64" ]]; then
-  echo "error: the native x86-64 PGO build must run on an x86-64 host" >&2
-  exit 1
-fi
+case "$(uname -m)" in
+  x86_64 | arm64) ;;
+  *)
+    echo "error: the native PGO build supports x86-64 hosts and Apple Silicon (use build-pi5-pgo.sh on the Pi 5)" >&2
+    exit 1
+    ;;
+esac
 
 repo_root="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
 output="${1:-${repo_root}/target/native-pgo/endspiel}"
@@ -54,5 +57,6 @@ CARGO_PROFILE_RELEASE_LTO=fat \
   RUSTFLAGS="${rustflags} -Cprofile-use=${merged_profile}" \
   cargo build --release --locked --bin endspiel
 
-install -Dm755 "${optimized_target}/release/endspiel" "${output}"
+mkdir -p "$(dirname "${output}")"
+install -m755 "${optimized_target}/release/endspiel" "${output}"
 echo "Native PGO binary: ${output}"
