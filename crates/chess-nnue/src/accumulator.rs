@@ -247,7 +247,8 @@ unsafe fn apply_rows_raw(
                 return apply_rows_avx512(dst, src, net, subs, adds);
             }
             SimdBackend::Avx2 => return apply_rows_avx2(dst, src, net, subs, adds),
-            SimdBackend::Scalar | SimdBackend::Neon | SimdBackend::NeonDotprod => {}
+            SimdBackend::Scalar => return apply_rows_sse2(dst, src, net, subs, adds),
+            SimdBackend::Neon | SimdBackend::NeonDotprod => {}
         }
     }
     #[cfg(target_arch = "aarch64")]
@@ -358,6 +359,19 @@ simd_apply_rows!(
     _mm256_add_epi16,
     _mm256_sub_epi16,
     16
+);
+// SSE2 is in every x86-64 CPU. Without AVX2 the auto-vectorized scalar loop's
+// 128-lane tile cannot fit 16 xmm registers and spills; under PGO it lost 13% NPS.
+#[cfg(target_arch = "x86_64")]
+simd_apply_rows!(
+    apply_rows_sse2,
+    "sse2",
+    __m128i,
+    _mm_loadu_si128,
+    _mm_storeu_si128,
+    _mm_add_epi16,
+    _mm_sub_epi16,
+    8
 );
 
 /// NEON form of the x86 kernels: a 128-lane tile in 16 of the 32 vector
@@ -1097,6 +1111,17 @@ mod tests {
             if is_x86_feature_detected!("avx2") {
                 let mut actual = [0i16; HIDDEN_SIZE];
                 unsafe { apply_rows_avx2(actual.as_mut_ptr(), src.as_ptr(), &net, &subs, &adds) };
+                assert_eq!(actual, expected);
+            }
+            for (subs, adds) in [
+                (&subs[..], &adds[..]),
+                (&subs[..0], &adds[..]),
+                (&subs[..], &adds[..0]),
+            ] {
+                let mut expected = [0i16; HIDDEN_SIZE];
+                unsafe { apply_rows_scalar(expected.as_mut_ptr(), src.as_ptr(), &net, subs, adds) };
+                let mut actual = [0i16; HIDDEN_SIZE];
+                unsafe { apply_rows_sse2(actual.as_mut_ptr(), src.as_ptr(), &net, subs, adds) };
                 assert_eq!(actual, expected);
             }
             let mut in_place = src;
