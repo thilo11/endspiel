@@ -250,9 +250,17 @@ unsafe fn apply_rows_raw(
             SimdBackend::Scalar | SimdBackend::Neon | SimdBackend::NeonDotprod => {}
         }
     }
-    unsafe { apply_rows_scalar(dst, src, net, subs, adds) }
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        apply_rows_neon(dst, src, net, subs, adds)
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    unsafe {
+        apply_rows_scalar(dst, src, net, subs, adds)
+    }
 }
 
+#[cfg_attr(target_arch = "aarch64", allow(dead_code))]
 #[inline]
 unsafe fn apply_rows_scalar(
     dst: *mut i16,
@@ -351,6 +359,52 @@ simd_apply_rows!(
     _mm256_sub_epi16,
     16
 );
+
+/// NEON form of the x86 kernels: a 128-lane tile in 16 of the 32 vector
+/// registers. The auto-vectorized scalar loop only kept its tile in registers
+/// when inlined; out of line (PGO's inliner leaves it there) it stored the tile
+/// to the stack after every row, which cost Android PGO builds ~15% NPS.
+#[cfg(target_arch = "aarch64")]
+const NEON_TILE_REGS: usize = 16;
+
+/// # Safety
+/// As [`apply_rows_raw`].
+#[cfg(target_arch = "aarch64")]
+unsafe fn apply_rows_neon(
+    dst: *mut i16,
+    src: *const i16,
+    net: &NnueNetwork,
+    subs: &[usize],
+    adds: &[usize],
+) {
+    use std::arch::aarch64::*;
+    const LANES: usize = 8;
+    const TILE: usize = NEON_TILE_REGS * LANES;
+    const _: () = assert!(HIDDEN_SIZE.is_multiple_of(TILE));
+    unsafe {
+        let mut base = 0;
+        while base < HIDDEN_SIZE {
+            let mut regs: [int16x8_t; NEON_TILE_REGS] =
+                std::array::from_fn(|k| vld1q_s16(src.add(base + k * LANES)));
+            for &row in subs {
+                let row = net.ft_weights[row].as_ptr().add(base);
+                for (k, reg) in regs.iter_mut().enumerate() {
+                    *reg = vsubq_s16(*reg, vld1q_s16(row.add(k * LANES)));
+                }
+            }
+            for &row in adds {
+                let row = net.ft_weights[row].as_ptr().add(base);
+                for (k, reg) in regs.iter_mut().enumerate() {
+                    *reg = vaddq_s16(*reg, vld1q_s16(row.add(k * LANES)));
+                }
+            }
+            for (k, reg) in regs.iter().enumerate() {
+                vst1q_s16(dst.add(base + k * LANES), *reg);
+            }
+            base += TILE;
+        }
+    }
+}
 
 /// Pieces a move removes and adds, in board terms; [`Accumulator::update_from`]
 /// turns them into feature rows per perspective.
@@ -1048,6 +1102,22 @@ mod tests {
             let mut in_place = src;
             apply_rows_in_place(&mut in_place, &net, &subs, &adds);
             assert_eq!(in_place, expected);
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            let mut actual = [0i16; HIDDEN_SIZE];
+            unsafe { apply_rows_neon(actual.as_mut_ptr(), src.as_ptr(), &net, &subs, &adds) };
+            assert_eq!(actual, expected);
+            let mut in_place = src;
+            apply_rows_in_place(&mut in_place, &net, &subs, &adds);
+            assert_eq!(in_place, expected);
+            for (subs, adds) in [(&subs[..0], &adds[..]), (&subs[..], &adds[..0])] {
+                let mut expected = [0i16; HIDDEN_SIZE];
+                unsafe { apply_rows_scalar(expected.as_mut_ptr(), src.as_ptr(), &net, subs, adds) };
+                let mut actual = [0i16; HIDDEN_SIZE];
+                unsafe { apply_rows_neon(actual.as_mut_ptr(), src.as_ptr(), &net, subs, adds) };
+                assert_eq!(actual, expected);
+            }
         }
     }
 
