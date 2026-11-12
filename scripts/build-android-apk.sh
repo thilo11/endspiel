@@ -16,7 +16,7 @@
 #   - The arm64 binary, built first via scripts/build-android.sh, OR pass its
 #     path as $1 / $ENDSPIEL_ANDROID_BIN.
 #   - JDK 17+ and the Android SDK (platform-34, build-tools). Set ANDROID_HOME.
-#   - Gradle 8.x on PATH (or a wrapper in android/oex).
+#   - Gradle 9.x on PATH (or a wrapper in android/oex); CI uses 9.9.1 on JDK 25.
 #
 # Usage:
 #   scripts/build-android.sh                 # produce the arm64 binary

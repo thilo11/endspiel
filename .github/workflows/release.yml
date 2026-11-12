@@ -183,14 +183,14 @@ jobs:
       # ── Wrap the binary in an Open Exchange (OEX) engine APK ──
       # Installs like a normal app on a non-rooted device; chess GUIs
       # (DroidFish, Chess for Android) auto-discover it. See android/oex/.
-      - uses: actions/setup-java@v6.1.0
+      - uses: actions/setup-java@v6.2.0
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "25"
 
-      - uses: gradle/actions/setup-gradle@v6.4.0
+      - uses: gradle/actions/setup-gradle@v6.4.1
         with:
-          gradle-version: "8.7"
+          gradle-version: "9.9.1"
 
       - name: Build OEX engine APK
         env:
@@ -248,7 +248,7 @@ jobs:
           merge-multiple: true
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3.0.3
+        uses: softprops/action-gh-release@v3.0.4
         with:
           tag_name: ${{ inputs.tag }}
           name: ${{ inputs.tag }}
