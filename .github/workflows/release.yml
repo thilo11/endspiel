@@ -84,7 +84,10 @@ jobs:
 
       # --- PGO build path ---------------------------------------------------
       # Two-stage build: instrumented binary generates profile data via
-      # `endspiel bench`, then a final build consumes that profile.
+      # `endspiel bench 20`, then a final build consumes that profile. Depth 20
+      # rather than the default 14: the short bench is dominated by startup
+      # (magic tables, hash clear); +2.6% NPS for x86-64-v2 on positions outside
+      # the bench (2026-11-12).
       - name: Build instrumented (PGO gen)
         if: matrix.pgo
         shell: bash
@@ -100,7 +103,7 @@ jobs:
         run: |
           BIN="./target/${{ matrix.target }}/release/endspiel"
           if [[ "${{ runner.os }}" == "Windows" ]]; then BIN="${BIN}.exe"; fi
-          "$BIN" bench
+          "$BIN" bench 20
 
       - name: Merge PGO profile
         if: matrix.pgo
