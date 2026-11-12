@@ -213,6 +213,8 @@ jobs:
           MI=$(echo "$VER" | cut -d. -f2 | tr -dc 0-9)
           PA=$(echo "$VER" | cut -d. -f3 | tr -dc 0-9)
           VCODE=$(( ${MA:-0} * 10000 + ${MI:-0} * 100 + ${PA:-0} ))
+          # A dry run from a branch (tag=main) has no version digits; AGP needs >= 1.
+          [ "$VCODE" -gt 0 ] || VCODE=1
           VERSION_NAME="$VER" VERSION_CODE="$VCODE" scripts/build-android-apk.sh
 
       - name: Sign APK
