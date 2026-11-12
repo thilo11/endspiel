@@ -182,11 +182,14 @@ jobs:
       - name: Install qemu-user (PGO training run)
         run: sudo apt-get update && sudo apt-get install -y qemu-user
 
-      # ubuntu-24.04 ships an NDK and exports ANDROID_NDK_LATEST_HOME. minSdk 24;
-      # portable ARMv8-A baseline, fat LTO, PGO. The output at
-      # target/aarch64-linux-android/release/endspiel feeds the APK below.
+      # ubuntu-24.04 ships several NDKs; ANDROID_NDK_HOME is the image default
+      # (r27), so point it at ANDROID_NDK_LATEST_HOME (r30): the static PGO
+      # training binary needs r30's 64-byte TLS alignment, and r30 is what the
+      # tablet measurements used. minSdk 24; portable ARMv8-A baseline, fat LTO,
+      # PGO. The output at target/aarch64-linux-android/release/endspiel feeds
+      # the APK below.
       - name: Build (Android NDK)
-        run: scripts/build-android.sh
+        run: ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" scripts/build-android.sh
 
       # ── Wrap the binary in an Open Exchange (OEX) engine APK ──
       # Installs like a normal app on a non-rooted device; chess GUIs
