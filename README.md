@@ -132,7 +132,7 @@ code path, in this order:
 | `endspiel-mac-arm64` | `apple-m1`, PGO |
 | `endspiel-win-arm64.exe` | generic ARM64 |
 | `endspiel-linux-arm64-pi5` | `cortex-a76`, fat LTO + PGO; glibc ≥ 2.39 |
-| `endspiel-android-arm64.apk` | `arm64-v8a` generic, fat LTO, minSdk 24; NEON or NEON+dotprod selected at runtime; Open Exchange (OEX) engine package |
+| `endspiel-android-arm64.apk` | `arm64-v8a` generic, fat LTO + PGO, minSdk 24; NEON or NEON+dotprod selected at runtime; Open Exchange (OEX) engine package |
 
 **Bench** runs a fixed-depth search over a small set of positions and prints the node count,
 time and NPS. Its first line names the selected SIMD tier, e.g.
@@ -268,7 +268,7 @@ net file. More on the project in [ABOUT.md](ABOUT.md).
 - **Performance**: one universal x86-64 executable detects the host CPU at startup and
   dispatches its hot NNUE inference and accumulator operations to AVX512ICL (with VNNI),
   AVX-512, AVX2, or the portable fallback. AArch64 uses NEON, with the dotprod L1 kernel on cores
-  that have it (`bench` prints the tier). All release builds except Windows ARM64 and Android use
+  that have it (`bench` prints the tier). All release builds except Windows ARM64 use
   profile-guided optimisation; the Pi 5 and Android builds also use fat LTO
 
 ## Build from Source
@@ -295,8 +295,8 @@ scripts/build-android.sh
 ```
 
 One portable ARMv8-A binary: the NNUE picks its NEON or NEON+dotprod kernels at
-runtime (`endspiel bench` prints which). The build uses fat LTO; `PGO=1` adds PGO
-(training run under `qemu-aarch64`), which measured slower on a Snapdragon 8 Elite.
+runtime (`endspiel bench` prints which). The build uses fat LTO and PGO, whose
+training run needs `qemu-aarch64` and `rustup component add llvm-tools`; `PGO=0` skips it.
 
 On-device the engine auto-tunes its defaults: `Threads` is the performance-core
 count of the SoC, and `Hash` is ~128 MB per such core, capped at ~1/16 of

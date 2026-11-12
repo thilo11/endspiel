@@ -9,10 +9,10 @@
 # overridable via UCI `setoption`. Like the x86-64 release, it is one portable
 # binary (ARMv8.0-A) whose NNUE kernels pick NEON or NEON+dotprod at runtime.
 #
-# Fat LTO (+0.9% bench NPS on a Snapdragon 8 Elite vs thin). PGO is opt-in
-# (PGO=1): unlike on the Pi 5 (+5–9%), it cost 3–4% on that tablet whether the
-# profile was recorded under qemu or on the device (2026-10-24, bench 20, pinned
-# to a 4.32 GHz Oryon core). A PGO profile only matches a build for the same
+# Fat LTO (+0.9% bench NPS on a Snapdragon 8 Elite vs thin) and PGO (PGO=0 turns
+# it off): +15.7% bench NPS on that tablet (2026-11-12, bench 20, pinned to a
+# 4.32 GHz Oryon core) since the accumulator update has a NEON kernel; before,
+# PGO left the auto-vectorized loop out of line and it cost 3%. A PGO profile only matches a build for the same
 # target triple, so the training run uses an instrumented, statically linked
 # aarch64-linux-android build of the same code: it needs no bionic linker and runs
 # under qemu-aarch64 on an x86 host (natively on an aarch64 Linux host).
@@ -22,13 +22,13 @@
 #                          else the newest under $ANDROID_HOME/ndk or ~/Android/Sdk/ndk)
 #   - rustup target:      rustup target add aarch64-linux-android
 #   - cargo-ndk:          cargo install cargo-ndk
-#   - for PGO=1:          rustup component add llvm-tools, and qemu-aarch64 (or
+#   - for PGO (default):  rustup component add llvm-tools, and qemu-aarch64 (or
 #                          qemu-aarch64-static) on PATH or as $QEMU_AARCH64
 #
 # Usage:
-#   scripts/build-android.sh                 # API 24, target-cpu=generic, fat LTO
+#   scripts/build-android.sh                 # API 24, target-cpu=generic, fat LTO, PGO
 #   API=29 scripts/build-android.sh          # raise the minSdk floor
-#   PGO=1 scripts/build-android.sh           # add PGO (bench under qemu-aarch64)
+#   PGO=0 scripts/build-android.sh           # skip PGO (no qemu or llvm-tools needed)
 #   ANDROID_TARGET_CPU=cortex-a76 scripts/build-android.sh   # tune for one device
 #
 set -euo pipefail
@@ -42,7 +42,7 @@ ABI="arm64-v8a"
 # available). Override ANDROID_TARGET_CPU to tune for a specific SoC.
 CPU="${ANDROID_TARGET_CPU:-generic}"
 LTO="${LTO:-fat}"
-PGO="${PGO:-0}"
+PGO="${PGO:-1}"
 FLAGS="${RUSTFLAGS:-} -C target-cpu=$CPU"
 
 if ! command -v cargo-ndk >/dev/null 2>&1; then
@@ -69,7 +69,7 @@ rustup target add "$TARGET" >/dev/null 2>&1 || true
 
 # --- PGO prerequisites ------------------------------------------------------
 pgo_fail() {
-  echo "error: PGO=1 but $1" >&2
+  echo "error: PGO is on but $1 (PGO=0 skips it)" >&2
   exit 1
 }
 if [[ "$PGO" != 0 ]]; then

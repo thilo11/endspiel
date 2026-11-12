@@ -141,8 +141,9 @@ jobs:
           retention-days: 7
 
   # Android needs the NDK toolchain + cargo-ndk (for the bionic linker), so it
-  # can't share the cross-platform matrix above. No PGO: it measured 3–4% slower
-  # on a Snapdragon 8 Elite (scripts/build-android.sh has it opt-in as PGO=1).
+  # can't share the cross-platform matrix above. PGO (+15.7% bench NPS on a
+  # Snapdragon 8 Elite): scripts/build-android.sh runs the training bench of a
+  # static instrumented build under qemu-aarch64.
   # The release artifact is the OEX engine APK; the bare NDK binary is only an
   # intermediate it wraps.
   build-android:
@@ -158,6 +159,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: aarch64-linux-android
+          components: llvm-tools-preview
 
       - uses: Swatinem/rust-cache@v2.9.3
         with:
@@ -166,8 +168,11 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
 
+      - name: Install qemu-user (PGO training run)
+        run: sudo apt-get update && sudo apt-get install -y qemu-user
+
       # ubuntu-24.04 ships an NDK and exports ANDROID_NDK_LATEST_HOME. minSdk 24;
-      # portable ARMv8-A baseline, fat LTO. The output at
+      # portable ARMv8-A baseline, fat LTO, PGO. The output at
       # target/aarch64-linux-android/release/endspiel feeds the APK below.
       - name: Build (Android NDK)
         run: scripts/build-android.sh
