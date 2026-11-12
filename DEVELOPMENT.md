@@ -86,7 +86,7 @@ CI (`release.yml`, manual `workflow_dispatch` on tag):
 | linux-x64 / win-x64 | x86-64-v2 | thin | yes |
 | win-arm64 | generic | thin | no (cross-built) |
 | mac-arm64 | apple-m1 | thin | yes |
-| linux-arm64-pi5 (Raspberry Pi 5, glibc ≥ 2.39) | cortex-a76 | fat | yes |
+| linux-arm64-pi5 (Raspberry Pi 5, glibc ≥ 2.34) | cortex-a76 | fat | yes |
 | android-arm64.apk | generic | fat | yes, training run under qemu (+15.7% on a Snapdragon 8 Elite; `PGO=0` skips it, see `scripts/build-android.sh`) |
 
 ### Releasing a version

@@ -128,10 +128,10 @@ code path, in this order:
 
 | File | Build |
 |------|-------|
-| `endspiel-linux-x64`, `endspiel-win-x64.exe` | x86-64-v2 baseline, runtime SIMD dispatch, PGO |
+| `endspiel-linux-x64`, `endspiel-win-x64.exe` | x86-64-v2 baseline, runtime SIMD dispatch, PGO; Linux: glibc ≥ 2.34 |
 | `endspiel-mac-arm64` | `apple-m1`, PGO |
 | `endspiel-win-arm64.exe` | generic ARM64 |
-| `endspiel-linux-arm64-pi5` | `cortex-a76`, fat LTO + PGO; glibc ≥ 2.39 |
+| `endspiel-linux-arm64-pi5` | `cortex-a76`, fat LTO + PGO; glibc ≥ 2.34 |
 | `endspiel-android-arm64.apk` | `arm64-v8a` generic, fat LTO + PGO, minSdk 24; NEON or NEON+dotprod selected at runtime; Open Exchange (OEX) engine package |
 
 **Bench** runs a fixed-depth search over a small set of positions and prints the node count,
