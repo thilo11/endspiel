@@ -6,11 +6,17 @@ on:
   # 2. In the GitHub UI, Actions > Release > Run workflow, then enter the tag
   #    (e.g. v1.1.0) in the "tag" input. Both the build and the release are
   #    pinned to that tag regardless of which branch/ref the run is dispatched on.
+  # Dry run: `gh workflow run release.yml -f tag=main -f publish=false` builds every
+  # artifact (kept as workflow artifacts for 7 days) from any ref and publishes nothing.
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to build and publish (e.g. v1.1.0)"
+        description: "Release tag to build and publish (e.g. v1.1.0); any ref for a dry run"
         required: true
+      publish:
+        description: "Publish the GitHub release (off = dry run, artifacts only)"
+        type: boolean
+        default: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -242,6 +248,7 @@ jobs:
 
   release:
     needs: [build, build-android]
+    if: ${{ inputs.publish }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8.0.2
