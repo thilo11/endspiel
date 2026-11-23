@@ -595,12 +595,10 @@ static ZOBRIST: LazyLock<ZobristKeys> = LazyLock::new(|| {
         .into_boxed_slice()
         .try_into()
         .unwrap();
-    for color in 0..2 {
-        for kind in 0..6 {
-            for sq in 0..64 {
-                piece_sq[color][kind][sq] = splitmix(&mut s);
-            }
-        }
+    // Filled colour by colour, kind by kind, square by square: the key order
+    // is part of the fixed hash scheme.
+    for key in piece_sq.iter_mut().flatten().flatten() {
+        *key = splitmix(&mut s);
     }
 
     let mut castling = [0u64; 16];

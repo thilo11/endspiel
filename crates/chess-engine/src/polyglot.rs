@@ -248,22 +248,16 @@ pub fn polyglot_hash(board: &Board) -> u64 {
     let mut hash: u64 = 0;
 
     // Pieces: square index = rank * 8 + file (same as our Square encoding)
-    for color_idx in 0..2usize {
-        let color = if color_idx == 0 {
-            Color::White
-        } else {
-            Color::Black
-        };
-        for kind_idx in 0..6usize {
-            let kind = [
-                PieceKind::Pawn,
-                PieceKind::Knight,
-                PieceKind::Bishop,
-                PieceKind::Rook,
-                PieceKind::Queen,
-                PieceKind::King,
-            ][kind_idx];
-            let bb = board.pieces[color_idx][kind_idx];
+    const KINDS: [PieceKind; 6] = [
+        PieceKind::Pawn,
+        PieceKind::Knight,
+        PieceKind::Bishop,
+        PieceKind::Rook,
+        PieceKind::Queen,
+        PieceKind::King,
+    ];
+    for (color, color_pieces) in [Color::White, Color::Black].into_iter().zip(&board.pieces) {
+        for (&kind, &bb) in KINDS.iter().zip(color_pieces) {
             for sq in bb.iter() {
                 let pi = polyglot_piece_index(kind, color);
                 let sq_idx = sq.rank() as usize * 8 + sq.file() as usize;

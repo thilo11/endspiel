@@ -167,11 +167,7 @@ pub fn is_square_attacked(board: &Board, sq: Square, by_color: Color) -> bool {
     // Rook/Queen (straight attacks)
     let straight_attackers = rook_attacks(sq, occ)
         & (board.pieces[ci][PieceKind::Rook.index()] | board.pieces[ci][PieceKind::Queen.index()]);
-    if !straight_attackers.is_empty() {
-        return true;
-    }
-
-    false
+    !straight_attackers.is_empty()
 }
 
 /// Return a bitboard of all pieces of `by_color` that attack `sq`.

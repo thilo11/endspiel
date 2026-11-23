@@ -408,11 +408,11 @@ fn game_phase(board: &Board) -> i32 {
     let total_phase = 4 * knight_phase + 4 * bishop_phase + 4 * rook_phase + 2 * queen_phase;
 
     let mut phase = total_phase;
-    for color_idx in 0..2 {
-        phase -= board.pieces[color_idx][PieceKind::Knight.index()].count() as i32 * knight_phase;
-        phase -= board.pieces[color_idx][PieceKind::Bishop.index()].count() as i32 * bishop_phase;
-        phase -= board.pieces[color_idx][PieceKind::Rook.index()].count() as i32 * rook_phase;
-        phase -= board.pieces[color_idx][PieceKind::Queen.index()].count() as i32 * queen_phase;
+    for pieces in &board.pieces {
+        phase -= pieces[PieceKind::Knight.index()].count() as i32 * knight_phase;
+        phase -= pieces[PieceKind::Bishop.index()].count() as i32 * bishop_phase;
+        phase -= pieces[PieceKind::Rook.index()].count() as i32 * rook_phase;
+        phase -= pieces[PieceKind::Queen.index()].count() as i32 * queen_phase;
     }
 
     // Normalize to 0..256
