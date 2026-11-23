@@ -213,6 +213,8 @@ pub type InfoCallback = Box<dyn Fn(&SearchInfo) + Send>;
 /// Search info reported during search.
 #[derive(Debug, Clone)]
 pub struct SearchInfo {
+    /// What this report is; only `Line` and the bounds carry a score and PV.
+    pub kind: InfoKind,
     pub depth: u8,
     pub seldepth: u8,
     pub score: Score,
@@ -222,6 +224,21 @@ pub struct SearchInfo {
     pub hashfull: u16,
     /// Which MultiPV line this info belongs to (1-based). Always 1 in single-PV mode.
     pub multipv_line: usize,
+}
+
+/// What a [`SearchInfo`] reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InfoKind {
+    /// A finished line of a depth: its score and PV.
+    Line,
+    /// A depth's first line failed high mid-search: the score is at least this.
+    LowerBound,
+    /// A depth's first line failed low mid-search: the score is at most this.
+    UpperBound,
+    /// Progress during a long depth: nodes, time and hash use (no score or PV).
+    Progress,
+    /// The root move now being searched, numbered from 1 within its line.
+    CurrMove { mv: Move, number: u32 },
 }
 
 /// The main engine that performs search.

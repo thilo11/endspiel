@@ -14,7 +14,7 @@ use crate::polyglot::OpeningBook;
 use crate::see;
 use crate::syzygy::{self, SyzygyTB};
 use crate::tt::{SharedTT, TTFlag};
-use crate::{InfoCallback, SearchInfo, SearchParams, SearchResult, TuneParams};
+use crate::{InfoCallback, InfoKind, SearchInfo, SearchParams, SearchResult, TuneParams};
 
 // ---------------------------------------------------------------------------
 // LMR reduction table (built at search start from TuneParams)
@@ -258,7 +258,21 @@ struct SearchState<'a> {
     ponder_was_active: bool,
     ponder_hit_at: Option<Instant>,
     ponder_fresh_ms: u64,
+    /// The main thread's `info` callback (helper threads have none). Besides
+    /// each depth's lines it reports progress during a long depth: the root
+    /// move being searched and a once-a-second update of nodes and hash use.
+    info_cb: Option<InfoCallback>,
+    /// The depth being searched, for the progress reports.
+    progress_depth: u8,
+    /// When (ms into the search) a line or progress was last reported.
+    last_report_ms: u64,
 }
+
+/// Progress is reported at most this often (ms) while no line is.
+const PROGRESS_INTERVAL_MS: u64 = 1000;
+/// `currmove` and mid-depth bounds are reported from this far into a search
+/// (ms) on, as Stockfish does, so short searches stay quiet.
+const DETAIL_AFTER_MS: u64 = 3000;
 
 impl<'a> SearchState<'a> {
     #[allow(clippy::too_many_arguments)]
@@ -313,7 +327,81 @@ impl<'a> SearchState<'a> {
             ponder_was_active: false,
             ponder_hit_at: None,
             ponder_fresh_ms: ponder_fresh_time_ms(soft_target_ms, time_remaining_ms, game_ply),
+            info_cb: None,
+            progress_depth: 0,
+            last_report_ms: 0,
         }
+    }
+
+    /// Sends `info` to the GUI (main thread only).
+    fn report(&mut self, info: &SearchInfo) {
+        if let Some(cb) = &self.info_cb {
+            cb(info);
+            self.last_report_ms = self.elapsed_ms();
+        }
+    }
+
+    /// A report of `kind` at the current depth without score or PV.
+    fn progress_info(&self, kind: InfoKind, time_ms: u64) -> SearchInfo {
+        SearchInfo {
+            kind,
+            depth: self.progress_depth,
+            seldepth: self.seldepth,
+            score: Score(0),
+            nodes: self.nodes,
+            time_ms,
+            pv: Vec::new(),
+            hashfull: self.tt.hashfull(),
+            multipv_line: 1,
+        }
+    }
+
+    /// Reports progress (nodes, speed, hash use) when nothing has been reported
+    /// for a second, so a GUI shows a long depth is still searching.
+    fn report_progress(&mut self) {
+        if self.info_cb.is_none() {
+            return;
+        }
+        let now = self.elapsed_ms();
+        if now < self.last_report_ms + PROGRESS_INTERVAL_MS {
+            return;
+        }
+        let info = self.progress_info(InfoKind::Progress, now);
+        self.report(&info);
+    }
+
+    /// Reports the root move about to be searched (after a few seconds).
+    fn report_currmove(&mut self, mv: Move, number: u32) {
+        if self.info_cb.is_none() {
+            return;
+        }
+        let now = self.elapsed_ms();
+        if now < DETAIL_AFTER_MS {
+            return;
+        }
+        let info = self.progress_info(InfoKind::CurrMove { mv, number }, now);
+        if let Some(cb) = &self.info_cb {
+            cb(&info);
+        }
+    }
+
+    /// Reports a mid-depth aspiration bound of the first line (after a few
+    /// seconds): `pv` is its line, or the previous depth's after a fail-low.
+    fn report_bound(&mut self, board: &Board, kind: InfoKind, score: i32, pv: &[Move]) {
+        if self.info_cb.is_none() || pv.is_empty() {
+            return;
+        }
+        let now = self.elapsed_ms();
+        if now < DETAIL_AFTER_MS {
+            return;
+        }
+        let info = SearchInfo {
+            kind,
+            score: Score(score),
+            pv: sanitize_pv(board, pv),
+            ..self.progress_info(kind, now)
+        };
+        self.report(&info);
     }
 
     fn set_ponder(&mut self, ponder: Option<Arc<AtomicBool>>) {
@@ -348,6 +436,7 @@ impl<'a> SearchState<'a> {
     }
 
     fn should_stop(&mut self, stop_flag: &AtomicBool) -> bool {
+        self.report_progress();
         if self.stop || (self.stop_flag_armed && stop_flag.load(Ordering::Relaxed)) {
             return true;
         }
@@ -1354,6 +1443,7 @@ pub fn iterative_deepening(
         let score = Score(stm_eval.clamp(-40, 40));
         if let Some(ref cb) = info_callback {
             cb(&SearchInfo {
+                kind: InfoKind::Line,
                 depth: 1,
                 seldepth: 1,
                 score,
@@ -1409,6 +1499,7 @@ pub fn iterative_deepening(
     );
     state.set_ponder(params.ponder.clone());
     state.stop_flag_armed = thread_id != 0;
+    state.info_cb = info_callback;
 
     // Initialize root accumulator for NNUE
     if state.use_nnue {
@@ -1450,18 +1541,17 @@ pub fn iterative_deepening(
         };
         // Tell the GUI why there is no move (`info depth 0 score mate 0` or
         // `cp 0`, as Stockfish reports it).
-        if let Some(ref cb) = info_callback {
-            cb(&SearchInfo {
-                depth: 0,
-                seldepth: 0,
-                score,
-                nodes: 0,
-                time_ms: 0,
-                pv: Vec::new(),
-                hashfull: tt.hashfull(),
-                multipv_line: 1,
-            });
-        }
+        state.report(&SearchInfo {
+            kind: InfoKind::Line,
+            depth: 0,
+            seldepth: 0,
+            score,
+            nodes: 0,
+            time_ms: 0,
+            pv: Vec::new(),
+            hashfull: tt.hashfull(),
+            multipv_line: 1,
+        });
         return SearchResult {
             best_move: Move::NULL,
             score,
@@ -1532,18 +1622,18 @@ pub fn iterative_deepening(
         let mut pv = vec![only_move];
         pv.extend_from_slice(&quick_pv);
         let clean_pv = sanitize_pv(board, &pv);
-        if let Some(ref cb) = info_callback {
-            cb(&SearchInfo {
-                depth: quick_depth,
-                seldepth: quick_state.seldepth,
-                score,
-                nodes: quick_state.nodes,
-                time_ms: quick_state.elapsed_ms(),
-                pv: clean_pv.clone(),
-                hashfull: tt.hashfull(),
-                multipv_line: 1,
-            });
-        }
+        let info = SearchInfo {
+            kind: InfoKind::Line,
+            depth: quick_depth,
+            seldepth: quick_state.seldepth,
+            score,
+            nodes: quick_state.nodes,
+            time_ms: quick_state.elapsed_ms(),
+            pv: clean_pv.clone(),
+            hashfull: tt.hashfull(),
+            multipv_line: 1,
+        };
+        state.report(&info);
         return SearchResult {
             best_move: only_move,
             score,
@@ -1648,6 +1738,7 @@ pub fn iterative_deepening(
         if depth == 0 {
             continue;
         }
+        state.progress_depth = depth;
 
         // Sort root moves by previous iteration score (best first).
         // In TB-restricted mode every listed move is a tablebase win, so cp
@@ -1762,12 +1853,18 @@ pub fn iterative_deepening(
                     }
 
                     if s <= alpha {
+                        if !state.stop {
+                            state.report_bound(board, InfoKind::UpperBound, s, &best_pv);
+                        }
                         alpha = (s - delta).max(Score::NEG_INF.0);
                         delta += delta / 2;
                         aspiration_failures += 1;
                         continue;
                     }
                     if s >= beta {
+                        if !state.stop {
+                            state.report_bound(board, InfoKind::LowerBound, s, &pv);
+                        }
                         beta = s + delta;
                         delta += delta / 2;
                         aspiration_failures += 1;
@@ -1900,13 +1997,12 @@ pub fn iterative_deepening(
 
         // A depth 1 stopped before it finished has no score worth reporting
         // (an aborted line reads 0 cp with no PV).
-        if let Some(ref cb) = info_callback
-            && depth_completed
-        {
+        if depth_completed {
             let elapsed = state.elapsed_ms();
             for (line_idx, (line_score, line_pv, line_seldepth)) in line_results.iter().enumerate()
             {
-                cb(&SearchInfo {
+                state.report(&SearchInfo {
+                    kind: InfoKind::Line,
                     depth,
                     seldepth: *line_seldepth,
                     score: Score(*line_score),
@@ -2244,11 +2340,14 @@ fn alpha_beta_root(
     let mut tt_store_flag = TTFlag::UpperBound;
     let total_nodes_start = state.nodes;
     let mut best_move_nodes: u64 = 0;
+    let mut move_number = 0u32;
     for (moves_searched, (m, move_score)) in root_move_scores.iter_mut().enumerate() {
         if *move_score == i32::MIN {
             continue; // excluded by multi-PV logic
         }
         let m = *m;
+        move_number += 1;
+        state.report_currmove(m, move_number);
         let move_nodes_start = state.nodes;
 
         let prev_castling = board.castling;
@@ -5556,7 +5655,12 @@ mod tests {
             infinite: true,
             ..Default::default()
         };
-        let (result, lines) = search_reporting(ITALIAN, params, true);
+        let (result, reports) = search_reporting(ITALIAN, params, true);
+        // Only the depth's lines (a slow debug search also reports progress).
+        let lines: Vec<_> = reports
+            .iter()
+            .filter(|l| l.kind == InfoKind::Line)
+            .collect();
         assert_eq!(result.depth, 1);
         assert_eq!(lines.len(), 1, "depth 1 is reported");
         assert_eq!(lines[0].pv.first(), Some(&result.best_move));
@@ -5571,7 +5675,12 @@ mod tests {
             max_nodes: Some(20),
             ..Default::default()
         };
-        let (result, lines) = search_reporting(ITALIAN, params, false);
+        let (result, reports) = search_reporting(ITALIAN, params, false);
+        // Only lines (a slow debug search also reports progress).
+        let lines: Vec<_> = reports
+            .iter()
+            .filter(|l| l.kind == InfoKind::Line)
+            .collect();
         assert!(!result.best_move.is_null(), "still a move to play");
         assert!(lines.is_empty(), "reported {lines:?}");
     }

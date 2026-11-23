@@ -6,9 +6,11 @@ use std::time::Duration;
 
 use chess_common::{Board, Move, Score};
 use chess_engine::search::PersistentHistory;
-use chess_engine::{Engine, InfoCallback, SearchInfo, SearchParams};
+use chess_engine::{Engine, InfoCallback, InfoKind, SearchInfo, SearchParams};
 
-use crate::protocol::{GoParams, UciCommand, UciInfo, UciOptionDef, UciOptionType, UciResponse};
+use crate::protocol::{
+    GoParams, ScoreBound, UciCommand, UciInfo, UciOptionDef, UciOptionType, UciResponse,
+};
 
 /// WDL model on internal scores: P(win) = sigmoid((s − a) / b) and
 /// P(loss) = sigmoid((−s − a) / b), so `WDL_A` is a 50% win chance and the
@@ -61,9 +63,12 @@ fn engine_name_string() -> String {
 /// reporting.
 type VarietyLines = Arc<Mutex<(u8, Vec<SearchInfo>)>>;
 
-/// UCI `info` line for one search line. The WDL uses the raw score (the sigmoid
-/// is calibrated against it); the displayed cp score is normalized so that 100
+/// UCI `info` line for one search report. A line (or a mid-depth bound of
+/// one) carries its score and PV: the WDL uses the raw score (the sigmoid is
+/// calibrated against it); the displayed cp score is normalized so that 100
 /// cp = a 50% win chance (Stockfish's convention). Mate scores pass through.
+/// Progress reports carry only nodes, speed, hash use and time; `currmove`
+/// reports only the move and its number.
 fn uci_info_line(
     info: &SearchInfo,
     board: &Board,
@@ -71,6 +76,29 @@ fn uci_info_line(
     show_wdl: bool,
     multipv: Option<usize>,
 ) -> UciInfo {
+    let bound = match info.kind {
+        InfoKind::Line => None,
+        InfoKind::LowerBound => Some(ScoreBound::Lower),
+        InfoKind::UpperBound => Some(ScoreBound::Upper),
+        InfoKind::Progress => {
+            return UciInfo {
+                depth: Some(info.depth),
+                seldepth: Some(info.seldepth),
+                nodes: Some(info.nodes),
+                nps: (info.nodes * 1000).checked_div(info.time_ms),
+                hashfull: Some(info.hashfull),
+                time: Some(info.time_ms),
+                ..UciInfo::default()
+            };
+        }
+        InfoKind::CurrMove { mv, number } => {
+            return UciInfo {
+                depth: Some(info.depth),
+                currmove: Some((board.move_to_uci(mv, chess960), number)),
+                ..UciInfo::default()
+            };
+        }
+    };
     let wdl = if show_wdl && !info.score.is_mate() {
         Some(score_to_wdl(info.score.centipawns()))
     } else {
@@ -91,6 +119,8 @@ fn uci_info_line(
         hashfull: Some(info.hashfull),
         nps: (info.nodes * 1000).checked_div(info.time_ms),
         wdl,
+        bound,
+        currmove: None,
         string: None,
     }
 }
@@ -596,11 +626,14 @@ impl UciHandler {
                             let mut vl = variety_lines_cb
                                 .lock()
                                 .unwrap_or_else(|p| p.into_inner());
-                            if info.depth > vl.0 {
-                                *vl = (info.depth, Vec::new());
-                            }
-                            if info.depth == vl.0 && !info.pv.is_empty() {
-                                vl.1.push(info.clone());
+                            // Only finished lines: a bound is a mid-depth guess.
+                            if info.kind == InfoKind::Line {
+                                if info.depth > vl.0 {
+                                    *vl = (info.depth, Vec::new());
+                                }
+                                if info.depth == vl.0 && !info.pv.is_empty() {
+                                    vl.1.push(info.clone());
+                                }
                             }
                         }
                         if info.multipv_line > shown_multi_pv {

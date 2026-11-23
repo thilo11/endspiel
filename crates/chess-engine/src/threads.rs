@@ -197,6 +197,7 @@ impl ThreadPool {
                     total_nodes += cb_counters[i].value.load(Ordering::Relaxed);
                 }
                 let total_nps_info = SearchInfo {
+                    kind: info.kind,
                     depth: info.depth,
                     seldepth: info.seldepth,
                     score: info.score,

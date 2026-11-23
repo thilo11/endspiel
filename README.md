@@ -156,6 +156,9 @@ for GUIs or bots that can't set `SyzygyPath`.
 - `go infinite` and `go ponder` print their `bestmove` only after `stop` (or `ponderhit`), even
   when the search has nothing left to do (a found mate, the depth limit, no legal move). An
   infinite analysis keeps deepening all lines after it finds a mate and ignores `BookFile`.
+- A long depth reports progress: after 3 s the root move being searched (`currmove …
+  currmovenumber …`) and a mid-depth score of the first line (`lowerbound` / `upperbound`), and
+  every second without other output a line with `nodes`, `nps`, `hashfull` and `time`.
 - A `stop` right after `go` still plays the best move of a finished depth 1 (milliseconds).
 - In a checkmate or stalemate it prints `info depth 0 score mate 0` (or `score cp 0`) and
   `bestmove 0000`; after an invalid `position` it prints an `info string` with the reason and

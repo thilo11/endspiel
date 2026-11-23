@@ -73,7 +73,18 @@ pub struct UciInfo {
     pub wdl: Option<(u32, u32, u32)>,
     pub hashfull: Option<u16>,
     pub nps: Option<u64>,
+    /// `lowerbound` / `upperbound` after the score: a mid-depth result.
+    pub bound: Option<ScoreBound>,
+    /// The root move being searched and its number (`currmove … currmovenumber …`).
+    pub currmove: Option<(String, u32)>,
     pub string: Option<String>,
+}
+
+/// Which side of the true score a mid-depth `info` score lies on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScoreBound {
+    Lower,
+    Upper,
 }
 
 /// Definition of a UCI option.
@@ -333,6 +344,11 @@ impl fmt::Display for UciResponse {
                 if let Some(score) = info.score {
                     write!(f, " score {score}")?;
                 }
+                match info.bound {
+                    Some(ScoreBound::Lower) => write!(f, " lowerbound")?,
+                    Some(ScoreBound::Upper) => write!(f, " upperbound")?,
+                    None => {}
+                }
                 if let Some((w, d, l)) = info.wdl {
                     write!(f, " wdl {w} {d} {l}")?;
                 }
@@ -347,6 +363,9 @@ impl fmt::Display for UciResponse {
                 }
                 if let Some(time) = info.time {
                     write!(f, " time {time}")?;
+                }
+                if let Some((ref mv, number)) = info.currmove {
+                    write!(f, " currmove {mv} currmovenumber {number}")?;
                 }
                 if !info.pv.is_empty() {
                     write!(f, " pv")?;
@@ -611,6 +630,36 @@ mod tests {
         };
         let resp = UciResponse::Info(info);
         assert_eq!(resp.to_string(), "info depth 10 score mate 1");
+    }
+
+    #[test]
+    fn test_format_info_bound() {
+        let info = UciInfo {
+            depth: Some(20),
+            score: Some(Score(35)),
+            bound: Some(ScoreBound::Lower),
+            pv: vec!["e2e4".to_string()],
+            ..UciInfo::default()
+        };
+        let resp = UciResponse::Info(info);
+        assert_eq!(
+            resp.to_string(),
+            "info depth 20 score cp 35 lowerbound pv e2e4"
+        );
+    }
+
+    #[test]
+    fn test_format_info_currmove() {
+        let info = UciInfo {
+            depth: Some(20),
+            currmove: Some(("g1f3".to_string(), 3)),
+            ..UciInfo::default()
+        };
+        let resp = UciResponse::Info(info);
+        assert_eq!(
+            resp.to_string(),
+            "info depth 20 currmove g1f3 currmovenumber 3"
+        );
     }
 
     /// Mated with no move left: `mate 0` (as Stockfish prints it), not `mate -0`.
