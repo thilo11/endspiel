@@ -11,8 +11,8 @@
 # Defaults:
 #   - Downloads both WDL (.rtbw) and DTZ (.rtbz) files
 #   - Target directory: assets/syzygy  (relative to the repository root)
-#   - Pieces: 3-4-5 (small, ~350 MB). Use --pieces 6 for 6-man (~150 GB) or
-#     --pieces all for both sets.
+#   - Pieces: 3-4-5 (small: ~1 GB, ~400 MB with --wdl-only). Use --pieces 6
+#     for 6-man (~160 GB) or --pieces all for both sets.
 #   - Mirror: rsync://tablebase.sesse.net/tablebase/syzygy/
 
 set -euo pipefail

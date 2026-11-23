@@ -11,7 +11,9 @@
 │   ├── chess-engine/             # Search, HCE evaluation, Syzygy WDL probing
 │   ├── chess-nnue/               # NNUE inference + embedded net (build.rs)
 │   └── chess-uci/                # UCI protocol handler
-├── scripts/                      # build & setup helpers (Android, Syzygy download)
+├── tests/                        # end-to-end UCI tests against the built binary (release only)
+├── android/oex/                  # Open Exchange engine APK wrapper (see its README)
+├── scripts/                      # build & setup helpers (Android, PGO, Syzygy download)
 └── assets/                       # Gitignored — local resources
 ```
 
@@ -27,6 +29,15 @@ Alpha-beta with iterative deepening and PVS:
 - **Move ordering**: TT → good captures (MVV-LVA) → killers → counter → history-sorted quiets → bad captures
 - **Quiescence**: SEE-based pruning; **SMP**: Lazy SMP with depth diversity
 - **Time management** (`compute_time_limit`, `long_game_time_cap` in `search.rs`): two budgets per move — a soft target (a typical position; the ID loop stops at ~0.35–3× of it depending on PV stability, score drops and node concentration) and a hard limit (≤ 3× soft, ≤ 80% of the clock). Clock controls are capped per move: above 5 min at `inc + time/20` early (17/14/12 later in the game), sudden death keeping that slice down to 400 s and blending to `time/34` by 300 s, so blitz (≤ 5 min) keeps the flag-safe cap. Repeating controls (`movestogo`, e.g. CCRL 40/15) skip those sudden-death caps and spread the clock over the moves left (`time/(movestogo+1)`); at 40/60 that used 79% of each period instead of 56% and measured +19.1 ± 11.1 Elo (782 games). On clocks of 400 s and more (not Chess960, not `movestogo`), `opening_ramp_permille` scales the soft target from 40% to 100% over plies 0–20, so the bank slice is not spent on known opening moves. Regression tests: `repeating_control_spends_the_period_without_flagging`, `ten_minute_sudden_death_spends_the_clock_without_flagging`
+
+### UCI layer (`chess-uci`)
+
+`handler.rs` runs each `go` on its own thread and keeps the protocol's timing rules, which the search does not know about:
+
+- **Held `bestmove`**: `go ponder` holds its move until `ponderhit`/`stop` (`ponder_pending`), `go infinite` until `stop` (`infinite_pending`). The search ends by itself in several cases (a short mate, the depth cap, a TB-restricted root, no legal move), so the hold watches these handler-owned flags, never the shared stop flag, which the thread pool sets itself to end its helpers. GUIs depend on this: one that sends `stop` waits for exactly one `bestmove` (Castellan dropped a whole analysis when Endspiel answered early). Regression test: `tests/infinite_holds_bestmove.rs`.
+- **`stop` and `quit`**: the GUI's stop flag only takes effect once the main thread has finished depth 1 (`SearchState::stop_flag_armed`), so a `stop` right after `go` plays a searched move; node and time limits apply throughout (the weak strength classes stop inside depth 1 at 150 nodes). A depth 1 cut short by a limit reports no `info` line. `quit` ends a search without printing its `bestmove`.
+- **Analysis (`go infinite`)**: no opening-book move and no mate break, so all MultiPV lines keep deepening; `go mate N` stops at a mate in N moves (`SearchParams::mate`). A root without legal moves reports `info depth 0 score mate 0` / `cp 0`.
+- **Display**: scores are shown in Stockfish's convention (100 cp = a 50% win chance, `WDL_A`); tablebase sentinels map to ±3000 cp.
 
 ### Evaluation
 
@@ -89,6 +100,8 @@ CI (`release.yml`, manual `workflow_dispatch` on tag):
 | linux-arm64-pi5 (Raspberry Pi 5, glibc ≥ 2.34) | cortex-a76 | fat | yes |
 | android-arm64.apk | generic | fat | yes, training run under qemu (+15.7% on a Snapdragon 8 Elite; `PGO=0` skips it, see `scripts/build-android.sh`) |
 
+The desktop and Pi 5 PGO profiles train on `endspiel bench 20`; the local `scripts/build-*-pgo.sh` and the Android build train on the default `bench` (depth 14).
+
 ### Releasing a version
 
 Post-release `-dev` bump: main is always *not* a release.
@@ -107,6 +120,8 @@ cargo test --release --workspace          # required before merge
 cargo clippy --workspace --all-targets    # zero warnings; #[allow] only for proven false positives, with a comment
 cargo fmt                                 # on change
 ```
+
+CI (`ci.yml`) runs `cargo clippy --workspace -- -D warnings`, `cargo test --workspace` (debug) and `cargo test --release --workspace`. The end-to-end tests in `tests/` drive the built binary over UCI with wall-clock assertions, so they are ignored in debug builds (a debug engine spends seconds in search spin-up); run them with `--release`.
 
 ## Commit / PR conventions
 
@@ -127,10 +142,11 @@ PR checklist:
 ## Syzygy Tablebases
 
 ```bash
-bash scripts/download_syzygy.sh             # WDL + DTZ (~350 MB)
-bash scripts/download_syzygy.sh --wdl-only  # ~150 MB
+bash scripts/download_syzygy.sh             # 3–5 pieces, WDL + DTZ (~1 GB)
+bash scripts/download_syzygy.sh --wdl-only  # 3–5 pieces, WDL only (~400 MB)
+bash scripts/download_syzygy.sh --pieces 6  # 6 pieces (~160 GB)
 ```
-Lands in `assets/syzygy/` (gitignored). KRK probe sanity check (`go movetime 500` should return 28000 cp from depth 1):
+Lands in `assets/syzygy/` (gitignored). Sanity check: the engine must print `info string Syzygy tablebases loaded from 'assets/syzygy' (max N pieces)`, and in this KRK position the search reports a mate within a few depths:
 
 ```bash
 (printf "uci\nisready\nsetoption name SyzygyPath value assets/syzygy\nucinewgame\nposition fen 8/8/8/8/4K3/8/4R3/7k w - - 0 1\ngo movetime 500\n"; sleep 2) \

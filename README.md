@@ -10,9 +10,9 @@
 > **Endspiel** /ˈɛnt.ʃpiːl/ *n.* (German) &nbsp; **1.** the final, decisive game. &nbsp; **2.** the final phase of a chess game.
 
 A free, open-source chess engine for analysing your games, practising at your own
-level and running engine matches. **Endspiel 2.0.0 is rated 3508 Elo on the CCRL Blitz
-list** (805 games) and 3455 in its first games on CCRL 40/15. That is far beyond any
-human player, and it runs on a desktop, a laptop, a Raspberry Pi 5 or an Android phone.
+level and running engine matches. **Endspiel 2.0.0 is rated 3504 Elo on the CCRL Blitz
+list** (931 games) and 3440 on CCRL 40/15 (616 games, both as of November 2026). That is far
+beyond any human player, and it runs on a desktop, a laptop, a Raspberry Pi 5 or an Android phone.
 
 Download one file, point your chess GUI at it, and play. There is no net file to fetch
 and nothing to configure: the neural network is built into the binary, and hash size and
@@ -145,6 +145,23 @@ time and NPS. Its first line names the selected SIMD tier, e.g.
 
 On Windows: `endspiel-win-x64.exe bench`. On macOS, a `bench` run is also the quickest way to
 see a Gatekeeper error that a GUI would hide.
+
+**Tablebases from the command line.** `endspiel --syzygy <path>` loads Syzygy tables at startup,
+for GUIs or bots that can't set `SyzygyPath`.
+
+**UCI behaviour.** Endspiel follows the UCI protocol as Stockfish does:
+
+- `go` takes `wtime` / `btime` / `winc` / `binc` / `movestogo`, `movetime`, `depth`, `nodes`,
+  `mate` (stops at a mate in that many moves), `searchmoves`, `infinite` and `ponder`.
+- `go infinite` and `go ponder` print their `bestmove` only after `stop` (or `ponderhit`), even
+  when the search has nothing left to do (a found mate, the depth limit, no legal move). An
+  infinite analysis keeps deepening all lines after it finds a mate and ignores `BookFile`.
+- A `stop` right after `go` still plays the best move of a finished depth 1 (milliseconds).
+- In a checkmate or stalemate it prints `info depth 0 score mate 0` (or `score cp 0`) and
+  `bestmove 0000`; after an invalid `position` it prints an `info string` with the reason and
+  answers `go` with `bestmove 0000`.
+- `isready` is answered at once, also during a search; `quit` ends a search without a
+  `bestmove`.
 
 **Raspberry Pi 5.** Any RAM tier runs the engine; hash size is the only
 thing that scales with it. The default is 128 MB per thread, capped at 1/16 of

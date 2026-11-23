@@ -47,8 +47,9 @@ fn real_main() {
 
 /// Default depth for `endspiel bench`. Kept fixed so the printed node
 /// count is reproducible across runs (useful for verifying that a search
-/// change didn't accidentally alter the node tree). The same command is
-/// used as the PGO training workload in CI.
+/// change didn't accidentally alter the node tree). Also the PGO training
+/// workload of the local PGO scripts and the Android build; release CI trains
+/// on `bench 20`.
 const BENCH_DEPTH: u8 = 14;
 
 /// Fixed FEN set for `bench`. Mix of opening, complex middlegame, tactical,
