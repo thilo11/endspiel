@@ -496,7 +496,8 @@ impl fmt::Display for Score {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.is_mate() {
             let moves_to_mate = (Score::MATE.0 - self.0.abs() + 1) / 2;
-            if self.0 > 0 {
+            // Mated now (no moves left) is `mate 0`, not `mate -0`.
+            if self.0 > 0 || moves_to_mate == 0 {
                 write!(f, "mate {moves_to_mate}")
             } else {
                 write!(f, "mate -{moves_to_mate}")

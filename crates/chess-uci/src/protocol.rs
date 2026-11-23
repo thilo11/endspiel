@@ -612,4 +612,16 @@ mod tests {
         let resp = UciResponse::Info(info);
         assert_eq!(resp.to_string(), "info depth 10 score mate 1");
     }
+
+    /// Mated with no move left: `mate 0` (as Stockfish prints it), not `mate -0`.
+    #[test]
+    fn test_format_info_mated_now() {
+        let info = UciInfo {
+            depth: Some(0),
+            score: Some(Score::NEG_MATE),
+            ..UciInfo::default()
+        };
+        let resp = UciResponse::Info(info);
+        assert_eq!(resp.to_string(), "info depth 0 score mate 0");
+    }
 }

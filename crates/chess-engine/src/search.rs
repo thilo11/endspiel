@@ -242,6 +242,11 @@ struct SearchState<'a> {
     contempt: i32,
     singular_ext_mode: u8,
     stop: bool,
+    /// Whether the shared stop flag (the GUI's `stop`) ends the search. The
+    /// main thread arms it once depth 1 is done, so a `stop` right after `go`
+    /// still plays a searched move rather than the first legal one; depth 1
+    /// takes milliseconds. Node and time limits apply throughout.
+    stop_flag_armed: bool,
     /// Syzygy tablebase handle for WDL probing (None if disabled or not loaded).
     syzygy_tb: Option<SyzygyTB>,
     /// `go ponder` flag shared with the UCI handler. While it reads true every
@@ -302,6 +307,7 @@ impl<'a> SearchState<'a> {
             contempt,
             singular_ext_mode,
             stop: false,
+            stop_flag_armed: true,
             syzygy_tb,
             ponder: None,
             ponder_was_active: false,
@@ -342,7 +348,7 @@ impl<'a> SearchState<'a> {
     }
 
     fn should_stop(&mut self, stop_flag: &AtomicBool) -> bool {
-        if self.stop || stop_flag.load(Ordering::Relaxed) {
+        if self.stop || (self.stop_flag_armed && stop_flag.load(Ordering::Relaxed)) {
             return true;
         }
         // Poll the ponder flag on every periodic stop check so the fresh-time
@@ -1402,6 +1408,7 @@ pub fn iterative_deepening(
         learning,
     );
     state.set_ponder(params.ponder.clone());
+    state.stop_flag_armed = thread_id != 0;
 
     // Initialize root accumulator for NNUE
     if state.use_nnue {
@@ -1441,6 +1448,20 @@ pub fn iterative_deepening(
         } else {
             Score::DRAW
         };
+        // Tell the GUI why there is no move (`info depth 0 score mate 0` or
+        // `cp 0`, as Stockfish reports it).
+        if let Some(ref cb) = info_callback {
+            cb(&SearchInfo {
+                depth: 0,
+                seldepth: 0,
+                score,
+                nodes: 0,
+                time_ms: 0,
+                pv: Vec::new(),
+                hashfull: tt.hashfull(),
+                multipv_line: 1,
+            });
+        }
         return SearchResult {
             best_move: Move::NULL,
             score,
@@ -1793,6 +1814,7 @@ pub fn iterative_deepening(
             line_results.push((score, sanitize_pv(board, &pv), state.seldepth));
         }
 
+        state.stop_flag_armed = true;
         last_iter_ms = state.elapsed_ms().saturating_sub(iter_start_ms);
 
         if !depth_completed && depth > 1 {
@@ -5524,21 +5546,48 @@ mod tests {
         );
     }
 
-    /// A search stopped before depth 1 finishes still has a move to play, but
-    /// reports no line: its aborted score (0 cp, no PV) would read as an
-    /// evaluation.
+    const ITALIAN: &str = "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/3P1N2/PPP2PPP/RNBQK2R w KQkq - 4 5";
+
+    /// The GUI's `stop` right after `go` waits for depth 1 (milliseconds), so
+    /// the move played is a searched one, not the first legal move.
     #[test]
-    fn a_search_stopped_during_depth_one_reports_no_line() {
+    fn a_stop_before_depth_one_still_plays_a_searched_move() {
         let params = SearchParams {
             infinite: true,
             ..Default::default()
         };
-        let (result, lines) = search_reporting(
-            "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/3P1N2/PPP2PPP/RNBQK2R w KQkq - 4 5",
-            params,
-            true,
-        );
+        let (result, lines) = search_reporting(ITALIAN, params, true);
+        assert_eq!(result.depth, 1);
+        assert_eq!(lines.len(), 1, "depth 1 is reported");
+        assert_eq!(lines[0].pv.first(), Some(&result.best_move));
+    }
+
+    /// A node limit still ends depth 1 early (weak strength classes rely on
+    /// it); the aborted depth reports no line, as its score (0 cp, no PV)
+    /// would read as an evaluation, but there is still a move to play.
+    #[test]
+    fn a_node_limit_during_depth_one_reports_no_line() {
+        let params = SearchParams {
+            max_nodes: Some(20),
+            ..Default::default()
+        };
+        let (result, lines) = search_reporting(ITALIAN, params, false);
         assert!(!result.best_move.is_null(), "still a move to play");
         assert!(lines.is_empty(), "reported {lines:?}");
+    }
+
+    /// With no legal move the search reports why, as `info depth 0`: mated
+    /// (`score mate 0`) or stalemate (`score cp 0`).
+    #[test]
+    fn a_position_without_moves_reports_mate_or_draw() {
+        for (fen, score) in [
+            ("6rk/5Npp/8/8/8/8/8/6K1 b - - 0 1", Score::NEG_MATE),
+            ("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1", Score::DRAW),
+        ] {
+            let (result, lines) = search_reporting(fen, SearchParams::default(), false);
+            assert!(result.best_move.is_null());
+            assert_eq!(lines.len(), 1, "{fen}");
+            assert_eq!((lines[0].depth, lines[0].score), (0, score), "{fen}");
+        }
     }
 }
