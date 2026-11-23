@@ -185,6 +185,11 @@ pub struct UciHandler {
     /// UCI_Elo: snapped to a class by [`chess_engine::strength::level_for_elo`];
     /// only used while `limit_strength` is set.
     uci_elo: i32,
+    /// UCI_AnalyseMode: the GUI analyses rather than plays (also implied by
+    /// `go infinite`). Analysis wants the true evaluation, so the game-play
+    /// settings a GUI may still send are ignored: no strength limit, opening
+    /// variety, contempt or book move.
+    analyse_mode: bool,
 }
 
 impl Default for UciHandler {
@@ -216,6 +221,7 @@ impl UciHandler {
             chess960: false,
             limit_strength: false,
             uci_elo: chess_engine::strength::ELO_MAX,
+            analyse_mode: false,
         }
     }
 
@@ -382,6 +388,14 @@ impl UciHandler {
                 max: chess_engine::strength::ELO_MAX as i64,
             },
         }));
+        send_response(&UciResponse::Option(UciOptionDef {
+            name: "UCI_AnalyseMode".to_string(),
+            opt_type: UciOptionType::Check { default: false },
+        }));
+        send_response(&UciResponse::Option(UciOptionDef {
+            name: "Clear Hash".to_string(),
+            opt_type: UciOptionType::Button,
+        }));
         // SPSA builds (`--features tune`) expose every search constant.
         #[cfg(feature = "tune")]
         for (name, default, min, max) in self.engine.tune().spec() {
@@ -494,13 +508,18 @@ impl UciHandler {
         // final lines (see `chess_engine::strength`). Single-threaded and
         // without tablebases, so the class plays like itself in every phase.
         // Its draw replaces opening variety.
-        let strength = if self.limit_strength {
+        // Analysis (`UCI_AnalyseMode` or `go infinite`) searches at full
+        // strength for the true evaluation: no strength limit, opening
+        // variety, contempt or book move.
+        let analysis = self.analyse_mode || params.infinite;
+        let strength = if self.limit_strength && !analysis {
             chess_engine::strength::level_for_elo(self.uci_elo)
         } else {
             None
         };
         let opening_variety = self.opening_variety;
         let variety_active = strength.is_none()
+            && !analysis
             && opening_variety_active(opening_variety, self.chess960, &self.board);
         let effective_multi_pv = if let Some(level) = strength {
             self.multi_pv.max(level.multi_pv)
@@ -540,7 +559,7 @@ impl UciHandler {
             use_nnue: self.engine.use_nnue(),
             move_overhead_ms: self.engine.move_overhead_ms(),
             slow_mover: self.engine.slow_mover(),
-            contempt: self.engine.contempt(),
+            contempt: if analysis { 0 } else { self.engine.contempt() },
             singular_ext_mode: self.engine.singular_ext_mode(),
             multi_pv: effective_multi_pv,
             tune: self.engine.tune().clone(),
@@ -604,7 +623,7 @@ impl UciHandler {
         } else {
             self.engine.syzygy_tb().cloned()
         };
-        let book = self.engine.book();
+        let book = if analysis { None } else { self.engine.book() };
         let show_wdl = self.show_wdl;
         // Report only the lines the GUI asked for. Opening variety widens the
         // search to 4 lines internally; exposing them made GUIs (lichess-bot
@@ -855,6 +874,28 @@ impl UciHandler {
         }
     }
 
+    /// `Clear Hash`: forget what earlier searches learned (the hash table and
+    /// the history/correction tables), as `ucinewgame` does, but keep the
+    /// position. GUIs send it only while the engine is idle; during a search
+    /// it is refused, as clearing tables under a live search is not safe.
+    fn clear_hash(&mut self) {
+        let search_running = self
+            .search_thread
+            .as_ref()
+            .is_some_and(|h| !h.is_finished());
+        if search_running {
+            send_response(&UciResponse::Info(UciInfo {
+                string: Some("Clear Hash ignored: a search is running".to_string()),
+                ..UciInfo::default()
+            }));
+            return;
+        }
+        self.wait_for_search();
+        self.engine.clear_tt();
+        *self.history.lock().unwrap_or_else(|p| p.into_inner()) = PersistentHistory::new();
+        log::info!("Hash and history cleared");
+    }
+
     /// Resize the hash table, telling the GUI when the size was capped at half
     /// of RAM or the table could not be allocated (the old one is kept).
     fn set_hash(&mut self, mb: usize) {
@@ -1026,6 +1067,13 @@ impl UciHandler {
                     log::info!("UCI_LimitStrength set to {}", self.limit_strength);
                 }
             }
+            "uci_analysemode" => {
+                if let Some(v) = value {
+                    self.analyse_mode = v.trim().eq_ignore_ascii_case("true");
+                    log::info!("UCI_AnalyseMode set to {}", self.analyse_mode);
+                }
+            }
+            "clear hash" => self.clear_hash(),
             "uci_elo" => {
                 if let Some(v) = value
                     && let Ok(elo) = v.trim().parse::<i32>()

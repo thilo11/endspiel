@@ -155,7 +155,8 @@ for GUIs or bots that can't set `SyzygyPath`.
   `mate` (stops at a mate in that many moves), `searchmoves`, `infinite` and `ponder`.
 - `go infinite` and `go ponder` print their `bestmove` only after `stop` (or `ponderhit`), even
   when the search has nothing left to do (a found mate, the depth limit, no legal move). An
-  infinite analysis keeps deepening all lines after it finds a mate and ignores `BookFile`.
+  infinite analysis keeps deepening all lines after it finds a mate and searches at full strength
+  without contempt, `OpeningVariety` or book moves (as `UCI_AnalyseMode` does).
 - A long depth reports progress: after 3 s the root move being searched (`currmove …
   currmovenumber …`) and a mid-depth score of the first line (`lowerbound` / `upperbound`), and
   every second without other output a line with `nodes`, `nps`, `hashfull` and `time`.
@@ -201,6 +202,8 @@ sustained engine load the SoC will thermally throttle without a fan.
 | `UCI_Chess960` | false | Chess960 move notation: castling is sent and read as king-takes-own-rook (GUIs set this for Chess960 games) |
 | `UCI_LimitStrength` | false | Play at the `UCI_Elo` class instead of full strength |
 | `UCI_Elo` | 3000 | Strength class when `UCI_LimitStrength` is on: snaps to the nearest of 1000 / 1500 / 2000 / 2500; 3000 = full strength |
+| `UCI_AnalyseMode` | false | Analysis instead of play (GUIs set it): search at full strength without contempt, `OpeningVariety` or book moves. `go infinite` implies it |
+| `Clear Hash` | *(button)* | Forget what earlier searches learned (hash and history tables) without starting a new game; ignored during a search |
 
 Set `BookFile` or `SyzygyPath` to a valid path to enable; clear to disable. No separate toggle is needed.
 
@@ -209,7 +212,9 @@ Set `BookFile` or `SyzygyPath` to a valid path to enable; clear to disable. No s
 - **`Hash`** — increase for long time controls or analysis; watch `hashfull` in engine output (permille, so 950 = 95%). The default adapts to the machine: ~128 MB per search thread (more threads fill the table faster), capped at ~1/16 of available RAM, floor 16 MB. So it grows with both core count and RAM, and tracks an explicit `Threads` setting.
 - **`Threads`** — Lazy SMP; scaling is sub-linear. Stick to physical core count. On Linux/Android the default is the performance-core count (the top CPU-frequency tier), which avoids the slow LITTLE cores and the thermal throttling they invite; elsewhere it's `min(available, 16)`.
 - **`EvalFile`** — load an alternate net at runtime without rebuilding. Clear to revert to the embedded net.
-- **`UCI_LimitStrength` / `UCI_Elo`** — see *Playing at reduced strength* below.
+- **`UCI_LimitStrength` / `UCI_Elo`** — see *Playing at reduced strength* below. An analysis
+  (`go infinite` or `UCI_AnalyseMode`) always runs at full strength, so GUIs that keep one set of
+  options per engine can share them between play and analysis.
 - **`UCI_Chess960`** — Chess960 positions (including Double Fischer Random) are accepted as X-FEN or
   Shredder-FEN either way; the option only changes how castling is written. The net has no Chess960
   opening training, so its evaluations right after the start are less reliable than in standard
