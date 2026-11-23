@@ -8,6 +8,8 @@
 //! move); the UCI layer must hold the move back in all of them, as it does for
 //! `go ponder`.
 //!
+//! It also checks that `quit` ends a search without one.
+//!
 //! RELEASE ONLY, like `ponder_forced_move.rs`: a debug engine spends seconds in
 //! search spin-up, so it would not answer in time even when correct.
 
@@ -123,4 +125,26 @@ fn ponderhit_on_an_infinite_ponder_runs_until_stop() {
         engine.bestmove_within(Duration::from_secs(5)).is_some(),
         "no bestmove after stop"
     );
+}
+
+/// `quit` during a search ends the process without a `bestmove`: nobody is
+/// waiting for one.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "debug builds spend seconds in search spin-up; run with --release"
+)]
+fn quit_during_a_search_prints_no_bestmove() {
+    let mut engine = Engine::spawn();
+    engine.send(&format!("position fen {ITALIAN}"));
+    engine.send("go infinite");
+    thread::sleep(Duration::from_millis(300));
+    engine.send("quit");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while engine.child.try_wait().unwrap().is_none() {
+        assert!(std::time::Instant::now() < deadline, "did not exit on quit");
+        thread::sleep(Duration::from_millis(20));
+    }
+    let answer = engine.bestmove_within(Duration::from_millis(500));
+    assert_eq!(answer, None, "printed a bestmove on quit");
 }

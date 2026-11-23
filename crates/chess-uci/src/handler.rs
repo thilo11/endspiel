@@ -132,6 +132,9 @@ pub struct UciHandler {
     /// search ends by itself (a short mate, the depth cap, no legal move).
     /// Fresh per `go`, like `ponder_pending`.
     infinite_pending: Arc<AtomicBool>,
+    /// Set on `quit`: the search thread then ends without a `bestmove`, as
+    /// nobody is waiting for one.
+    quitting: Arc<AtomicBool>,
     /// Soft budget (ms) the current ponder search computed from the clocks at
     /// `go ponder`. Only consulted at `ponderhit` to detect the no-budget case
     /// (0 = no clock info → play the pondered result at once); a nonzero
@@ -176,6 +179,7 @@ impl UciHandler {
             ponder_active: false,
             ponder_pending: Arc::new(AtomicBool::new(false)),
             infinite_pending: Arc::new(AtomicBool::new(false)),
+            quitting: Arc::new(AtomicBool::new(false)),
             ponder_alloc_ms: 0,
             history: Arc::new(Mutex::new(PersistentHistory::new())),
             position_error: None,
@@ -219,6 +223,7 @@ impl UciHandler {
 
             match cmd {
                 UciCommand::Quit => {
+                    self.quitting.store(true, Ordering::SeqCst);
                     self.handle_stop();
                     break;
                 }
@@ -539,6 +544,7 @@ impl UciHandler {
         }
         self.infinite_pending = Arc::new(AtomicBool::new(params.infinite));
         let infinite_pending = Arc::clone(&self.infinite_pending);
+        let quitting = Arc::clone(&self.quitting);
 
         // Clone what we need for the search thread
         let board = self.board.clone();
@@ -763,6 +769,9 @@ impl UciHandler {
                 // yield an illegal continuation (e.g. a TT hash collision); sending
                 // an illegal `ponder` move makes a GUI reject it ("invalid ponder
                 // move") and can desync/hang its ponder state machine.
+                if quitting.load(Ordering::SeqCst) {
+                    return;
+                }
                 let ponder_move = validated_ponder_move(&board, result.best_move, &result.pv);
 
                 send_response(&UciResponse::BestMove {
