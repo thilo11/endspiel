@@ -231,6 +231,10 @@ pub struct SearchInfo {
 pub enum InfoKind {
     /// A finished line of a depth: its score and PV.
     Line,
+    /// A line of a depth 1 cut short by a node or time limit: no real result
+    /// (it can read 0 cp with no PV), so not for display, but the strength
+    /// limit draws its move among these lines too (it was calibrated so).
+    Unfinished,
     /// A depth's first line failed high mid-search: the score is at least this.
     LowerBound,
     /// A depth's first line failed low mid-search: the score is at most this.

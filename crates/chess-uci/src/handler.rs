@@ -77,7 +77,7 @@ fn uci_info_line(
     multipv: Option<usize>,
 ) -> UciInfo {
     let bound = match info.kind {
-        InfoKind::Line => None,
+        InfoKind::Line | InfoKind::Unfinished => None,
         InfoKind::LowerBound => Some(ScoreBound::Lower),
         InfoKind::UpperBound => Some(ScoreBound::Upper),
         InfoKind::Progress => {
@@ -645,8 +645,10 @@ impl UciHandler {
                             let mut vl = variety_lines_cb
                                 .lock()
                                 .unwrap_or_else(|p| p.into_inner());
-                            // Only finished lines: a bound is a mid-depth guess.
-                            if info.kind == InfoKind::Line {
+                            // The lines of a depth, also of a depth 1 cut short (the
+                            // strength classes are calibrated with them); a bound is
+                            // a mid-depth guess.
+                            if matches!(info.kind, InfoKind::Line | InfoKind::Unfinished) {
                                 if info.depth > vl.0 {
                                     *vl = (info.depth, Vec::new());
                                 }
@@ -655,7 +657,7 @@ impl UciHandler {
                                 }
                             }
                         }
-                        if info.multipv_line > shown_multi_pv {
+                        if info.multipv_line > shown_multi_pv || info.kind == InfoKind::Unfinished {
                             return;
                         }
                         let multipv = (shown_multi_pv > 1).then_some(info.multipv_line);

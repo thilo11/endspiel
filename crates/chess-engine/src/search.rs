@@ -1788,6 +1788,10 @@ pub fn iterative_deepening(
         let mut excluded_moves: Vec<Move> = Vec::with_capacity(multi_pv_count);
         let mut aspiration_failures = 0u32;
         let mut depth_completed = true;
+        // The first line a node or time limit cut short (depth 1 only; a
+        // deeper depth is dropped whole). It and the lines after it are no
+        // real results.
+        let mut first_unfinished: Option<usize> = None;
 
         for line_idx in 0..multi_pv_count {
             // Build working_scores: excluded moves are pushed to the back with i32::MIN
@@ -1900,6 +1904,7 @@ pub fn iterative_deepening(
                 if depth > 1 {
                     break;
                 }
+                first_unfinished.get_or_insert(line_idx);
             }
 
             let line_best = if !pv.is_empty() {
@@ -1995,14 +2000,22 @@ pub fn iterative_deepening(
         best_pv = line_results[0].1.clone();
         best_depth = depth;
 
-        // A depth 1 stopped before it finished has no score worth reporting
-        // (an aborted line reads 0 cp with no PV).
-        if depth_completed {
+        // The lines of a depth 1 cut short are passed on as `Unfinished` (an
+        // aborted line can read 0 cp with no PV): the UCI layer doesn't show
+        // them, but the strength limit's move draw uses them, as it was
+        // calibrated with them.
+        {
             let elapsed = state.elapsed_ms();
+            let unfinished_from = first_unfinished.unwrap_or(usize::MAX);
             for (line_idx, (line_score, line_pv, line_seldepth)) in line_results.iter().enumerate()
             {
+                let kind = if line_idx < unfinished_from {
+                    InfoKind::Line
+                } else {
+                    InfoKind::Unfinished
+                };
                 state.report(&SearchInfo {
-                    kind: InfoKind::Line,
+                    kind,
                     depth,
                     seldepth: *line_seldepth,
                     score: Score(*line_score),
@@ -5667,22 +5680,28 @@ mod tests {
     }
 
     /// A node limit still ends depth 1 early (weak strength classes rely on
-    /// it); the aborted depth reports no line, as its score (0 cp, no PV)
-    /// would read as an evaluation, but there is still a move to play.
+    /// it). The cut-short line is passed on as `Unfinished`, not as a finished
+    /// line, since its score (0 cp, no PV) would read as an evaluation; there
+    /// is still a move to play.
     #[test]
-    fn a_node_limit_during_depth_one_reports_no_line() {
+    fn a_node_limit_during_depth_one_reports_its_lines_as_unfinished() {
         let params = SearchParams {
             max_nodes: Some(20),
+            multi_pv: 3,
             ..Default::default()
         };
         let (result, reports) = search_reporting(ITALIAN, params, false);
-        // Only lines (a slow debug search also reports progress).
+        // Only the depth's lines (a slow debug search also reports progress).
         let lines: Vec<_> = reports
             .iter()
-            .filter(|l| l.kind == InfoKind::Line)
+            .filter(|l| matches!(l.kind, InfoKind::Line | InfoKind::Unfinished))
             .collect();
         assert!(!result.best_move.is_null(), "still a move to play");
-        assert!(lines.is_empty(), "reported {lines:?}");
+        assert!(!lines.is_empty(), "the strength draw needs the lines");
+        assert!(
+            lines.iter().all(|l| l.kind == InfoKind::Unfinished),
+            "reported {lines:?}"
+        );
     }
 
     /// With no legal move the search reports why, as `info depth 0`: mated
