@@ -494,6 +494,7 @@ impl UciHandler {
             black_inc_ms: params.binc,
             moves_to_go: params.movestogo,
             infinite: params.infinite,
+            mate: params.mate,
             use_nnue: self.engine.use_nnue(),
             move_overhead_ms: self.engine.move_overhead_ms(),
             slow_mover: self.engine.slow_mover(),

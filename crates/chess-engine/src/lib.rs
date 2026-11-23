@@ -42,6 +42,8 @@ pub struct SearchParams {
     pub black_inc_ms: Option<u64>,
     pub moves_to_go: Option<u32>,
     pub infinite: bool,
+    /// UCI `go mate N`: stop once a mate in at most N moves is found.
+    pub mate: Option<u32>,
     /// Whether to use NNUE evaluation instead of HCE.
     pub use_nnue: bool,
     /// Safety margin (ms) subtracted from allocated time to avoid flagging.
@@ -190,6 +192,7 @@ impl Default for SearchParams {
             black_inc_ms: None,
             moves_to_go: None,
             infinite: false,
+            mate: None,
             use_nnue: true,
             move_overhead_ms: 20,
             slow_mover: 100,

@@ -1327,8 +1327,10 @@ pub fn iterative_deepening(
     // Try opening book first (only in the opening — limit to 30 half-moves
     // to avoid polyglot hash collisions returning garbage moves in endgames)
     let game_ply = board.position_history.len();
+    // Not for `go infinite`: an analysis asks for a search, not a book move.
     if let Some(book) = external_book.as_deref()
         && params.search_moves.is_empty()
+        && !params.infinite
         && game_ply <= 30
         && let Some(book_move) = probe_opening_book(board, book)
     {
@@ -1774,9 +1776,12 @@ pub fn iterative_deepening(
                 );
             }
 
-            if state.should_stop(stop) && depth > 1 {
+            if state.should_stop(stop) {
                 depth_completed = false;
-                break;
+                // Depth 1 keeps its lines so there is always a move to play.
+                if depth > 1 {
+                    break;
+                }
             }
 
             let line_best = if !pv.is_empty() {
@@ -1871,7 +1876,11 @@ pub fn iterative_deepening(
         best_pv = line_results[0].1.clone();
         best_depth = depth;
 
-        if let Some(ref cb) = info_callback {
+        // A depth 1 stopped before it finished has no score worth reporting
+        // (an aborted line reads 0 cp with no PV).
+        if let Some(ref cb) = info_callback
+            && depth_completed
+        {
             let elapsed = state.elapsed_ms();
             for (line_idx, (line_score, line_pv, line_seldepth)) in line_results.iter().enumerate()
             {
@@ -1909,10 +1918,18 @@ pub fn iterative_deepening(
         // but stop if the mate is very short (within 3 moves) since
         // further improvement is unlikely, or if we've spent > 20% of time.
         // Only applies to winning mates (best_score > 0): when we are being
-        // mated we must keep searching to find the best defence.
+        // mated we must keep searching to find the best defence. `go mate N`
+        // stops at a mate in N; `go infinite` never stops for a mate: an
+        // analysis keeps deepening its other lines until `stop`.
         if best_score.is_mate() && best_score.0 > 0 {
             let mate_distance = (Score::MATE.0 - best_score.0) as u32;
-            if mate_distance <= 6 {
+            if params
+                .mate
+                .is_some_and(|moves| mate_distance < 2 * moves.max(1))
+            {
+                break;
+            }
+            if mate_distance <= 6 && !params.infinite {
                 // mate in 3 or fewer full moves
                 break;
             }
@@ -5410,5 +5427,118 @@ mod tests {
             "must not report a win after a TB-draw root, got {}",
             result.score
         );
+    }
+
+    /// Run a search of `fen` with `params` (HCE) and the stop flag preset to
+    /// `stopped`, returning the result and every reported line.
+    fn search_reporting(
+        fen: &str,
+        params: SearchParams,
+        stopped: bool,
+    ) -> (SearchResult, Vec<SearchInfo>) {
+        let fen = fen.to_owned();
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                let board = Board::from_fen(&fen).expect("valid FEN");
+                let stop = Arc::new(AtomicBool::new(stopped));
+                let tt = Arc::new(SharedTT::new(16));
+                let lines = Arc::new(std::sync::Mutex::new(Vec::new()));
+                let sink = Arc::clone(&lines);
+                let callback: InfoCallback = Box::new(move |info: &SearchInfo| {
+                    sink.lock().unwrap().push(info.clone());
+                });
+                let params = SearchParams {
+                    use_nnue: false,
+                    ..params
+                };
+                let result = iterative_deepening(
+                    &board,
+                    &params,
+                    &stop,
+                    &tt,
+                    Some(callback),
+                    0,
+                    &NnueNetwork::embedded(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                );
+                let lines = lines.lock().unwrap().clone();
+                (result, lines)
+            })
+            .expect("failed to spawn search thread")
+            .join()
+            .expect("search thread panicked")
+    }
+
+    /// `go infinite` is an analysis: a short mate must not end it (the GUI
+    /// still wants the other lines deepened, and UCI has it run until `stop`).
+    #[test]
+    fn infinite_search_keeps_deepening_after_a_short_mate() {
+        let params = SearchParams {
+            max_depth: 8,
+            infinite: true,
+            multi_pv: 2,
+            ..Default::default()
+        };
+        let (result, lines) =
+            search_reporting("6k1/5ppp/8/8/8/8/5PPP/3R2K1 w - - 0 1", params, false);
+        assert!(
+            result.score.is_mate() && result.score.0 > 0,
+            "Rd8# is mate in 1"
+        );
+        assert_eq!(
+            result.depth, 8,
+            "stopped at depth {} on the mate",
+            result.depth
+        );
+        assert!(
+            lines.iter().any(|l| l.depth == 8 && l.multipv_line == 2),
+            "line 2 deepened too"
+        );
+    }
+
+    /// `go mate N` stops once it has found a mate in N moves, even one the
+    /// regular mate break (3 moves or fewer) would search on past.
+    #[test]
+    fn go_mate_stops_at_a_mate_in_n() {
+        let params = SearchParams {
+            max_depth: 40,
+            mate: Some(4),
+            ..Default::default()
+        };
+        let (result, _) = search_reporting("7k/8/8/8/8/4K3/8/6Q1 w - - 0 1", params, false);
+        let mate_plies = Score::MATE.0 - result.score.0;
+        assert!(
+            result.score.is_mate() && mate_plies <= 7,
+            "expected a mate in 4, got {}",
+            result.score
+        );
+        assert!(
+            result.depth < 40,
+            "searched on to depth {} after the mate",
+            result.depth
+        );
+    }
+
+    /// A search stopped before depth 1 finishes still has a move to play, but
+    /// reports no line: its aborted score (0 cp, no PV) would read as an
+    /// evaluation.
+    #[test]
+    fn a_search_stopped_during_depth_one_reports_no_line() {
+        let params = SearchParams {
+            infinite: true,
+            ..Default::default()
+        };
+        let (result, lines) = search_reporting(
+            "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/3P1N2/PPP2PPP/RNBQK2R w KQkq - 4 5",
+            params,
+            true,
+        );
+        assert!(!result.best_move.is_null(), "still a move to play");
+        assert!(lines.is_empty(), "reported {lines:?}");
     }
 }
