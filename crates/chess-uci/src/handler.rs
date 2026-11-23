@@ -126,6 +126,12 @@ pub struct UciHandler {
     /// with the clock (mate-break and TB-restricted roots finish in
     /// milliseconds). Fresh per `go`, like `stop_handle`.
     ponder_pending: Arc<AtomicBool>,
+    /// Shared with the search thread: true from `go infinite` until `stop`.
+    /// UCI has an infinite search report its `bestmove` only after `stop`, so
+    /// the thread holds the move back while this is set, even when the
+    /// search ends by itself (a short mate, the depth cap, no legal move).
+    /// Fresh per `go`, like `ponder_pending`.
+    infinite_pending: Arc<AtomicBool>,
     /// Soft budget (ms) the current ponder search computed from the clocks at
     /// `go ponder`. Only consulted at `ponderhit` to detect the no-budget case
     /// (0 = no clock info → play the pondered result at once); a nonzero
@@ -169,6 +175,7 @@ impl UciHandler {
             opening_variety: 0,
             ponder_active: false,
             ponder_pending: Arc::new(AtomicBool::new(false)),
+            infinite_pending: Arc::new(AtomicBool::new(false)),
             ponder_alloc_ms: 0,
             history: Arc::new(Mutex::new(PersistentHistory::new())),
             position_error: None,
@@ -530,6 +537,8 @@ impl UciHandler {
         } else {
             self.ponder_active = false;
         }
+        self.infinite_pending = Arc::new(AtomicBool::new(params.infinite));
+        let infinite_pending = Arc::clone(&self.infinite_pending);
 
         // Clone what we need for the search thread
         let board = self.board.clone();
@@ -743,10 +752,10 @@ impl UciHandler {
                 // finished search for the whole remaining budget after
                 // `ponderhit`. Watching the handler-owned flag fixes both: the
                 // move plays the instant the GUI asks for it and never before.
-                if is_ponder {
-                    while ponder_pending.load(Ordering::SeqCst) {
-                        thread::sleep(Duration::from_millis(2));
-                    }
+                // `go infinite` holds its move the same way until `stop`
+                // (`infinite_pending`).
+                while ponder_pending.load(Ordering::SeqCst) || infinite_pending.load(Ordering::SeqCst) {
+                    thread::sleep(Duration::from_millis(2));
                 }
 
                 // Advertise the expected reply (PV[1]) as the ponder move, but only
@@ -771,6 +780,7 @@ impl UciHandler {
         // move is released as soon as the stop flag is observed.
         self.ponder_active = false;
         self.ponder_pending.store(false, Ordering::SeqCst);
+        self.infinite_pending.store(false, Ordering::SeqCst);
         // Signal the search to stop
         self.stop_handle.store(true, Ordering::SeqCst);
         // Wait for the search thread to finish
@@ -789,16 +799,16 @@ impl UciHandler {
     /// on a healthy classical clock the search also guarantees a small bounded
     /// amount of fresh thinking after the hit.
     ///
-    /// With no budget known (e.g. `go ponder infinite` or no clock info),
-    /// there is nothing for the time manager to enforce — play the pondered
-    /// result immediately, as before.
+    /// With no budget known (no clock info), there is nothing for the time
+    /// manager to enforce — play the pondered result immediately, as before.
+    /// `go ponder infinite` becomes an infinite search: it runs until `stop`.
     fn handle_ponderhit(&mut self) {
         if !self.ponder_active {
             return;
         }
         self.ponder_active = false;
         self.ponder_pending.store(false, Ordering::SeqCst);
-        if self.ponder_alloc_ms == 0 {
+        if self.ponder_alloc_ms == 0 && !self.infinite_pending.load(Ordering::SeqCst) {
             self.stop_handle.store(true, Ordering::SeqCst);
         }
     }
