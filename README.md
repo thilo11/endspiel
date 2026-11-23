@@ -26,7 +26,7 @@ thread count adapt to your machine. You can also challenge it on Lichess as
   like ChessBase and Fritz
 - **Analysis**: up to 256 lines at once (`MultiPV`), win/draw/loss percentages
   (`UCI_ShowWDL`), multi-threaded search (`Threads`) and pondering on the opponent's time
-  (`Ponder`)
+  (`Ponder`); analysis always runs at full strength (see [Analysing positions](#analysing-positions))
 - **Practice at your level**: `UCI_LimitStrength` + `UCI_Elo` play as a beginner (1000), hobby
   player (1500), club player (2000) or strong club player (2500); full strength by default
   (see [Playing at reduced strength](#playing-at-reduced-strength))
@@ -226,6 +226,35 @@ Set `BookFile` or `SyzygyPath` to a valid path to enable; clear to disable. No s
 > Set the tablebase path in Fritz's settings — it forwards it to Endspiel automatically.
 > To let Endspiel use its own `BookFile`, disable Fritz's opening book in the match settings.
 > Verify loading via View → Engine Output: a successful load prints `info string BookFile loaded from '...'`.
+
+### Analysing positions
+
+To analyse, a GUI sends `go infinite`: Endspiel searches until the GUI stops it, reporting its
+best lines as it deepens. These options matter most:
+
+| Option | Use in analysis |
+|--------|-----------------|
+| `MultiPV` | How many best moves to show (1–256). Each extra line costs depth, so 3–5 is a good range |
+| `UCI_ShowWDL` | Win/draw/loss chances for every line (`wdl` in the info line) |
+| `Threads` / `Hash` | More cores and more memory search deeper; for long analyses raise `Hash` until `hashfull` stays below ~900 |
+| `SyzygyPath` | Exact results in endgames covered by your tablebases |
+| `UCI_AnalyseMode` | The standard UCI switch some GUIs set while they analyse; also makes a timed search (`go movetime`) an analysis |
+| `Clear Hash` | Forget earlier searches (hash and history) to look at a position afresh, e.g. after analysing a related line; ignored during a search |
+
+**An analysis always runs at full strength.** With `go infinite` or `UCI_AnalyseMode` on, Endspiel
+ignores the game-play settings `UCI_LimitStrength` / `UCI_Elo`, `Contempt`, `OpeningVariety` and
+`BookFile`, so values set for practice games never weaken or colour an evaluation. GUIs that keep
+one set of options per engine can therefore use the same Endspiel for play and analysis.
+
+**It keeps searching until stopped.** A found mate does not end it: all lines keep deepening.
+When there is nothing left to search (the depth limit of 64, a won tablebase ending with one line,
+no legal move), the lines stay as they are, and `bestmove` is still sent only after `stop`. The hash
+table is kept between positions, so stepping through a game reuses what earlier positions found.
+
+**Long depths show progress.** Deep iterations can take many seconds. After 3 s Endspiel reports
+the move it is searching (`currmove`) and mid-depth scores of the best line (`lowerbound` /
+`upperbound`), and when nothing else was printed for a second, a line with `nodes`, `nps`,
+`hashfull` and `time`.
 
 ### Playing at reduced strength
 

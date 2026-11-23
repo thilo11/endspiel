@@ -1,7 +1,7 @@
 //! Regression: `go infinite` must not answer `bestmove` before `stop`.
 //!
 //! UCI has an infinite search run until `stop`, and GUIs rely on that: an
-//! analysis GUI (Castellan) that sends `stop` waits for the `bestmove` it owes,
+//! analysis GUI that sends `stop` waits for the `bestmove` it owes,
 //! and a `bestmove` the engine already printed by itself never comes again — so
 //! the next analysis's lines were taken for the stopped one's and dropped. The
 //! search ends early in several positions (a short mate, the depth cap, no legal
