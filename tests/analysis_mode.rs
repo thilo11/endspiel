@@ -172,7 +172,16 @@ fn clear_hash_is_a_button_refused_during_a_search() {
         "{idle:?}"
     );
 
+    // The first position builds the move-generation tables: seconds in a debug
+    // build, so wait for it before timing anything.
     engine.send(&format!("position fen {ITALIAN}"));
+    engine.send("isready");
+    let ready = engine.lines_until(Duration::from_secs(120), |l| l == "readyok");
+    assert_eq!(
+        ready.last().map(String::as_str),
+        Some("readyok"),
+        "{ready:?}"
+    );
     engine.send("go infinite");
     thread::sleep(Duration::from_millis(300));
     engine.send("setoption name Clear Hash");
