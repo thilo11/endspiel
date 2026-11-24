@@ -327,7 +327,7 @@ net file. More on the project in [ABOUT.md](ABOUT.md).
 
 ## Build from Source
 
-Requires Rust 1.99.1+.
+Requires Rust 1.100.0+.
 
 ```bash
 cargo build --release

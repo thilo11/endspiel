@@ -33,7 +33,7 @@ Gerhard Kalab's [Chess Engine Support Library](https://github.com/gkalab/chessen
 
 The APK is built by the release workflow (`.github/workflows/release.yml`); it
 needs no committed `jniLibs`. To build it by hand you need JDK 17+ (CI uses 25), the
-Android SDK (platform-34 + build-tools), and Gradle 9.x (CI uses 9.9.1):
+Android SDK (platform-34 + build-tools), and Gradle 9.x (CI uses 9.9.2):
 
 ```bash
 scripts/build-android.sh         # cross-compile the arm64 UCI binary (NDK)

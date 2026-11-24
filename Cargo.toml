@@ -6,7 +6,7 @@ resolver = "3"
 version = "2.3.1-dev"
 edition = "2024"
 license = "GPL-3.0-or-later"
-rust-version = "1.99.1"
+rust-version = "1.100.0"
 
 [workspace.dependencies]
 chess-common = { path = "crates/chess-common" }
@@ -14,9 +14,9 @@ chess-core = { path = "crates/chess-core" }
 chess-engine = { path = "crates/chess-engine" }
 chess-nnue = { path = "crates/chess-nnue" }
 chess-uci = { path = "crates/chess-uci" }
-log = "0.4.34"
-env_logger = "0.11.11"
-sysinfo = { version = "0.40.0", default-features = false, features = ["system"] }
+log = "0.4.35"
+env_logger = "0.11.12"
+sysinfo = { version = "0.40.4", default-features = false, features = ["system"] }
 thiserror = "2.0.21"
 
 [package]
