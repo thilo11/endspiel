@@ -1927,6 +1927,27 @@ pub fn iterative_deepening(
             break;
         }
 
+        // Each line is its own root search: line 1 searches every move in an
+        // aspiration window, line k the moves lines 1..k left, in a full
+        // window. A move line 1 only bounded (reduced, null window) can score
+        // higher in its own search, so the finished lines are put best first
+        // (stable: equal scores keep the search order) before line 1 becomes
+        // the best move, and their exact scores order the next depth's root
+        // moves. Lines a limit cut short stay behind the finished ones.
+        let finished = first_unfinished
+            .unwrap_or(line_results.len())
+            .min(line_results.len());
+        if finished > 1 {
+            line_results[..finished].sort_by_key(|line| std::cmp::Reverse(line.0));
+            for (line_score, line_pv, _) in &line_results[..finished] {
+                if let Some(first) = line_pv.first()
+                    && let Some(entry) = root_move_scores.iter_mut().find(|(m, _)| m == first)
+                {
+                    entry.1 = *line_score;
+                }
+            }
+        }
+
         // The searched root line stands as-is. Tablebase guidance is applied by
         // restricting/ordering the root moves up front (see rank_root_moves and
         // the root-restriction block above), never by overwriting the searched
@@ -5656,6 +5677,44 @@ mod tests {
             "searched on to depth {} after the mate",
             result.depth
         );
+    }
+
+    /// Each MultiPV line is its own root search, so a later line can score
+    /// higher than line 1 (in this position line 2 did at several depths).
+    /// Every depth reports its lines best first, and the best move is the
+    /// top line's.
+    #[test]
+    fn multi_pv_lines_are_reported_best_first() {
+        let params = SearchParams {
+            max_depth: 14,
+            multi_pv: 3,
+            ..Default::default()
+        };
+        let (result, reports) = search_reporting(
+            "8/1p5k/2bpr3/1p3R1P/5B2/P1P5/1P3K2/8 b - - 0 1",
+            params,
+            false,
+        );
+        let lines: Vec<_> = reports
+            .iter()
+            .filter(|l| l.kind == InfoKind::Line)
+            .collect();
+        for depth in 1..=result.depth {
+            let scores: Vec<i32> = lines
+                .iter()
+                .filter(|l| l.depth == depth)
+                .map(|l| l.score.0)
+                .collect();
+            assert!(
+                scores.is_sorted_by(|a, b| a >= b),
+                "depth {depth} reported {scores:?}"
+            );
+        }
+        let top = lines
+            .iter()
+            .rfind(|l| l.depth == result.depth && l.multipv_line == 1)
+            .expect("the last depth is reported");
+        assert_eq!(top.pv.first(), Some(&result.best_move));
     }
 
     const ITALIAN: &str = "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/3P1N2/PPP2PPP/RNBQK2R w KQkq - 4 5";
